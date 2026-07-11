@@ -1,0 +1,25 @@
+# DAML build artifacts
+.daml/
+*.dar
+
+# DAML / Canton runtime & logs
+canton.log
+log/
+*.log
+
+# Node (any tooling / scripts)
+node_modules/
+
+# Secrets & local config — NEVER commit Devnet credentials / participant keys
+.env
+.env.*
+*.pem
+*.key
+participant.conf.local
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp

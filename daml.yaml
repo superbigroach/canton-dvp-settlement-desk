@@ -1,0 +1,39 @@
+# daml.yaml — DAML project manifest for the Private cETH Settlement Desk.
+# ---------------------------------------------------------------------------
+# This is what the `daml` assistant reads to build, test, and run the project
+# (the DAML equivalent of package.json / Cargo.toml).
+#
+# >>> sdk-version IS A PLACEHOLDER <<<
+#   After installing the DAML SDK, run:
+#       daml version
+#   and set `sdk-version` below to the exact version it prints (e.g. 2.9.4).
+#   The build refuses to run if the pinned SDK is not installed.
+#
+#   For CANTON NETWORK DEVNET deployment (the hackathon qualifying target) the
+#   ledger runs a specific Splice / Daml release — see DEPLOY.md. Build the DAR
+#   with the SDK line the Devnet onboarding specifies; the DAML source here is
+#   written in the portable subset that compiles on both the current 2.x LTS and
+#   the 3.x line.
+# ---------------------------------------------------------------------------
+
+sdk-version: 2.9.4                       # <-- REPLACE with your `daml version` output
+
+name: private-ceth-settlement            # package name (appears in the DAR)
+version: 1.0.0                           # package version (semver)
+source: daml                             # directory holding the .daml sources
+
+# `daml start` auto-runs this script after spinning up the local sandbox: it
+# allocates the parties and seeds a live DvP proposal for the Navigator UI.
+init-script: Test:initialize
+
+# Standard-library + scripting deps. All three ship with the SDK:
+#   daml-prim / daml-stdlib — the DAML standard library.
+#   daml-script             — the Daml.Script module used by Test.daml.
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script
+
+# Compiled DAR output location.
+build-options:
+  - --output=.daml/dist/private-ceth-settlement-1.0.0.dar

@@ -1,0 +1,181 @@
+-- Settlement.daml
+-- ===========================================================================
+-- PRIVATE, ATOMIC DELIVERY-versus-PAYMENT (DvP) SETTLEMENT — the core of the
+-- "Private cETH Settlement Desk".
+-- ===========================================================================
+-- THE PROBLEM
+--   Two institutions want to swap tokenised assets. A maker holds cETH (wrapped
+--   ETH on Canton) and wants cash; a counterparty holds tokenised cash (USDC-
+--   like) and wants the cETH. Neither will move first — moving first is
+--   principal (Herstatt) risk: you deliver, they default, you are unsecured.
+--   The settlement MUST be:
+--
+--     ATOMIC   — either BOTH legs move or NEITHER does. No half-settled state.
+--     PRIVATE  — only the two principals (and a named compliance observer) see
+--                the trade. Competitors, other desks, and the wider network see
+--                NOTHING.
+--
+-- WHY CANTON / DAML SOLVES IT DIRECTLY
+--   A DAML transaction commits all-or-nothing. A single `exercise` can move BOTH
+--   legs inside one transaction, so partial settlement is impossible BY
+--   CONSTRUCTION — there is no window where the cETH has moved but the cash has
+--   not. And Canton's sub-transaction privacy means only the parties to each
+--   sub-view see it. You get principal-risk-free DvP with native privacy and no
+--   bridge — the thing a public EVM chain cannot give you natively.
+--
+-- THE AUTHORISATION PATTERN (why a proposal first)
+--   Atomic settlement needs BOTH principals' authority. DAML's rule: a party's
+--   authority enters a transaction only if it is (a) a signatory of a contract
+--   being exercised, or (b) the controller of a choice being exercised. So we
+--   gather both authorities in two steps:
+--     1. SettlementProposal — the MAKER creates and SIGNS it (committing her
+--        cETH leg). The COUNTERPARTY is an observer, so he can SEE it and act.
+--     2. Settle — the COUNTERPARTY is the controller. Exercising Settle
+--        contributes his authority; the maker's authority is already present
+--        (she signs the proposal being exercised). Inside Settle we move BOTH
+--        token legs. Each Transfer is controlled by that leg's current owner,
+--        and both owners' authorities are in scope. All-or-nothing.
+-- ===========================================================================
+
+module Settlement where
+
+import Token
+
+-- ---------------------------------------------------------------------------
+-- SettlementProposal — the maker offers an atomic cETH-vs-cash swap.
+-- ---------------------------------------------------------------------------
+template SettlementProposal
+  with
+    -- The two principals.
+    maker         : Party             -- delivers cETH, receives cash (e.g. Alice)
+    counterparty  : Party             -- delivers cash, receives cETH (e.g. Bob)
+
+    -- A named compliance / audit observer (e.g. a regulator or the desk's own
+    -- risk node). This is "disclosed by choice": the auditor sees THIS trade on
+    -- a need-to-know basis, but NOT either party's other holdings or trades.
+    auditor       : Party
+
+    -- The concrete holdings that will move. Binding specific ContractIds means
+    -- the proposal is for THESE tokens, not merely for amounts.
+    cethCid       : ContractId Token  -- the maker's cETH to deliver
+    cashCid       : ContractId Token  -- the counterparty's cash to deliver
+
+    -- Denormalised trade economics, restated so both sides (and the auditor)
+    -- can verify what was agreed. Settle re-checks these against the real
+    -- holdings before anything moves.
+    cethInstrument : Text             -- expected "cETH"
+    cethAmount     : Decimal          -- units of cETH delivered
+    cashInstrument : Text             -- expected "USDC"
+    cashAmount     : Decimal          -- units of cash paid
+  where
+    -- The MAKER signs: creating the proposal authorises her cETH leg to execute
+    -- when the counterparty accepts.
+    signatory maker
+
+    -- PRIVACY: the counterparty and the auditor are observers — the ONLY reason
+    -- they can see this proposal. They learn the maker wants to swap `cethAmount`
+    -- cETH for `cashAmount` cash — and NOTHING else about the maker's book. No
+    -- third party sees this proposal at all.
+    observer counterparty, auditor
+
+    -- SETTLE — the counterparty accepts; both legs settle atomically in ONE tx,
+    -- and an immutable audit receipt is written in the same transaction.
+    choice Settle : SettleResult
+      controller counterparty
+      do
+        -- Fetch both legs. Authorised because a stakeholder of each fetched
+        -- holding is in this transaction's authority set:
+        --   * cETH stakeholders {issuer, maker}         — maker signs this proposal
+        --   * cash stakeholders {issuer, counterparty}  — counterparty controls Settle
+        ceth <- fetch cethCid
+        cash <- fetch cashCid
+
+        -- Defensive integrity checks — settle ONLY exactly what was agreed.
+        -- Any mismatch aborts the WHOLE transaction (atomic rollback: no leg
+        -- moves), which is what `Test:testAtomicRollback` proves.
+        assertMsg "cETH must be owned by the maker"          (ceth.owner      == maker)
+        assertMsg "cash must be owned by the counterparty"    (cash.owner      == counterparty)
+        assertMsg "cETH instrument mismatch"                  (ceth.instrument == cethInstrument)
+        assertMsg "cETH amount mismatch"                      (ceth.amount     == cethAmount)
+        assertMsg "cash instrument mismatch"                  (cash.instrument == cashInstrument)
+        assertMsg "cash amount mismatch"                      (cash.amount     == cashAmount)
+
+        -- LEG 1 — deliver cETH to the counterparty.
+        --   Controlled by ceth.owner == maker (authority present: she signed
+        --   this proposal). Re-issues the cETH holding to the counterparty using
+        --   the issuer's delegated authority.
+        newCeth <- exercise cethCid Transfer with newOwner = counterparty
+
+        -- LEG 2 — deliver cash to the maker.
+        --   Controlled by cash.owner == counterparty (authority present: the
+        --   controller of Settle). Re-issues the cash holding to the maker.
+        newCash <- exercise cashCid Transfer with newOwner = maker
+
+        -- AUDIT / EVENT TRAIL — write an immutable settlement receipt in the
+        -- SAME transaction. Signed by BOTH principals (non-repudiable), observed
+        -- by the auditor. If any leg above had failed, this receipt would never
+        -- exist — the receipt's existence PROVES the swap completed atomically.
+        now <- getTime
+        receipt <- create SettlementReceipt with
+          maker
+          counterparty
+          auditor
+          cethInstrument
+          cethAmount
+          cashInstrument
+          cashAmount
+          settledAt = now
+
+        pure SettleResult with
+          deliveredCeth = newCeth
+          deliveredCash = newCash
+          receipt
+
+    -- WITHDRAW — the maker cancels before settlement. Archives the proposal;
+    -- no token moves.
+    choice Withdraw : ()
+      controller maker
+      do pure ()
+
+    -- REJECT — the counterparty declines. Archives the proposal; no token moves.
+    choice Reject : ()
+      controller counterparty
+      do pure ()
+
+-- Structured result of a successful Settle. A record (rather than a tuple)
+-- keeps the two new holdings and the receipt clearly named for callers/tests.
+data SettleResult = SettleResult
+  with
+    deliveredCeth : ContractId Token             -- cETH now owned by the counterparty
+    deliveredCash : ContractId Token             -- cash now owned by the maker
+    receipt       : ContractId SettlementReceipt -- the immutable audit record
+  deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- SettlementReceipt — the immutable AUDIT / REPORT artifact.
+-- ---------------------------------------------------------------------------
+-- Created inside Settle, in the same atomic transaction as the swap. It is the
+-- "create -> update status -> transfer/fulfill -> AUDIT" workflow's audit step:
+-- a permanent, bilateral, timestamped record of a completed settlement.
+--
+-- PRIVACY of the audit trail: signed by both principals, observed only by the
+-- named `auditor`. The auditor gets a complete, tamper-evident view of every
+-- settlement it is attached to — but still cannot see either party's underlying
+-- cETH or cash holdings (those name only issuer + owner). This is exactly the
+-- "need-to-know compliance view" institutions require: the regulator sees the
+-- trades, not the whole book.
+template SettlementReceipt
+  with
+    maker          : Party
+    counterparty   : Party
+    auditor        : Party
+    cethInstrument : Text
+    cethAmount     : Decimal
+    cashInstrument : Text
+    cashAmount     : Decimal
+    settledAt      : Time
+  where
+    -- BOTH principals sign the receipt: neither can later deny the settlement.
+    signatory maker, counterparty
+    -- The compliance observer sees the completed settlement.
+    observer auditor

@@ -1,0 +1,125 @@
+-- Token.daml
+-- ===========================================================================
+-- A GENERIC, TRANSFERABLE CONTENT TOKEN — modelled on the Canton token-standard
+-- shape (the same "instrument + holding" pattern that USDC, tokenised deposits,
+-- CBDCs, and onRails' cETH all follow on the Canton Network).
+--
+-- WHAT THIS TEMPLATE IS
+--   A `Token` is a single holding: "party `owner` holds `amount` units of
+--   `instrument`, issued/backed by `issuer`". It is the on-ledger representation
+--   of a tokenised claim. We instantiate it as TWO instruments in this project:
+--
+--     * cETH  — wrapped Ethereum on Canton (by onRails). instrument = "cETH".
+--     * Cash  — a tokenised bank deposit / USDC-like cash leg. instrument = "USDC".
+--
+--   Both are the SAME template with a different `instrument` string, exactly as
+--   a Canton token registry issues many instruments through one content-token
+--   standard. cETH is a first-class Canton content token: it settles, transfers,
+--   and composes atomically like any other Canton asset (no bridge, no wrapper
+--   contract on a foreign chain at settlement time).
+--
+-- THE AUTHORISATION DESIGN (the load-bearing decision — read this)
+--   * signatory = issuer   (the obligor / registrar who stands behind the token)
+--   * observer  = owner     (the current holder: can SEE and can move it)
+--
+--   Why issuer-only signatory (and NOT the owner)? Because it is what makes a
+--   transfer COMPOSABLE into a single atomic transaction. Re-issuing a token to
+--   a new owner needs only the ISSUER's authority, and that authority is
+--   delegated automatically into any choice exercised on the token (the issuer
+--   signs the contract being exercised). The INCOMING owner does not have to
+--   co-sign. That property is precisely what lets `Settlement.daml` move BOTH
+--   legs of a DvP in ONE transaction. If the owner were a signatory, the
+--   incoming owner's authority would be required inside the nested transfer and
+--   would NOT be in scope — breaking single-transaction atomic settlement. This
+--   is the canonical Digital Asset holding model.
+--
+-- PRIVACY
+--   A Token is visible ONLY to its issuer and its current owner. No other party
+--   on the Canton network — not a competitor, not the counterparty to a future
+--   trade, not even another desk at the same bank — can see it, its amount, or
+--   the fact that it exists. Disclosure happens only when the owner explicitly
+--   names a counterparty (see SettlementProposal).
+-- ===========================================================================
+
+module Token where
+
+template Token
+  with
+    issuer     : Party    -- obligor / registrar backing the token (e.g. Issuer, onRails)
+    owner      : Party    -- current holder of this holding
+    instrument : Text     -- "cETH", "USDC", "EUR-DEPOSIT", ...
+    amount     : Decimal  -- units held (Decimal is exact — no float rounding)
+  where
+    -- Only the issuer signs. See the header: this is what makes transfers
+    -- composable into atomic settlement, and stops anyone forging a holding
+    -- in the issuer's name.
+    signatory issuer
+
+    -- The owner observes: can SEE the holding and controls the choices below,
+    -- but is not the obligor. issuer + owner are the ONLY parties who can see
+    -- this contract on the whole network.
+    observer owner
+
+    -- Data invariant: you cannot hold a non-positive amount. Enforced at commit
+    -- time; any create violating it fails the whole transaction.
+    ensure amount > 0.0
+
+    -- TRANSFER --------------------------------------------------------------
+    -- The current owner assigns the holding to a new owner.
+    --   * controller owner  — only the holder may move their own token.
+    --   * CONSUMING (default): archives this holding and creates a fresh one
+    --     for `newOwner`. All-or-nothing with everything else in the tx.
+    --   * The successor Token needs only the ISSUER's authority, which is
+    --     delegated here because the issuer signs this contract. No consent
+    --     from `newOwner` is needed — this is what composes into atomic DvP.
+    choice Transfer : ContractId Token
+      with
+        newOwner : Party
+      controller owner
+      do
+        create this with owner = newOwner
+
+    -- SPLIT -----------------------------------------------------------------
+    -- Split a holding into two (e.g. to deliver an exact settlement amount and
+    -- keep the change). Returns (deliverPart, changePart). Standard token op.
+    -- Both successors are issuer-signed via delegated authority.
+    choice Split : (ContractId Token, ContractId Token)
+      with
+        splitAmount : Decimal
+      controller owner
+      do
+        assertMsg "split amount must be > 0 and < the holding"
+          (splitAmount > 0.0 && splitAmount < amount)
+        delivered <- create this with amount = splitAmount
+        change    <- create this with amount = amount - splitAmount
+        pure (delivered, change)
+
+    -- MERGE -----------------------------------------------------------------
+    -- Merge another holding of the SAME issuer/owner/instrument into this one.
+    -- Fetching `otherCid` is authorised because `owner` (a stakeholder of the
+    -- other holding) is in scope; archiving it is authorised because the issuer
+    -- (its signatory) is delegated into this choice.
+    choice Merge : ContractId Token
+      with
+        otherCid : ContractId Token
+      controller owner
+      do
+        other <- fetch otherCid
+        assertMsg "can only merge the same issuer"     (other.issuer     == issuer)
+        assertMsg "can only merge the same owner"       (other.owner       == owner)
+        assertMsg "can only merge the same instrument"  (other.instrument  == instrument)
+        archive otherCid
+        create this with amount = amount + other.amount
+
+    -- REDEEM ----------------------------------------------------------------
+    -- The holder returns the token to the issuer (burn / off-ramp). This
+    -- discharges the issuer's obligation AND extinguishes the holder's claim,
+    -- so BOTH must authorise — a real settlement handshake. Returns () (no
+    -- successor: the claim is gone).
+    choice Redeem : ()
+      controller issuer, owner
+      do
+        -- In production this is where the issuer would release the underlying
+        -- (e.g. unwrap cETH back to ETH, or pay out the bank deposit). Here the
+        -- consuming archive is the effect.
+        pure ()
