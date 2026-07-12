@@ -227,7 +227,25 @@ daml test
 - `testAtomicRollback` — a bad leg rolls the **whole** settlement back.
 - `testAgentInitiatedDvP` — an agent settles cETH within a ledger-enforced mandate.
 
-### 3. Explore interactively (Navigator UI)
+### 3. Explore interactively — the web app (recommended)
+
+The repo ships a **React + TypeScript** front end ([`frontend/`](./frontend)) over
+the Spring Boot backend — a simple **Buy / Sell** settlement desk: pick a party,
+see your position, **Settle now (DvP)** with a counterparty or **Send to Close
+(MOC)** as a sealed anonymous order, and watch **settlement receipts** (with their
+on-ledger contract-id hashes) land. All the contract-id plumbing is auto-resolved
+server-side, so it reads like a real product — and it's the exact institutional
+stack end to end: **React/TS → Spring Boot (Ledger API) → Canton**. Full run steps
+(sandbox → backend → React) are in **[run-react.md](./run-react.md)**; in short:
+
+```bash
+# 1) ledger:   daml sandbox --port 6900  +  upload DAR  +  run Test:initialize
+# 2) backend:  cd backend && LEDGER_PORT=6900 ./gradlew bootRun        # :8080
+# 3) web app:  cd frontend && npm install && npm run dev               # :5173
+# → open http://localhost:5173
+```
+
+### 3b. Or the built-in inspector (Navigator)
 
 ```bash
 daml start
@@ -235,10 +253,11 @@ daml start
 
 Builds the DAR, starts a local Canton sandbox, runs `Test:initialize` (allocates
 Issuer / Venue / Alice / Bob / Bank / Auditor / Agent / Eve, publishes the
-instruments, and seeds a live DvP proposal), and opens **Navigator** at
-<http://localhost:7500>. Log in as each party to *see for yourself* what each can
-and cannot see — then Accept as Alice and Settle as Bob. All still offline, on
-self-issued tokens.
+instruments, and seeds a live DvP proposal), and opens Daml's generic **Navigator**
+inspector at <http://localhost:7500>. Useful for browsing raw contracts per party
+to *see* the privacy model — but note Navigator is **deprecated** (removed in Daml
+3.0) and its party picker can be flaky with the Canton sandbox, so prefer the
+React app above for a real demo.
 
 > **Folder name.** This directory is named `hackcanton-ceth-settlement` for
 > historical reasons; nothing depends on it, so you can rename it freely. The Daml
