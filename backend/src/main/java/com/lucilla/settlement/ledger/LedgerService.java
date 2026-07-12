@@ -13,6 +13,7 @@ import com.lucilla.settlement.ledger.LedgerCommands;
 import com.lucilla.settlement.model.holding.Holding;
 import com.lucilla.settlement.model.instrument.Instrument;
 import com.lucilla.settlement.model.marketonclose.ClosingAuction;
+import com.lucilla.settlement.model.marketonclose.ImbalanceDisclosure;
 import com.lucilla.settlement.model.marketonclose.SealedOrder;
 import com.lucilla.settlement.model.settlement.FillRecord;
 import com.lucilla.settlement.model.settlement.SettlementBatch;
@@ -257,7 +258,8 @@ public class LedgerService {
                         for (ClosingAuction.Contract c : active.activeContracts) {
                             ClosingAuction a = c.data;
                             out.add(new AuctionView(c.id.contractId, a.operator, a.instrumentId,
-                                    a.cashInstrument, a.session, a.referencePrice, a.participants, a.isOpen));
+                                    a.cashInstrument, a.session, a.referencePrice, a.participants,
+                                    a.liquidityProvider.orElse(null), a.isOpen));
                         }
                     });
             return out;
@@ -280,6 +282,36 @@ public class LedgerService {
                                     o.instrumentId, o.cashInstrument, o.session,
                                     o.side.toString().equalsIgnoreCase("BUY") ? "Buy" : "Sell",
                                     o.quantity, o.limitPrice));
+                        }
+                    });
+            return out;
+        });
+    }
+
+    /**
+     * Active {@link ImbalanceDisclosure} contracts visible to {@code party}.
+     *
+     * <p>THIS IS THE ENFORCEMENT POINT of the selective-disclosure feature. An
+     * ImbalanceDisclosure is signed by the venue and observed ONLY by the auction's
+     * designated liquidity provider, so this query returns the net imbalance to the
+     * DLP (and the venue) and NOTHING to any other trader — the ledger, not the web
+     * layer, decides who is entitled to see the aggregate.
+     */
+    public List<ImbalanceView> imbalancesVisibleTo(String party) {
+        return withRetry("imbalances for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<ImbalanceDisclosure.Contract> filter =
+                    ContractFilter.of(ImbalanceDisclosure.COMPANION);
+            List<ImbalanceView> out = new ArrayList<>();
+            client.getActiveContractSetClient()
+                    .getActiveContracts(filter, Set.of(party), false)
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (ImbalanceDisclosure.Contract c : active.activeContracts) {
+                            ImbalanceDisclosure d = c.data;
+                            out.add(new ImbalanceView(c.id.contractId, d.operator,
+                                    labelOf(d.liquidityProvider), d.instrumentId, d.cashInstrument,
+                                    d.session, d.netSide, d.netQuantity, d.referencePrice));
                         }
                     });
             return out;
@@ -502,7 +534,15 @@ public class LedgerService {
     public record AuctionView(
             String contractId, String operator, String instrumentId, String cashInstrument,
             String session, java.math.BigDecimal referencePrice, List<String> participants,
+            String liquidityProvider,   // full party id of the designated DLP, or null
             boolean isOpen) {
+    }
+
+    /** Flat, JSON-friendly view of an ImbalanceDisclosure (the aggregate only). */
+    public record ImbalanceView(
+            String contractId, String operator, String liquidityProvider, String instrumentId,
+            String cashInstrument, String session, String netSide,
+            java.math.BigDecimal netQuantity, java.math.BigDecimal referencePrice) {
     }
 
     /** Flat, JSON-friendly view of a resting SealedOrder (as seen by the operator). */

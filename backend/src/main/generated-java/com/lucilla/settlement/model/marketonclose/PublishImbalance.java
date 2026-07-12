@@ -1,8 +1,8 @@
-package com.lucilla.settlement.model.holding;
+package com.lucilla.settlement.model.marketonclose;
 
 import static com.daml.ledger.javaapi.data.codegen.json.JsonLfEncoders.apply;
 
-import com.daml.ledger.javaapi.data.Party;
+import com.daml.ledger.javaapi.data.DamlCollectors;
 import com.daml.ledger.javaapi.data.Value;
 import com.daml.ledger.javaapi.data.codegen.DamlRecord;
 import com.daml.ledger.javaapi.data.codegen.PrimitiveValueDecoders;
@@ -22,56 +22,58 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
-public class Disclose extends DamlRecord<Disclose> {
+public class PublishImbalance extends DamlRecord<PublishImbalance> {
   public static final String _packageId = "12f056257e4f6e96f8abcaafbc3d7261e58f3fcddcba133f3033b91190110371";
 
-  public final String newObserver;
+  public final List<SealedOrder.ContractId> restingOrders;
 
-  public Disclose(String newObserver) {
-    this.newObserver = newObserver;
+  public PublishImbalance(List<SealedOrder.ContractId> restingOrders) {
+    this.restingOrders = restingOrders;
   }
 
   /**
    * @deprecated since Daml 2.5.0; use {@code valueDecoder} instead
    */
   @Deprecated
-  public static Disclose fromValue(Value value$) throws IllegalArgumentException {
+  public static PublishImbalance fromValue(Value value$) throws IllegalArgumentException {
     return valueDecoder().decode(value$);
   }
 
-  public static ValueDecoder<Disclose> valueDecoder() throws IllegalArgumentException {
+  public static ValueDecoder<PublishImbalance> valueDecoder() throws IllegalArgumentException {
     return value$ -> {
       Value recordValue$ = value$;
       List<com.daml.ledger.javaapi.data.DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(1,0,
           recordValue$);
-      String newObserver = PrimitiveValueDecoders.fromParty.decode(fields$.get(0).getValue());
-      return new Disclose(newObserver);
+      List<SealedOrder.ContractId> restingOrders = PrimitiveValueDecoders.fromList(v$0 ->
+              new SealedOrder.ContractId(v$0.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected restingOrders to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()))
+          .decode(fields$.get(0).getValue());
+      return new PublishImbalance(restingOrders);
     } ;
   }
 
   public com.daml.ledger.javaapi.data.DamlRecord toValue() {
     ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field> fields = new ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field>(1);
-    fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("newObserver", new Party(this.newObserver)));
+    fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("restingOrders", this.restingOrders.stream().collect(DamlCollectors.toDamlList(v$0 -> v$0.toValue()))));
     return new com.daml.ledger.javaapi.data.DamlRecord(fields);
   }
 
-  public static JsonLfDecoder<Disclose> jsonDecoder() {
-    return JsonLfDecoders.record(Arrays.asList("newObserver"), name -> {
+  public static JsonLfDecoder<PublishImbalance> jsonDecoder() {
+    return JsonLfDecoders.record(Arrays.asList("restingOrders"), name -> {
           switch (name) {
-            case "newObserver": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
+            case "restingOrders": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.list(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.contractId(com.lucilla.settlement.model.marketonclose.SealedOrder.ContractId::new)));
             default: return null;
           }
         }
-        , (Object[] args) -> new Disclose(JsonLfDecoders.cast(args[0])));
+        , (Object[] args) -> new PublishImbalance(JsonLfDecoders.cast(args[0])));
   }
 
-  public static Disclose fromJson(String json) throws JsonLfDecoder.Error {
+  public static PublishImbalance fromJson(String json) throws JsonLfDecoder.Error {
     return jsonDecoder().decode(new JsonLfReader(json));
   }
 
   public JsonLfEncoder jsonEncoder() {
     return JsonLfEncoders.record(
-        JsonLfEncoders.Field.of("newObserver", apply(JsonLfEncoders::party, newObserver)));
+        JsonLfEncoders.Field.of("restingOrders", apply(JsonLfEncoders.list(JsonLfEncoders::contractId), restingOrders)));
   }
 
   @Override
@@ -82,28 +84,29 @@ public class Disclose extends DamlRecord<Disclose> {
     if (object == null) {
       return false;
     }
-    if (!(object instanceof Disclose)) {
+    if (!(object instanceof PublishImbalance)) {
       return false;
     }
-    Disclose other = (Disclose) object;
-    return Objects.equals(this.newObserver, other.newObserver);
+    PublishImbalance other = (PublishImbalance) object;
+    return Objects.equals(this.restingOrders, other.restingOrders);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(this.newObserver);
+    return Objects.hash(this.restingOrders);
   }
 
   @Override
   public String toString() {
-    return String.format("com.lucilla.settlement.model.holding.Disclose(%s)", this.newObserver);
+    return String.format("com.lucilla.settlement.model.marketonclose.PublishImbalance(%s)",
+        this.restingOrders);
   }
 
   /**
    * Proxies the jsonDecoder(...) static method, to provide an alternative calling synatx, which avoids some cases in generated code where javac gets confused
    */
   public static class JsonDecoder$ {
-    public JsonLfDecoder<Disclose> get() {
+    public JsonLfDecoder<PublishImbalance> get() {
       return jsonDecoder();
     }
   }

@@ -75,11 +75,28 @@ class LedgerCommandsTest {
     void createAuction_buildsClosingAuctionCreate() {
         var cmd = asCreate(LedgerCommands.createAuction(
                 "Venue", "Auditor", "DEMO:AAPL", "USD",
-                "Close", new BigDecimal("255.0"), List.of("Alice", "Bob")));
+                "Close", new BigDecimal("255.0"), List.of("Alice", "Bob"),
+                Optional.of("Bank")));
 
         assertThat(cmd.getTemplateId().getEntityName()).isEqualTo("ClosingAuction");
-        // operator, auditor, instrumentId, cashInstrument, session, referencePrice, participants, isOpen
-        assertThat(cmd.getCreateArguments().getFields()).hasSize(8);
+        // operator, auditor, instrumentId, cashInstrument, session, referencePrice,
+        // participants, liquidityProvider, isOpen
+        assertThat(cmd.getCreateArguments().getFields()).hasSize(9);
+    }
+
+    @Test
+    void publishImbalance_exercisesPublishImbalanceOnGivenAuction() {
+        var cmd = asExercise(LedgerCommands.publishImbalance(
+                "auction#1", List.of("order#1", "order#2")));
+        assertThat(cmd.getChoice()).isEqualTo("PublishImbalance");
+        assertThat(cmd.getContractId()).isEqualTo("auction#1");
+        assertThat(cmd.getTemplateId().getEntityName()).isEqualTo("ClosingAuction");
+    }
+
+    @Test
+    void imbalanceDisclosureTemplateId_namesTheTemplate() {
+        assertThat(LedgerCommands.imbalanceDisclosureTemplateId().getEntityName())
+                .isEqualTo("ImbalanceDisclosure");
     }
 
     // ---- Exercises: choice name + target contract id round-trip -----------

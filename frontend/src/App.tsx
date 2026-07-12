@@ -4,6 +4,7 @@ import {
   ApiError,
   type Holding,
   type Instrument,
+  type MocImbalance,
   type MocState,
   type Party,
   type Session,
@@ -54,6 +55,7 @@ export default function App() {
   const [session, setSession] = useState<Session>('Close');
 
   const [mocState, setMocState] = useState<MocState | null>(null);
+  const [imbalance, setImbalance] = useState<MocImbalance | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>('');
   const [toast, setToast] = useState<string>('');
@@ -101,6 +103,21 @@ export default function App() {
     }
   }, []);
 
+  // The Designated Liquidity Provider view of the NET imbalance. The ledger discloses
+  // it ONLY to the DLP (and the venue); a normal trader gets disclosed=false, so the
+  // LP panel stays hidden for everyone but the one designated provider.
+  const loadImbalance = useCallback(async (assetId: string, sess: Session, actingAs: string) => {
+    if (!assetId || !actingAs) {
+      setImbalance(null);
+      return;
+    }
+    try {
+      setImbalance(await api.imbalance(assetId, sess, actingAs, CASH));
+    } catch {
+      setImbalance(null);
+    }
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
@@ -126,6 +143,9 @@ export default function App() {
   useEffect(() => {
     void loadMoc(asset, session, acting);
   }, [asset, session, acting, loadMoc]);
+  useEffect(() => {
+    void loadImbalance(asset, session, acting);
+  }, [asset, session, acting, loadImbalance]);
 
   // When the asset changes, seed the DvP price with its published reference so the
   // "You pay X" line computes immediately (still editable — DvP is negotiated).
@@ -211,7 +231,7 @@ export default function App() {
       ...r,
     ]);
     flash('Trade executed — both legs settled atomically.');
-    await Promise.all([loadHoldings(acting), loadMoc(asset, session, acting)]);
+    await Promise.all([loadHoldings(acting), loadMoc(asset, session, acting), loadImbalance(asset, session, acting)]);
   }
 
   async function doMocOrder() {
@@ -224,7 +244,7 @@ export default function App() {
       `Sealed ${side.toUpperCase()} order sent to the ${session.toLowerCase()} cross ` +
         `(crosses at ${fmt2(res.closingPrice)} ${CASH}).`,
     );
-    await Promise.all([loadHoldings(acting), loadMoc(asset, session, acting)]);
+    await Promise.all([loadHoldings(acting), loadMoc(asset, session, acting), loadImbalance(asset, session, acting)]);
   }
 
   async function doRunClose() {
@@ -253,14 +273,14 @@ export default function App() {
       `${kind === 'Open' ? 'Opening' : 'Closing'} cross printed ${res.fills.length} fill(s) ` +
         `at ${fmt2(res.closingPrice)} ${CASH}.`,
     );
-    await Promise.all([loadHoldings(acting), loadMoc(asset, session, acting)]);
+    await Promise.all([loadHoldings(acting), loadMoc(asset, session, acting), loadImbalance(asset, session, acting)]);
   }
 
   async function doWithdraw(orderCid: string) {
     const res = await runAction(() => api.withdrawOrder(orderCid, acting));
     if (!res) return;
     flash('Order withdrawn — your reserved balance is unlocked.');
-    await Promise.all([loadHoldings(acting), loadMoc(asset, session, acting)]);
+    await Promise.all([loadHoldings(acting), loadMoc(asset, session, acting), loadImbalance(asset, session, acting)]);
   }
 
   async function doClearBook() {
@@ -268,10 +288,35 @@ export default function App() {
     const res = await runAction(() => api.clearBook(asset, session, CASH));
     if (!res) return;
     flash(`Book cleared — ${res.cleared} resting order(s) cancelled.`);
-    await Promise.all([loadHoldings(acting), loadMoc(asset, session, acting)]);
+    await Promise.all([loadHoldings(acting), loadMoc(asset, session, acting), loadImbalance(asset, session, acting)]);
+  }
+
+  // OFFSET — the designated LP clears the disclosed imbalance by lodging a sealed
+  // order on the OPPOSITE side for the net quantity (net BUY book → LP SELLs, and
+  // vice versa). That order is as private as any other; it simply makes the cross
+  // balance so it prints in full.
+  async function doOffset() {
+    if (!imbalance?.disclosed || !imbalance.netSide || !imbalance.netQuantity) return;
+    const offsetSide: Side = imbalance.netSide === 'Buy' ? 'Sell' : 'Buy';
+    const qty = imbalance.netQuantity;
+    const res = await runAction(() =>
+      api.mocOrder({ trader: acting, side: offsetSide, quantity: qty, instrumentId: asset, session }),
+    );
+    if (!res) return;
+    flash(
+      `Offset sent — sealed ${offsetSide.toUpperCase()} ${fmt(qty)} ${asset} to clear the ` +
+        `net ${imbalance.netSide.toLowerCase()} imbalance.`,
+    );
+    await Promise.all([loadHoldings(acting), loadMoc(asset, session, acting), loadImbalance(asset, session, acting)]);
   }
 
   const actingIsVenue = acting.toLowerCase() === 'venue';
+  // The LP panel shows ONLY for the one designated liquidity provider (the ledger
+  // discloses the imbalance to it) — never for a normal trader, never for the venue
+  // (which keeps its full-book view).
+  const isDesignatedLp =
+    !!imbalance?.disclosed && !actingIsVenue && imbalance.liquidityProvider === acting;
+  const hasImbalance = isDesignatedLp && imbalance?.netSide != null && imbalance.netSide !== 'Flat';
   const canDvP = !busy && qtyNum > 0 && priceNum > 0 && !!counterparty && counterparty !== acting;
   const canMoc = !busy && qtyNum > 0 && !!asset;
 
@@ -510,6 +555,60 @@ export default function App() {
             </>
           )}
         </section>
+
+        {/* -------- Designated Liquidity Provider · imbalance panel -------- */}
+        {isDesignatedLp && (
+          <section className="card lp-imbalance" aria-label="Liquidity provider imbalance view">
+            <div className="card-head">
+              <h2>Imbalance · LP View</h2>
+              <span className="lp-tag">designated LP · {acting}</span>
+            </div>
+            <p className="hint">
+              As <strong>{asset}</strong>&rsquo;s designated liquidity provider you — and only you
+              (plus the venue) — are shown the <strong>net</strong> imbalance of the sealed book.
+              Individual orders and trader identities stay hidden. Commit offsetting interest to
+              clear the cross.
+            </p>
+            {hasImbalance ? (
+              <>
+                <div className={`imbalance-figure ${imbalance!.netSide!.toLowerCase()}`}>
+                  <span className="imbalance-side">Net {imbalance!.netSide!.toUpperCase()} imbalance</span>
+                  <span className="imbalance-qty mono">
+                    {fmt(imbalance!.netQuantity!)} {asset}
+                  </span>
+                  <span className="imbalance-at mono">
+                    @ {imbalance!.referencePrice != null ? fmt2(imbalance!.referencePrice) : '—'} {CASH}
+                  </span>
+                </div>
+                <p className="imbalance-note">
+                  The book is net {imbalance!.netSide!.toLowerCase()} — offset by{' '}
+                  <strong>{imbalance!.netSide === 'Buy' ? 'SELLING' : 'BUYING'}</strong>{' '}
+                  {fmt(imbalance!.netQuantity!)} {asset} to clear the cross.
+                </p>
+                <button className="primary lp" disabled={busy} onClick={doOffset}>
+                  {busy
+                    ? 'Offsetting…'
+                    : `Offset · ${imbalance!.netSide === 'Buy' ? 'Sell' : 'Buy'} ${fmt(
+                        imbalance!.netQuantity!,
+                      )} ${asset}`}
+                </button>
+              </>
+            ) : (
+              <div className="imbalance-figure flat">
+                <span className="imbalance-side">Book balanced</span>
+                <span className="imbalance-qty mono">Flat</span>
+                <span className="imbalance-at">no offsetting liquidity needed</span>
+              </div>
+            )}
+            <button
+              className="ghost"
+              disabled={busy}
+              onClick={() => loadImbalance(asset, session, acting)}
+            >
+              Refresh
+            </button>
+          </section>
+        )}
 
         {/* -------- Auction / Cross panel (venue view) -------- */}
         <section className="card cross">

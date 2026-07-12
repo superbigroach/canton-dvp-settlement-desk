@@ -142,7 +142,25 @@ curl -X POST :8080/api/moc/order -H 'Content-Type: application/json' \
   -d '{"trader":"Alice","side":"Buy","quantity":1,"instrumentId":"CBTC","session":"Close"}'
 AUC=$(curl -s ":8080/api/moc/state?instrumentId=CBTC&session=Close" | jq -r .auctionCid)
 curl -X POST ":8080/api/moc/$AUC/close"    # -> session "Close", closingPrice 65000 (Official Close/NAV)
+
+# Designated Liquidity Provider — SELECTIVE net-imbalance disclosure (Bank = DLP).
+# A closing-session AAPL order auto-opens an auction with Bank as its DLP.
+curl -X POST :8080/api/moc/order -H 'Content-Type: application/json' \
+  -d '{"trader":"Alice","side":"Buy","quantity":2,"instrumentId":"DEMO:AAPL","session":"Close"}'
+# The imbalance is disclosed BY THE LEDGER to the DLP + venue ONLY:
+curl ":8080/api/moc/imbalance?instrumentId=DEMO:AAPL&session=Close&actingAs=Alice"  # -> HTTP 403 (a normal trader)
+curl ":8080/api/moc/imbalance?instrumentId=DEMO:AAPL&session=Close&actingAs=Bank"   # -> netSide "Buy", netQuantity 2 @ 255
+curl ":8080/api/moc/imbalance?instrumentId=DEMO:AAPL&session=Close&actingAs=Venue"  # -> the venue sees it too
+# The DLP offsets on the opposite side for the net quantity, then the venue crosses cleanly:
+curl -X POST :8080/api/moc/order -H 'Content-Type: application/json' \
+  -d '{"trader":"Bank","side":"Sell","quantity":2,"instrumentId":"DEMO:AAPL","session":"Close"}'
+AUC=$(curl -s ":8080/api/moc/state?instrumentId=DEMO:AAPL&session=Close&actingAs=Venue" | jq -r .auctionCid)
+curl -X POST ":8080/api/moc/$AUC/close"    # -> Alice +2 AAPL, Bank +510 USDC, no principal risk
 ```
+
+In the React app, acting **as Bank** shows an **"Imbalance · LP View"** panel (net
+side + magnitude, one-click **Offset**); no other party sees that panel, and a
+normal trader still cannot see the book.
 
 ## Restart
 - **React only:** re-run step 5 (`npm run build` if source changed, then preview).

@@ -27,6 +27,10 @@
 --                              see a resting sealed order.
 --   testAtomicRollback       — a bad leg rolls the WHOLE settlement back.
 --   testAgentInitiatedDvP    — an agent settles cETH within a ledger-enforced mandate.
+--   testDesignatedLiquidityProvider — SELECTIVE imbalance disclosure: the DLP (and
+--                              venue) see the NET book imbalance; a normal trader
+--                              does NOT; the DLP sees only the aggregate (not the
+--                              individual orders); the DLP offsets to clear the cross.
 -- ===========================================================================
 
 module Test where
@@ -144,6 +148,16 @@ initialize = do
   _ <- mint issuer cbtc bob   2.0       -- Bob:   2 CBTC
   _ <- mint issuer usdc bob   50000.0   -- Bob: working USDC cash for crypto buys
   _ <- mint issuer usdc alice 150000.0  -- Alice: working USDC cash for crypto buys
+
+  -- Bank is the DESIGNATED LIQUIDITY PROVIDER for the auctions (see the auto-opened
+  -- auction in the backend, which sets liquidityProvider = Bank). It must carry a
+  -- deep book on BOTH legs so it can offset a net imbalance on whichever side the
+  -- book is heavy: sell the asset into a buy-heavy book, or buy it in a sell-heavy
+  -- one. Give it inventory across every instrument plus ample cash.
+  _ <- mint issuer aapl bank 500.0      -- Bank: 500 AAPL to sell into buy-heavy AAPL closes
+  _ <- mint issuer ceth bank 100.0      -- Bank: 100 cETH liquidity
+  _ <- mint issuer cbtc bank 20.0       -- Bank: 20 CBTC liquidity
+  _ <- mint issuer usdc bank 2000000.0  -- Bank: 2,000,000 USDC to buy into sell-heavy books
 
   -- Bob proposes to sell 10 AAPL for 2,550 USD (255.0 each). Alice is counterparty.
   _ <- submit bob do
@@ -272,7 +286,7 @@ testMarketOnClose = do
       operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
       session = "Close"
       referencePrice = 255.0
-      participants = [alice, bob, carol, dave]; isOpen = True
+      participants = [alice, bob, carol, dave]; liquidityProvider = None; isOpen = True
 
   -- Each participant lodges a SEALED order, pre-committing its holding.
   bobSell <- submit bob do
@@ -343,7 +357,7 @@ testOpeningCross = do
       operator = venue; auditor; instrumentId = ceth; cashInstrument = usdc
       session = "Open"
       referencePrice = 2400.0
-      participants = [alice, bob]; isOpen = True
+      participants = [alice, bob]; liquidityProvider = None; isOpen = True
 
   bobSell <- submit bob do
     exerciseCmd auctionCid SubmitOrder with
@@ -396,7 +410,7 @@ testMarketOnCloseImbalance = do
       operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
       session = "Close"
       referencePrice = 255.0
-      participants = [alice, bank, bob]; isOpen = True
+      participants = [alice, bank, bob]; liquidityProvider = None; isOpen = True
 
   bobSell <- submit bob do
     exerciseCmd auctionCid SubmitOrder with
@@ -461,7 +475,7 @@ testReservedBackingSurvivesResubmit = do
     createCmd ClosingAuction with
       operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
       session = "Close"; referencePrice = 255.0
-      participants = [alice, bob]; isOpen = True
+      participants = [alice, bob]; liquidityProvider = None; isOpen = True
 
   -- First buy reserves 2,550 out of Alice's single holding into a dedicated slice
   -- (disclosed to the venue); the 2,550 change stays FREE and private to Alice.
@@ -512,7 +526,7 @@ testWithdrawAndVenueClear = do
     createCmd ClosingAuction with
       operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
       session = "Close"; referencePrice = 255.0
-      participants = [alice, bob]; isOpen = True
+      participants = [alice, bob]; liquidityProvider = None; isOpen = True
 
   aliceBuy <- submit alice do
     exerciseCmd auctionCid SubmitOrder with
@@ -564,7 +578,7 @@ testDarkPoolPrivacy = do
       operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
       session = "Close"
       referencePrice = 255.0
-      participants = [alice, bob]; isOpen = True
+      participants = [alice, bob]; liquidityProvider = None; isOpen = True
   aliceBuy <- submit alice do
     exerciseCmd auctionCid SubmitOrder with
       trader = alice; side = Buy; quantity = 10.0; limitPrice = 260.0; holdingCid = aliceCash
@@ -673,3 +687,103 @@ testAgentInitiatedDvP = do
   Some cashNow <- queryContractId alice res.deliveredCash
   cashNow.owner  === alice
   cashNow.amount === 5000.0
+
+-- ---------------------------------------------------------------------------
+-- TEST 7 — DESIGNATED LIQUIDITY PROVIDER: selective net-imbalance disclosure.
+-- ---------------------------------------------------------------------------
+-- LIQUIDITY WITHOUT LEAKAGE. A lit auction publishes its imbalance to the whole
+-- market (leaking it to front-runners); a dark pool leaks nothing but risks a
+-- no-fill. Canton does BOTH: reveal the NET imbalance to ONE designated liquidity
+-- provider (who commits to offset it), and to nobody else.
+--
+-- Book (AAPL, cash USDC, close 255, sealed):
+--   BUY  Alice 2 @ 260   →  net BUY imbalance of 2 (no sells yet).
+-- The venue publishes the aggregate to the DLP (Bank). We PROVE:
+--   * Bank (DLP) SEES "Net BUY 2 @ 255"; the venue sees it too.
+--   * Bank sees ONLY the aggregate — NOT Alice's individual sealed order.
+--   * Carol (a normal registered trader) sees NEITHER the imbalance NOR the order.
+--   * Bank offsets by SELLING 2; the republished imbalance is now Flat; the close
+--     crosses cleanly (Alice +2 AAPL, Bank +510 USDC).
+-- ---------------------------------------------------------------------------
+testDesignatedLiquidityProvider : Script ()
+testDesignatedLiquidityProvider = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  carol <- allocatePartyWithHint "Carol" (PartyIdHint "Carol")
+
+  aliceCash <- mint issuer usdc alice 600.0   -- enough to buy 2 @ 255 (= 510), 90 change
+  bankAsset <- mint issuer aapl bank  10.0    -- the DLP's inventory to offset with
+
+  -- The venue opens the auction and DESIGNATES Bank as the liquidity provider.
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bank, carol]
+      liquidityProvider = Some bank
+      isOpen = True
+
+  -- Alice lodges a sealed BUY of 2. The book is now net BUY 2.
+  aliceBuy <- submit alice do
+    exerciseCmd auctionCid SubmitOrder with
+      trader = alice; side = Buy; quantity = 2.0; limitPrice = 260.0; holdingCid = aliceCash
+
+  -- The venue publishes the NET imbalance to the DLP (aggregate only).
+  discCid <- submit venue do
+    exerciseCmd auctionCid PublishImbalance with restingOrders = [aliceBuy]
+
+  -- THE DLP SEES THE AGGREGATE: net BUY of 2 at the reference price.
+  Some disc <- queryContractId bank discCid
+  disc.netSide     === "Buy"
+  disc.netQuantity === 2.0
+  disc.referencePrice === 255.0
+  disc.liquidityProvider === bank
+  -- The venue (operator) sees it too.
+  assertMsg "venue must see the imbalance disclosure" . isSome =<< queryContractId venue discCid
+
+  -- SELECTIVE: the DLP sees ONLY the aggregate — NOT Alice's individual order.
+  assertMsg "DLP must NOT see the individual sealed order (aggregate only)"
+    . isNone =<< queryContractId bank aliceBuy
+
+  -- A normal registered trader (Carol) sees NEITHER the imbalance NOR the order.
+  carolSeesImbalance <- query @ImbalanceDisclosure carol
+  assertMsg "a normal trader must NOT see any imbalance disclosure" (null carolSeesImbalance)
+  assertMsg "a normal trader must NOT see a rival's sealed order"
+    . isNone =<< queryContractId carol aliceBuy
+
+  -- THE DLP OFFSETS: Bank lodges a sealed SELL of 2 (the opposite side) to clear
+  -- the cross. Its order is as private as any other.
+  bankSell <- submit bank do
+    exerciseCmd auctionCid SubmitOrder with
+      trader = bank; side = Sell; quantity = 2.0; limitPrice = 250.0; holdingCid = bankAsset
+
+  -- The venue republishes: the book is now balanced (Flat).
+  discCid2 <- submit venue do
+    exerciseCmd auctionCid PublishImbalance with restingOrders = [aliceBuy, bankSell]
+  Some disc2 <- queryContractId bank discCid2
+  disc2.netSide     === "Flat"
+  disc2.netQuantity === 0.0
+
+  -- Run the close: the offsetting orders cross cleanly at 255.
+  closedCid <- submit venue do exerciseCmd auctionCid CloseBidding
+  batchCid  <- submit venue do
+    exerciseCmd closedCid RunClose with
+      buyOrders  = [aliceBuy]
+      sellOrders = [bankSell]
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 255.0
+  length batch.fills === 2
+
+  -- Alice bought 2 AAPL for 510 (90 change); the DLP sold 2 AAPL for 510 USDC.
+  aliceAapl <- ownedAmount alice aapl
+  aliceUsd  <- ownedAmount alice usdc
+  bankAapl  <- ownedAmount bank  aapl
+  bankUsd   <- ownedAmount bank  usdc
+  aliceAapl === 2.0
+  aliceUsd  === 90.0
+  bankAapl  === 8.0
+  bankUsd   === 510.0
+
+  -- PRIVACY GUARD: an outsider cannot ask the venue to disclose the imbalance to
+  -- itself — PublishImbalance is operator-controlled, and only the DLP observes it.
+  pure ()

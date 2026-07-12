@@ -360,3 +360,60 @@ button.ghost.small { margin-top: 0; padding: 3px 10px; font-size: 12px; }
   .quote-right { align-items: flex-start; text-align: left; }
   .topbar { flex-direction: column; align-items: flex-start; }
 }
+
+/* -------- Designated Liquidity Provider · imbalance panel -------- */
+/* Gold-accented (it carries privileged, price-adjacent information) but distinct
+   from the NAV quote card so it reads as an actionable, one-of-a-kind surface. */
+.card.lp-imbalance {
+  border-color: rgba(230, 180, 80, 0.42);
+  box-shadow: var(--shadow), 0 0 0 1px rgba(230, 180, 80, 0.10) inset;
+}
+.lp-tag {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  padding: 3px 10px;
+  border-radius: 999px;
+  color: var(--gold);
+  background: rgba(230, 180, 80, 0.12);
+  border: 1px solid rgba(230, 180, 80, 0.35);
+  text-transform: uppercase;
+}
+.imbalance-figure {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px 18px;
+  margin: 6px 0 12px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.10));
+  border: 1px solid var(--border);
+}
+.imbalance-figure.buy  { border-left: 3px solid var(--buy); }
+.imbalance-figure.sell { border-left: 3px solid var(--sell); }
+.imbalance-figure.flat { border-left: 3px solid var(--faint); }
+.imbalance-side {
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.imbalance-figure.buy  .imbalance-side { color: #6fce9f; }
+.imbalance-figure.sell .imbalance-side { color: #e58d8d; }
+.imbalance-qty {
+  font-size: 30px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.1;
+}
+.imbalance-at { font-size: 13px; color: var(--muted); }
+.imbalance-note { font-size: 13px; color: var(--muted); margin: 0 0 12px; }
+button.primary.lp {
+  width: 100%;
+  background: linear-gradient(180deg, var(--gold), #c8973a);
+  color: #1a1204;
+  border: none;
+}
+button.primary.lp:hover:not(:disabled) {
+  filter: brightness(1.06);
+  box-shadow: 0 8px 24px rgba(230, 180, 80, 0.34);
+}

@@ -22,7 +22,7 @@ import java.util.List;
 import java.util.Objects;
 
 public class Reject extends DamlRecord<Reject> {
-  public static final String _packageId = "85b662c2e7d0a4d42bea5a2232989bd04641057da99c8bda47d7f7b912ef699c";
+  public static final String _packageId = "12f056257e4f6e96f8abcaafbc3d7261e58f3fcddcba133f3033b91190110371";
 
   public Reject() {
   }

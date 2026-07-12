@@ -229,9 +229,14 @@ public class SettlementController {
                     .map(p -> p.party())
                     .filter(p -> !LedgerService.labelOf(p).equalsIgnoreCase("sandbox"))
                     .toList();
+            // Designate the seed's liquidity provider (Bank) as this auction's DLP, so
+            // the venue can disclose the NET imbalance to it — and to nobody else — to
+            // attract offsetting liquidity without leaking the book. Absent a Bank party
+            // the auction simply opens with no DLP (a plain dark pool).
+            Optional<String> dlp = defaultLiquidityProvider();
             auctionCid = ledger.submitForCreated(venue,
                     LedgerCommands.createAuction(venue, auditor, req.instrumentId(),
-                            cashInstrument, session, closingPrice, participants),
+                            cashInstrument, session, closingPrice, participants, dlp),
                     LedgerCommands.closingAuctionTemplateId());
             opened = true;
         }
@@ -407,14 +412,116 @@ public class SettlementController {
                 batch.closingPrice(), fills);
     }
 
+    // ---- Designated Liquidity Provider: selective imbalance disclosure -----
+
+    /**
+     * The NET imbalance of the sealed book — the DESIGNATED LIQUIDITY PROVIDER view.
+     *
+     * <p>Liquidity without leakage: a lit auction publishes the imbalance to the
+     * whole market (leaking it); a dark pool leaks nothing but risks a no-fill. This
+     * endpoint discloses the AGGREGATE net imbalance to exactly ONE party — the
+     * auction's designated liquidity provider — and to the venue, and to nobody else.
+     *
+     * <p>Enforcement is at the LEDGER, not here. The venue first refreshes the
+     * {@code ImbalanceDisclosure} from the current book (it is observable only by the
+     * DLP), then we read it back <b>as the acting party</b>: the DLP and the venue see
+     * it; a normal trader sees nothing and gets {@code 403}. Individual orders and
+     * trader identities are never revealed — only side + magnitude.
+     */
+    @GetMapping("/moc/imbalance")
+    public ResponseEntity<Dtos.MocImbalanceResponse> mocImbalance(
+            @RequestParam String instrumentId,
+            @RequestParam(required = false, defaultValue = "USDC") String cashInstrument,
+            @RequestParam(required = false, defaultValue = "Close") String session,
+            @RequestParam(required = false) String actingAs) {
+        String venue = ledger.resolveParty("Venue");
+        String sess = LedgerCommands.session(session);
+        String acting = (actingAs == null || actingAs.isBlank())
+                ? venue : ledger.resolveParty(actingAs);
+
+        // 1) Find the open auction (as venue) for this book that HAS a designated DLP.
+        var open = ledger.auctionsVisibleTo(venue).stream()
+                .filter(a -> a.isOpen()
+                        && a.instrumentId().equals(instrumentId)
+                        && a.cashInstrument().equals(cashInstrument)
+                        && a.session().equals(sess))
+                .findFirst();
+        if (open.isEmpty() || open.get().liquidityProvider() == null) {
+            // No DLP auction open → there is nothing to disclose to anyone.
+            return ResponseEntity.ok(new Dtos.MocImbalanceResponse(false, instrumentId,
+                    cashInstrument, sess, "Flat", BigDecimal.ZERO, open.map(
+                            com.lucilla.settlement.ledger.LedgerService.AuctionView::referencePrice)
+                            .orElse(null), null,
+                    "no designated-liquidity-provider auction is open for this book"));
+        }
+        var a = open.get();
+        String lpLabel = LedgerService.labelOf(a.liquidityProvider());
+
+        // 2) As the VENUE, refresh the disclosure from the CURRENT book: archive any
+        //    stale snapshot, then recompute + publish the net aggregate. The created
+        //    ImbalanceDisclosure is observable only by the DLP (and the venue).
+        for (var stale : ledger.imbalancesVisibleTo(venue)) {
+            if (stale.operator().equals(venue) && stale.instrumentId().equals(instrumentId)
+                    && stale.cashInstrument().equals(cashInstrument) && stale.session().equals(sess)) {
+                try {
+                    ledger.submit(venue, LedgerCommands.archiveImbalance(stale.contractId()));
+                } catch (RuntimeException e) {
+                    log.warn("skip archiving stale imbalance {}: {}", stale.contractId(), e.getMessage());
+                }
+            }
+        }
+        List<String> restingCids = ledger.sealedOrdersVisibleTo(venue).stream()
+                .filter(o -> o.operator().equals(venue)
+                        && o.instrumentId().equals(instrumentId)
+                        && o.cashInstrument().equals(cashInstrument)
+                        && o.session().equals(sess))
+                .map(com.lucilla.settlement.ledger.LedgerService.OrderView::contractId).toList();
+        ledger.submit(venue, LedgerCommands.publishImbalance(a.contractId(), restingCids));
+
+        // 3) As the ACTING PARTY, read the disclosure. The LEDGER enforces who may see
+        //    it: the DLP and the venue do; any other trader sees nothing → 403.
+        var visible = ledger.imbalancesVisibleTo(acting).stream()
+                .filter(d -> d.operator().equals(venue) && d.instrumentId().equals(instrumentId)
+                        && d.cashInstrument().equals(cashInstrument) && d.session().equals(sess))
+                .findFirst();
+        if (visible.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new Dtos.MocImbalanceResponse(
+                    false, instrumentId, cashInstrument, sess, null, null, a.referencePrice(),
+                    lpLabel, "the net imbalance is disclosed only to the designated liquidity "
+                            + "provider (" + lpLabel + ") and the venue"));
+        }
+        var d = visible.get();
+        String mag = d.netQuantity().stripTrailingZeros().toPlainString();
+        String note = "Flat".equals(d.netSide())
+                ? "book is balanced — no offsetting liquidity needed"
+                : "net " + d.netSide().toUpperCase() + " imbalance of " + mag + " " + instrumentId
+                        + " @ " + d.referencePrice().stripTrailingZeros().toPlainString()
+                        + " - offset to clear the cross";
+        return ResponseEntity.ok(new Dtos.MocImbalanceResponse(true, instrumentId, cashInstrument,
+                sess, d.netSide(), d.netQuantity(), d.referencePrice(), lpLabel, note));
+    }
+
+    /** The seed's default Designated Liquidity Provider (Bank), if that party exists. */
+    private Optional<String> defaultLiquidityProvider() {
+        try {
+            return Optional.of(ledger.resolveParty("Bank"));
+        } catch (RuntimeException e) {
+            return Optional.empty();
+        }
+    }
+
     // ---- Market-on-Close --------------------------------------------------
 
     @PostMapping("/auction")
     public ResponseEntity<Dtos.CidResponse> openAuction(
             @Valid @RequestBody Dtos.OpenAuctionRequest req) {
+        // Optionally designate a liquidity provider (resolved to a full party id).
+        Optional<String> dlp = (req.liquidityProvider() == null || req.liquidityProvider().isBlank())
+                ? Optional.empty()
+                : Optional.of(ledger.resolveParty(req.liquidityProvider()));
         var cmd = LedgerCommands.createAuction(
                 req.operator(), req.auditor(), req.instrumentId(), req.cashInstrument(),
-                LedgerCommands.session(req.session()), req.referencePrice(), req.participants());
+                LedgerCommands.session(req.session()), req.referencePrice(), req.participants(), dlp);
         String cid = ledger.submitForCreated(req.operator(), cmd, LedgerCommands.closingAuctionTemplateId());
         return created(new Dtos.CidResponse(cid));
     }

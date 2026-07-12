@@ -46,11 +46,11 @@ import java.util.Optional;
 import java.util.Set;
 
 public final class SettlementReceipt extends Template {
-  public static final Identifier TEMPLATE_ID = new Identifier("85b662c2e7d0a4d42bea5a2232989bd04641057da99c8bda47d7f7b912ef699c", "Settlement", "SettlementReceipt");
+  public static final Identifier TEMPLATE_ID = new Identifier("12f056257e4f6e96f8abcaafbc3d7261e58f3fcddcba133f3033b91190110371", "Settlement", "SettlementReceipt");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("85b662c2e7d0a4d42bea5a2232989bd04641057da99c8bda47d7f7b912ef699c", "Settlement", "SettlementReceipt");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("12f056257e4f6e96f8abcaafbc3d7261e58f3fcddcba133f3033b91190110371", "Settlement", "SettlementReceipt");
 
-  public static final String PACKAGE_ID = "85b662c2e7d0a4d42bea5a2232989bd04641057da99c8bda47d7f7b912ef699c";
+  public static final String PACKAGE_ID = "12f056257e4f6e96f8abcaafbc3d7261e58f3fcddcba133f3033b91190110371";
 
   public static final Choice<SettlementReceipt, com.lucilla.settlement.model.da.internal.template.Archive, Unit> CHOICE_Archive = 
       Choice.create("Archive", value$ -> value$.toValue(), value$ ->

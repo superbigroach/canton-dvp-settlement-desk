@@ -172,6 +172,74 @@ the batch is all-or-nothing. (`testMarketOnClose` shows a balanced cross;
 
 ---
 
+## Flow 2b — Liquidity without leakage — the Designated Liquidity Provider
+
+A sealed auction has one weakness: if the book is lopsided, the heavy side can go
+**unfilled**. Real venues solve this by publishing the closing **imbalance** — "the
+close is 3,000,000 shares to buy" — to attract offsetting interest. But that is
+exactly the leak a dark pool exists to prevent: broadcast the imbalance and
+front-runners trade ahead of it, moving the price against the very orders you are
+trying to fill.
+
+**The lit-vs-dark tension:**
+
+- A **lit** auction publishes the imbalance to the *whole market* → it attracts
+  liquidity, but leaks the book to everyone.
+- A **dark** pool leaks nothing → but a lopsided book risks a **no-fill**.
+
+Canton lets you do **both at once**: disclose the *net* imbalance to **one**
+designated party — a **Designated Liquidity Provider (DLP)** who commits to offset
+it — and to **nobody else**. This is impossible on a transparent chain, where the
+pending book (and therefore the imbalance) is visible to everyone the instant an
+order lands. On Canton, per-contract visibility makes *selective disclosure* a
+first-class ledger effect.
+
+**Who sees what** (all enforced by the ledger, not by the app):
+
+| Party | Sees |
+|---|---|
+| **A trader** (Alice) | ONLY their own order. Not the book, not the imbalance. |
+| **The venue** | The full sealed book (it signs every order) + the imbalance. |
+| **The DLP** (one designated party, here `Bank`) | ONLY the **net aggregate** imbalance — side + magnitude. **Never** any individual order or trader identity. |
+
+The venue sets `ClosingAuction.liquidityProvider = Some dlp` when it opens the
+auction. `PublishImbalance` computes the signed net (`totalBuy − totalSell`) from
+the resting orders and writes an **`ImbalanceDisclosure`** — `signatory operator`,
+`observer = the DLP only`. The DLP reads "net **BUY** *N* @ ref", then offsets by
+lodging an ordinary `SealedOrder` on the opposite side (as private as any other),
+and the cross prints in full.
+
+```mermaid
+flowchart TD
+    subgraph Sealed["Sealed book — each order private to venue + its trader"]
+        A["Alice BUY 2 @ ref (255)"]
+    end
+    A --> V["Venue<br/>PublishImbalance → net = +2 (buy-heavy)"]
+    V -->|"ImbalanceDisclosure<br/>observer = DLP ONLY"| LP["Bank (DLP)<br/>sees: net BUY 2 @ 255<br/>(NOT Alice's order)"]
+    A -. "403 / sees nothing" .-> X(["a normal trader:<br/>no imbalance, no book"])
+    LP -->|"offsetting SealedOrder"| S["Bank SELL 2 @ 255"]
+    V2["Venue RunClose @ 255"]
+    A --> V2
+    S --> V2
+    V2 --> B["SettlementBatch — cross clears in full<br/>Alice +2 AAPL · Bank +510 USDC"]
+```
+
+Verified live (`testDesignatedLiquidityProvider`, and via the REST API):
+
+- as **Alice** → `GET /moc/imbalance` returns **403** ("disclosed only to the DLP
+  and the venue"), and her book view shows only her own order;
+- as **Bank** (the DLP) → `GET /moc/imbalance` returns **net BUY 2 @ 255**, while
+  her *order* view is empty (she sees the aggregate, not Alice's order);
+- as the **Venue** → the full book;
+- Bank **offsets** (SELL 2) → the imbalance goes **Flat** → the venue runs the close
+  and it crosses cleanly (Alice +2 AAPL, Bank +510 USDC, no principal risk).
+
+In the web app, acting **as Bank** surfaces an **"Imbalance · LP View"** panel with
+a one-click **Offset** button; no other party — not even the venue — sees that
+panel, and a normal trader still cannot see the book at all.
+
+---
+
 ## How it maps to JPMorgan's stack
 
 This is a scale model of institutional tokenised settlement:
@@ -182,6 +250,7 @@ This is a scale model of institutional tokenised settlement:
 | `DEMO:AAPL`, `cETH` asset legs | tokenised securities / MMF shares / wrapped assets |
 | `DvPAgreement.Settle` (atomic two-leg) | intraday, atomic DvP with no principal risk |
 | `SealedOrder` privacy | confidential order handling / dark liquidity |
+| `ImbalanceDisclosure` → one DLP only | **selective disclosure** — reveal net flow to a committed market-maker without leaking the book |
 | Canton synchronizer + participant privacy | Kinexys' privacy-preserving shared ledger |
 | `SettlementReceipt` / `SettlementBatch` | the immutable settlement + audit record |
 
@@ -226,6 +295,7 @@ daml test
 - `testDarkPoolPrivacy` — an outsider sees nothing; a rival participant can't see another's sealed order.
 - `testAtomicRollback` — a bad leg rolls the **whole** settlement back.
 - `testAgentInitiatedDvP` — an agent settles cETH within a ledger-enforced mandate.
+- `testDesignatedLiquidityProvider` — **selective imbalance disclosure**: the DLP (and venue) see the net imbalance; a normal trader does **not**; the DLP sees only the aggregate (not the individual orders); the DLP offsets to clear the cross.
 
 ### 3. Explore interactively — the web app (recommended)
 
@@ -282,9 +352,10 @@ front of a Canton settlement engine). REST in, Ledger API commands out.
 | `POST /api/dvp/propose` | create `DvPProposal` | proposer (seller) |
 | `POST /api/dvp/{cid}/accept` | `Accept` → `DvPAgreement` | counterparty (buyer) |
 | `POST /api/dvp/{cid}/settle` | `Settle` (both legs, atomic) | proposer |
-| `POST /api/auction` | create `ClosingAuction` | operator |
+| `POST /api/auction` | create `ClosingAuction` (optional `liquidityProvider`) | operator |
 | `POST /api/auction/{cid}/order` | `SubmitOrder` (sealed) | trader |
 | `POST /api/auction/{cid}/close` | `CloseBidding` + `RunClose` → `SettlementBatch` | operator |
+| `GET  /api/moc/imbalance?instrument=&actingAs=` | net imbalance to the **DLP or venue only** (`403` for a normal trader — enforced by the ledger) | acting party |
 | `GET  /api/health` | liveness + which ledger it points at (no ledger call) | — |
 
 ### How it's wired

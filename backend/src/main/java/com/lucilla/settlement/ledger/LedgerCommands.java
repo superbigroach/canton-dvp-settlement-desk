@@ -4,6 +4,7 @@ import com.daml.ledger.javaapi.data.codegen.Update;
 import com.lucilla.settlement.model.holding.Holding;
 import com.lucilla.settlement.model.instrument.Instrument;
 import com.lucilla.settlement.model.marketonclose.ClosingAuction;
+import com.lucilla.settlement.model.marketonclose.ImbalanceDisclosure;
 import com.lucilla.settlement.model.marketonclose.SealedOrder;
 import com.lucilla.settlement.model.marketonclose.Side;
 import com.lucilla.settlement.model.settlement.DvPAgreement;
@@ -88,12 +89,20 @@ public final class LedgerCommands {
 
     // ---- Market-on-Close auction ------------------------------------------
 
+    /**
+     * Open a ClosingAuction. {@code liquidityProvider} optionally designates ONE
+     * party as the auction's Designated Liquidity Provider — the only party (besides
+     * the venue) the net imbalance is ever disclosed to (see {@link #publishImbalance}).
+     * Pass {@link Optional#empty()} for a plain dark-pool auction with no DLP.
+     */
     public static Update<?> createAuction(
             String operator, String auditor, String instrumentId, String cashInstrument,
-            String session, BigDecimal referencePrice, List<String> participants) {
+            String session, BigDecimal referencePrice, List<String> participants,
+            Optional<String> liquidityProvider) {
         return new ClosingAuction(
                 operator, auditor, instrumentId, cashInstrument,
-                session, referencePrice, participants, /* isOpen = */ Boolean.TRUE)
+                session, referencePrice, participants, liquidityProvider,
+                /* isOpen = */ Boolean.TRUE)
                 .create();
     }
 
@@ -143,6 +152,25 @@ public final class LedgerCommands {
         return new ClosingAuction.ContractId(sealedAuctionCid).exerciseRunClose(buys, sells);
     }
 
+    // ---- Designated Liquidity Provider: selective net-imbalance disclosure ---
+
+    /**
+     * Compute the NET imbalance of the resting book and disclose ONLY that aggregate
+     * to the auction's Designated Liquidity Provider (operator-controlled). The DLP —
+     * and only the DLP — will observe the resulting {@link ImbalanceDisclosure}; the
+     * individual orders are never copied onto it.
+     */
+    public static Update<?> publishImbalance(String auctionCid, List<String> restingOrderCids) {
+        List<SealedOrder.ContractId> resting = restingOrderCids.stream()
+                .map(SealedOrder.ContractId::new).toList();
+        return new ClosingAuction.ContractId(auctionCid).exercisePublishImbalance(resting);
+    }
+
+    /** Archive a stale imbalance disclosure (operator is its sole signatory). */
+    public static Update<?> archiveImbalance(String disclosureCid) {
+        return new ImbalanceDisclosure.ContractId(disclosureCid).exerciseArchive();
+    }
+
     // Template ids exposed for callers that need to locate created contracts of a
     // given type in a transaction tree (see LedgerService).
     public static com.daml.ledger.javaapi.data.Identifier instrumentTemplateId() {
@@ -167,6 +195,10 @@ public final class LedgerCommands {
 
     public static com.daml.ledger.javaapi.data.Identifier sealedOrderTemplateId() {
         return SealedOrder.TEMPLATE_ID;
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier imbalanceDisclosureTemplateId() {
+        return ImbalanceDisclosure.TEMPLATE_ID;
     }
 
     public static com.daml.ledger.javaapi.data.Identifier settlementBatchTemplateId() {

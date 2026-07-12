@@ -88,6 +88,22 @@ export interface ClearBookResponse {
   cleared: number;
 }
 
+// The NET imbalance of a sealed book — the Designated Liquidity Provider view.
+// `disclosed` is true ONLY when the acting party is entitled to see the aggregate
+// (the DLP, or the venue); a normal trader gets disclosed=false (HTTP 403). It
+// carries side + magnitude ONLY — never any individual order or trader identity.
+export interface MocImbalance {
+  disclosed: boolean;
+  instrumentId: string;
+  cashInstrument: string;
+  session: string;                       // "Open" | "Close"
+  netSide: 'Buy' | 'Sell' | 'Flat' | null;
+  netQuantity: number | null;            // magnitude of the imbalance (>= 0)
+  referencePrice: number | null;
+  liquidityProvider: string | null;      // the DLP's label (who may offset)
+  note: string | null;
+}
+
 export interface MocFill {
   trader: string;
   side: 'Buy' | 'Sell';
@@ -168,4 +184,27 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ instrumentId, cashInstrument, session }),
     }),
+
+  // Designated Liquidity Provider view: the NET imbalance, disclosed BY THE LEDGER
+  // only to the DLP (and the venue). A normal trader is denied (HTTP 403) — we treat
+  // that as `disclosed:false` rather than an error, so the LP panel simply hides.
+  imbalance: async (
+    instrumentId: string,
+    session: Session = 'Close',
+    actingAs = '',
+    cashInstrument = 'USDC',
+  ): Promise<MocImbalance> => {
+    const res = await fetch(
+      `/api/moc/imbalance?instrumentId=${encodeURIComponent(instrumentId)}` +
+        `&cashInstrument=${encodeURIComponent(cashInstrument)}` +
+        `&session=${encodeURIComponent(session)}` +
+        (actingAs ? `&actingAs=${encodeURIComponent(actingAs)}` : ''),
+    );
+    const text = await res.text();
+    const body = text ? JSON.parse(text) : null;
+    // 403 carries a disclosed:false body — the ledger denied the acting party.
+    if (res.status === 403) return body as MocImbalance;
+    if (!res.ok) throw new ApiError((body && (body.message || body.error)) || `HTTP ${res.status}`);
+    return body as MocImbalance;
+  },
 };

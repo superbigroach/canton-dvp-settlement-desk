@@ -77,6 +77,7 @@ module MarketOnClose where
 
 import Holding
 import Settlement
+import DA.Optional (optionalToList)
 
 -- Order side. Deriving Eq/Show so choices can compare and reports can print it.
 data Side = Buy | Sell
@@ -97,12 +98,23 @@ template ClosingAuction
                               -- reported as the OFFICIAL OPEN or the OFFICIAL CLOSE / NAV.
     referencePrice : Decimal  -- the official OPEN/CLOSE price every fill prints at
     participants   : [Party]  -- traders permitted to submit sealed orders
+    -- LIQUIDITY WITHOUT LEAKAGE. Optionally, the venue designates ONE party as the
+    -- auction's Designated Liquidity Provider (DLP). The DLP — and ONLY the DLP
+    -- (plus the venue) — is shown the NET imbalance of the sealed book (see
+    -- `PublishImbalance` / `ImbalanceDisclosure`), so it can commit offsetting
+    -- interest to clear the cross. A lit auction publishes that imbalance to the
+    -- WHOLE market (attracting liquidity but leaking it to front-runners); a pure
+    -- dark pool leaks nothing but risks no-fill. Canton lets the venue do BOTH:
+    -- reveal the aggregate to the one committed provider, and to nobody else.
+    liquidityProvider : Optional Party
     isOpen         : Bool     -- True while the sealed-order window accepts orders
   where
     signatory operator
     -- The auditor and the registered participants can SEE that an auction exists
-    -- and (participants) submit into it — but NOT each other's sealed orders.
-    observer auditor :: participants
+    -- and (participants) submit into it — but NOT each other's sealed orders. The
+    -- designated liquidity provider (when set) is added as an observer too, so it
+    -- can see the auction it is providing liquidity into.
+    observer (auditor :: participants) ++ optionalToList liquidityProvider
 
     ensure referencePrice > 0.0 && (session == "Open" || session == "Close")
 
@@ -144,6 +156,53 @@ template ClosingAuction
           operator; auditor; trader
           instrumentId; cashInstrument; session
           side; quantity; limitPrice; holdingCid = reserved
+
+    -- PUBLISH IMBALANCE — SELECTIVE NET-IMBALANCE DISCLOSURE (the DLP feature).
+    -- The operator computes the NET imbalance of the resting sealed book — the
+    -- signed sum totalBuyQty − totalSellQty at the reference price — and discloses
+    -- ONLY that aggregate to the auction's Designated Liquidity Provider via an
+    -- `ImbalanceDisclosure` (signatory operator, observer = the DLP). Requires a
+    -- DLP to be designated; aborts otherwise. Nonconsuming so the venue can refresh
+    -- the disclosure as the book evolves without disturbing the auction.
+    --
+    -- CRITICAL PRIVACY PROPERTY: this reveals the AGGREGATE ONLY. The individual
+    -- SealedOrders are fetched here (the operator signs every one, so it may read
+    -- them) but NONE of them — nor any trader identity, side, size, or limit — is
+    -- copied onto the disclosure. The DLP learns "the book is net long/short N units
+    -- of this instrument", nothing more. It offsets by lodging an ordinary
+    -- SealedOrder on the opposite side; that order is as private as any other.
+    nonconsuming choice PublishImbalance : ContractId ImbalanceDisclosure
+      with
+        restingOrders : [ContractId SealedOrder]  -- every resting order for THIS book
+      controller operator
+      do
+        assertMsg "imbalance disclosure needs an open window" isOpen
+        lp <- case liquidityProvider of
+          Some p  -> pure p
+          None    -> abort "this auction has no designated liquidity provider"
+        -- Read every resting order and confirm it belongs to THIS auction's book
+        -- (same operator / instrument / cash leg / session). Only their side+size
+        -- feed the aggregate — never their identity.
+        orders <- forA restingOrders (\cid -> do
+          o <- fetch cid
+          assertMsg "order belongs to a different operator"    (o.operator == operator)
+          assertMsg "order is for a different instrument"       (o.instrumentId == instrumentId)
+          assertMsg "order uses a different cash instrument"    (o.cashInstrument == cashInstrument)
+          assertMsg "order rests in a different session"        (o.session == session)
+          pure o)
+        let totalBuy  = sum [o.quantity | o <- orders, o.side == Buy]
+        let totalSell = sum [o.quantity | o <- orders, o.side == Sell]
+        let net = totalBuy - totalSell   -- signed: + is buy-heavy, − is sell-heavy
+        -- Side + magnitude. A DLP offsets a net-BUY book by SELLING (and vice
+        -- versa), so netSide names the side the BOOK is heavy on.
+        let (netSide, netQuantity)
+              | net > 0.0 = ("Buy",  net)
+              | net < 0.0 = ("Sell", negate net)
+              | otherwise = ("Flat", 0.0)
+        now <- getTime
+        create ImbalanceDisclosure with
+          operator; liquidityProvider = lp; instrumentId; cashInstrument; session
+          netSide; netQuantity; referencePrice; computedAt = now
 
     -- CLOSE BIDDING — the operator seals the window (no more orders). Recreates
     -- the auction with isOpen = False so RunClose runs against a sealed book.
@@ -308,6 +367,43 @@ template SealedOrder
     choice VenueCancel : ()
       controller operator
       do pure ()
+
+-- ---------------------------------------------------------------------------
+-- ImbalanceDisclosure — the NET imbalance of the sealed book, shown to ONE party.
+-- ---------------------------------------------------------------------------
+-- LIQUIDITY WITHOUT LEAKAGE. This is the whole point of the Designated Liquidity
+-- Provider feature. Emitted by `ClosingAuction.PublishImbalance`, it carries the
+-- AGGREGATE order imbalance for one instrument's book and NOTHING else:
+--   * netSide     — "Buy" | "Sell" | "Flat": the side the book is HEAVY on.
+--   * netQuantity — the magnitude of that imbalance (>= 0), at the reference price.
+--
+-- WHO CAN SEE IT — signatory operator, observer = the ONE designated liquidity
+-- provider. No auditor, no other trader, no competitor. On a transparent chain the
+-- pending book (and therefore the imbalance) is visible to everyone the instant an
+-- order is placed — impossible to reveal to exactly one committed provider. Here
+-- Canton's per-contract visibility makes selective disclosure a first-class effect:
+-- the venue attracts offsetting liquidity from its DLP WITHOUT leaking the book to
+-- the market. The DLP reads "net long/short N units" and offsets by lodging an
+-- ordinary (equally sealed) SealedOrder on the opposite side to clear the cross.
+template ImbalanceDisclosure
+  with
+    operator          : Party    -- the venue; the sole signatory
+    liquidityProvider : Party    -- the DLP; the sole observer (need-to-know)
+    instrumentId      : Text     -- the instrument this imbalance is for
+    cashInstrument    : Text     -- the cash leg of the book
+    session           : Text     -- "Open" | "Close": which cross's book
+    netSide           : Text     -- "Buy" | "Sell" | "Flat": the heavy side
+    netQuantity       : Decimal  -- magnitude of the net imbalance (>= 0)
+    referencePrice    : Decimal  -- the uniform price the cross will print at
+    computedAt        : Time     -- when this snapshot of the book was taken
+  where
+    signatory operator
+    -- ONLY the designated liquidity provider observes it. This is the selective
+    -- disclosure: the aggregate reaches the one party that commits to offset it,
+    -- and no one else on the network.
+    observer liquidityProvider
+    ensure netQuantity >= 0.0
+      && (netSide == "Buy" || netSide == "Sell" || netSide == "Flat")
 
 -- ---------------------------------------------------------------------------
 -- reserveExact — carve off EXACTLY `amt` units of `holdingCid` (a holding the

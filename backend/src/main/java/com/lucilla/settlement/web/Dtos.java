@@ -82,7 +82,8 @@ public final class Dtos {
             @NotBlank String cashInstrument,
             String session,                  // Open | Close (defaults to Close when blank)
             @NotNull @Positive BigDecimal referencePrice,
-            @NotNull List<@NotBlank String> participants) {
+            @NotNull List<@NotBlank String> participants,
+            String liquidityProvider) {      // optional: the designated DLP (null/blank = none)
     }
 
     public record SubmitOrderRequest(
@@ -192,6 +193,27 @@ public final class Dtos {
     public record MocCloseResponse(
             String settlementBatchCid, String session, BigDecimal closingPrice,
             List<MocFillView> fills) {
+    }
+
+    /**
+     * The NET imbalance of a sealed book — the Designated Liquidity Provider view.
+     *
+     * <p>Returned by {@code GET /moc/imbalance} ONLY to the acting party the ledger
+     * lets see the {@link com.lucilla.settlement.model.marketonclose.ImbalanceDisclosure}
+     * (the DLP or the venue). {@code disclosed=false} means the acting party is not
+     * entitled to it (a normal trader), or no DLP auction exists. It reveals the
+     * AGGREGATE only — never any individual order or trader identity.
+     */
+    public record MocImbalanceResponse(
+            boolean disclosed,               // did the acting party get the aggregate?
+            String instrumentId,
+            String cashInstrument,
+            String session,                  // "Open" | "Close"
+            String netSide,                  // "Buy" | "Sell" | "Flat" (heavy side)
+            BigDecimal netQuantity,          // magnitude of the imbalance (>= 0)
+            BigDecimal referencePrice,       // the uniform price the cross will print at
+            String liquidityProvider,        // the DLP's friendly label (who may offset)
+            String note) {                   // human-readable context for the UI
     }
 
     // ---- Generic responses ------------------------------------------------
