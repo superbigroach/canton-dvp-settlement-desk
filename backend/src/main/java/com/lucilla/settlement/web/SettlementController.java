@@ -196,17 +196,20 @@ public class SettlementController {
         String venue = ledger.resolveParty("Venue");
         String auditor = ledger.resolveParty("Auditor");
         String cashInstrument = blankTo(req.cashInstrument(), "USDC");
+        String session = LedgerCommands.session(req.session());
         var sideEnum = LedgerCommands.side(req.side());
         boolean isBuy = "buy".equalsIgnoreCase(req.side().trim());
 
-        // Find an open auction for this instrument/cash, else open a fresh one whose
-        // participant set is every known trader (so anyone in the picker can join).
-        // The close price is NEVER supplied by the trader: it is the instrument's
-        // published reference price ("price is what it is at the close").
+        // Find an open auction for this instrument/cash/session, else open a fresh one
+        // whose participant set is every known trader (so anyone in the picker can join).
+        // The cross price is NEVER supplied by the trader: it is the instrument's
+        // published reference price ("price is what it is at the open/close"). Opening
+        // (MOO) and closing (MOC) sessions rest in SEPARATE books.
         var open = ledger.auctionsVisibleTo(venue).stream()
                 .filter(a -> a.isOpen()
                         && a.instrumentId().equals(req.instrumentId())
-                        && a.cashInstrument().equals(cashInstrument))
+                        && a.cashInstrument().equals(cashInstrument)
+                        && a.session().equals(session))
                 .findFirst();
         String auctionCid;
         BigDecimal closingPrice;
@@ -225,7 +228,7 @@ public class SettlementController {
                     .toList();
             auctionCid = ledger.submitForCreated(venue,
                     LedgerCommands.createAuction(venue, auditor, req.instrumentId(),
-                            cashInstrument, closingPrice, participants),
+                            cashInstrument, session, closingPrice, participants),
                     LedgerCommands.closingAuctionTemplateId());
             opened = true;
         }
@@ -254,25 +257,29 @@ public class SettlementController {
     @GetMapping("/moc/state")
     public Dtos.MocStateResponse mocState(
             @RequestParam String instrumentId,
-            @RequestParam(required = false, defaultValue = "USDC") String cashInstrument) {
+            @RequestParam(required = false, defaultValue = "USDC") String cashInstrument,
+            @RequestParam(required = false, defaultValue = "Close") String session) {
         String venue = ledger.resolveParty("Venue");
+        String sess = LedgerCommands.session(session);
         var open = ledger.auctionsVisibleTo(venue).stream()
                 .filter(a -> a.isOpen()
                         && a.instrumentId().equals(instrumentId)
-                        && a.cashInstrument().equals(cashInstrument))
+                        && a.cashInstrument().equals(cashInstrument)
+                        && a.session().equals(sess))
                 .findFirst();
         if (open.isEmpty()) {
-            return new Dtos.MocStateResponse(null, instrumentId, cashInstrument, null, false, List.of());
+            return new Dtos.MocStateResponse(null, instrumentId, cashInstrument, sess, null, false, List.of());
         }
         var a = open.get();
         List<Dtos.MocOrderView> orders = ledger.sealedOrdersVisibleTo(venue).stream()
                 .filter(o -> o.operator().equals(venue)
                         && o.instrumentId().equals(instrumentId)
-                        && o.cashInstrument().equals(cashInstrument))
+                        && o.cashInstrument().equals(cashInstrument)
+                        && o.session().equals(sess))
                 .map(o -> new Dtos.MocOrderView(
                         o.contractId(), o.trader(), o.side(), o.quantity(), o.limitPrice()))
                 .toList();
-        return new Dtos.MocStateResponse(a.contractId(), instrumentId, cashInstrument,
+        return new Dtos.MocStateResponse(a.contractId(), instrumentId, cashInstrument, a.session(),
                 a.referencePrice(), a.isOpen(), orders);
     }
 
@@ -293,7 +300,8 @@ public class SettlementController {
         var orders = ledger.sealedOrdersVisibleTo(venue).stream()
                 .filter(o -> o.operator().equals(venue)
                         && o.instrumentId().equals(auction.instrumentId())
-                        && o.cashInstrument().equals(auction.cashInstrument()))
+                        && o.cashInstrument().equals(auction.cashInstrument())
+                        && o.session().equals(auction.session()))
                 .toList();
         // Only orders that are in-the-money at the close cross; the rest would abort it.
         List<String> buyCids = orders.stream()
@@ -317,7 +325,8 @@ public class SettlementController {
         List<Dtos.MocFillView> fills = batch.fills().stream()
                 .map(f -> new Dtos.MocFillView(f.trader(), f.side(), f.quantity(), f.price()))
                 .toList();
-        return new Dtos.MocCloseResponse(batch.contractId(), batch.closingPrice(), fills);
+        return new Dtos.MocCloseResponse(batch.contractId(), auction.session(),
+                batch.closingPrice(), fills);
     }
 
     // ---- Market-on-Close --------------------------------------------------
@@ -327,7 +336,7 @@ public class SettlementController {
             @Valid @RequestBody Dtos.OpenAuctionRequest req) {
         var cmd = LedgerCommands.createAuction(
                 req.operator(), req.auditor(), req.instrumentId(), req.cashInstrument(),
-                req.referencePrice(), req.participants());
+                LedgerCommands.session(req.session()), req.referencePrice(), req.participants());
         String cid = ledger.submitForCreated(req.operator(), cmd, LedgerCommands.closingAuctionTemplateId());
         return created(new Dtos.CidResponse(cid));
     }

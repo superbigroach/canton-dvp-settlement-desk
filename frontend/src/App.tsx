@@ -6,15 +6,16 @@ import {
   type Instrument,
   type MocState,
   type Party,
+  type Session,
 } from './api';
 
 const CASH = 'USDC';
 
 // A settlement proof we show the trader: either a bilateral DvP receipt or one
-// fill from a Market-on-Close batch. Accumulated newest-first.
+// fill from an opening/closing cross batch. Accumulated newest-first.
 interface Receipt {
   key: string;
-  kind: 'DvP' | 'MOC';
+  kind: 'DvP' | 'Open' | 'Close';
   time: string;
   headline: string; // "Bob bought 3 DEMO:AAPL" etc.
   asset: string;
@@ -22,14 +23,20 @@ interface Receipt {
   cashAmount: number;
   unitPrice: number;
   counterpartyLine: string;
-  cid: string; // receipt cid (DvP) or settlement-batch cid (MOC)
+  cid: string; // receipt cid (DvP) or settlement-batch cid (cross)
 }
 
 type Side = 'Buy' | 'Sell';
-type Mode = 'DvP' | 'MOC';
+type Mode = 'DvP' | 'Auction';
 
 const fmt = (n: number) =>
   n.toLocaleString(undefined, { maximumFractionDigits: 4 });
+// Price/NAV formatting — always two decimals so the gold ticker reads like a quote.
+const fmt2 = (n: number) =>
+  n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+const sessionLabel = (s: Session) =>
+  s === 'Open' ? 'Official Open' : 'Official Close · NAV';
 
 export default function App() {
   const [parties, setParties] = useState<Party[]>([]);
@@ -44,6 +51,7 @@ export default function App() {
   const [quantity, setQuantity] = useState<string>('1');
   const [price, setPrice] = useState<string>(''); // DvP only
   const [counterparty, setCounterparty] = useState<string>('');
+  const [session, setSession] = useState<Session>('Close');
 
   const [mocState, setMocState] = useState<MocState | null>(null);
   const [busy, setBusy] = useState(false);
@@ -58,9 +66,13 @@ export default function App() {
     () => parties.filter((p) => p.label.toLowerCase() !== 'sandbox'),
     [parties],
   );
-  const refPriceOf = useCallback(
-    (id: string) => instruments.find((i) => i.id === id)?.referencePrice ?? null,
+  const instrumentOf = useCallback(
+    (id: string) => instruments.find((i) => i.id === id) ?? null,
     [instruments],
+  );
+  const refPriceOf = useCallback(
+    (id: string) => instrumentOf(id)?.referencePrice ?? null,
+    [instrumentOf],
   );
 
   const flash = (msg: string) => {
@@ -79,10 +91,10 @@ export default function App() {
     }
   }, []);
 
-  const loadMoc = useCallback(async (assetId: string) => {
+  const loadMoc = useCallback(async (assetId: string, sess: Session) => {
     if (!assetId) return;
     try {
-      setMocState(await api.mocState(assetId, CASH));
+      setMocState(await api.mocState(assetId, sess, CASH));
     } catch {
       setMocState(null);
     }
@@ -111,10 +123,11 @@ export default function App() {
     void loadHoldings(acting);
   }, [acting, loadHoldings]);
   useEffect(() => {
-    void loadMoc(asset);
-  }, [asset, loadMoc]);
+    void loadMoc(asset, session);
+  }, [asset, session, loadMoc]);
 
-  // When the asset changes, seed the DvP price with its published reference.
+  // When the asset changes, seed the DvP price with its published reference so the
+  // "You pay X" line computes immediately (still editable — DvP is negotiated).
   useEffect(() => {
     const rp = refPriceOf(asset);
     if (rp != null) setPrice(String(rp));
@@ -137,6 +150,7 @@ export default function App() {
   const closePrice = refPriceOf(asset);
   const dvpCash = qtyNum * priceNum;
   const mocCash = qtyNum * (closePrice ?? 0);
+  const selectedInstrument = instrumentOf(asset);
 
   // Spot guard: a Sell must be covered by the asset; a Buy by cash. (The ledger
   // also enforces this — there is no shorting and no negative position.)
@@ -196,20 +210,20 @@ export default function App() {
       ...r,
     ]);
     flash('Trade executed — both legs settled atomically.');
-    await Promise.all([loadHoldings(acting), loadMoc(asset)]);
+    await Promise.all([loadHoldings(acting), loadMoc(asset, session)]);
   }
 
   async function doMocOrder() {
     if (!acting || !asset) return;
     const res = await runAction(() =>
-      api.mocOrder({ trader: acting, side, quantity: qtyNum, instrumentId: asset }),
+      api.mocOrder({ trader: acting, side, quantity: qtyNum, instrumentId: asset, session }),
     );
     if (!res) return;
     flash(
-      `Sealed ${side.toUpperCase()} order sent to the close ` +
-        `(crosses at ${fmt(res.closingPrice)} ${CASH}).`,
+      `Sealed ${side.toUpperCase()} order sent to the ${session.toLowerCase()} cross ` +
+        `(crosses at ${fmt2(res.closingPrice)} ${CASH}).`,
     );
-    await Promise.all([loadHoldings(acting), loadMoc(asset)]);
+    await Promise.all([loadHoldings(acting), loadMoc(asset, session)]);
   }
 
   async function doRunClose() {
@@ -217,23 +231,28 @@ export default function App() {
     const auctionCid = mocState.auctionCid;
     const res = await runAction(() => api.mocClose(auctionCid));
     if (!res) return;
+    const kind = res.session === 'Open' ? 'Open' : 'Close';
+    const crossName = res.session === 'Open' ? 'opening cross' : 'closing cross';
     setReceipts((r) => [
       ...res.fills.map((f, idx) => ({
-        key: `moc-${res.settlementBatchCid}-${idx}`,
-        kind: 'MOC' as const,
+        key: `x-${res.settlementBatchCid}-${idx}`,
+        kind: kind as 'Open' | 'Close',
         time: new Date().toLocaleTimeString(),
         headline: `${f.trader} ${f.side === 'Buy' ? 'bought' : 'sold'} ${fmt(f.quantity)} ${mocState.instrumentId}`,
         asset: mocState.instrumentId,
         quantity: f.quantity,
         cashAmount: f.quantity * f.price,
         unitPrice: f.price,
-        counterpartyLine: `Market-on-Close cross · venue-matched at the uniform close`,
+        counterpartyLine: `Uniform-price ${crossName} · venue-matched at the ${sessionLabel(kind)}`,
         cid: res.settlementBatchCid,
       })),
       ...r,
     ]);
-    flash(`Close crossed ${res.fills.length} fill(s) at ${fmt(res.closingPrice)} ${CASH}.`);
-    await Promise.all([loadHoldings(acting), loadMoc(asset)]);
+    flash(
+      `${kind === 'Open' ? 'Opening' : 'Closing'} cross printed ${res.fills.length} fill(s) ` +
+        `at ${fmt2(res.closingPrice)} ${CASH}.`,
+    );
+    await Promise.all([loadHoldings(acting), loadMoc(asset, session)]);
   }
 
   const actingIsVenue = acting.toLowerCase() === 'venue';
@@ -246,57 +265,96 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <span className="logo">◈</span>
-          <div>
-            <h1>Canton DvP Settlement Desk</h1>
-            <p className="tagline">Atomic delivery-versus-payment &amp; sealed Market-on-Close · USDC cash on Canton</p>
+          <span className="logo" aria-hidden>◈</span>
+          <div className="brand-text">
+            <span className="brand-name">CANTON DvP DESK</span>
+            <span className="brand-sub">Delivery-versus-Payment · Sealed Opening &amp; Closing Cross</span>
           </div>
         </div>
-        <label className="party-switch">
-          <span>Acting as</span>
-          <select value={acting} onChange={(e) => setActing(e.target.value)}>
-            {tradedParties.map((p) => (
-              <option key={p.party} value={p.label}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="topbar-right">
+          <span className="live" title="Connected to the local Canton ledger API">
+            <span className="dot" /> live · ledger localhost:6900
+          </span>
+          <label className="party-switch">
+            <span>Acting as</span>
+            <select value={acting} onChange={(e) => setActing(e.target.value)}>
+              {tradedParties.map((p) => (
+                <option key={p.party} value={p.label}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </header>
 
       {error && (
         <div className="banner error" onClick={() => setError('')}>
-          ⚠ {error} <span className="dismiss">(dismiss)</span>
+          <span>⚠ {error}</span> <span className="dismiss">dismiss</span>
         </div>
       )}
       {toast && <div className="banner ok">✓ {toast}</div>}
 
+      {/* -------- Official Open / Close · NAV quote card -------- */}
+      <section className="quote" aria-label="Official price quote">
+        <div className="quote-left">
+          <div className="quote-instrument">
+            <span className={`pill ${asset === CASH ? 'cash' : 'asset'}`}>{asset || '—'}</span>
+            {selectedInstrument && <span className="quote-kind">{selectedInstrument.kind}</span>}
+          </div>
+          <p className="quote-desc">{selectedInstrument?.description ?? 'Select an instrument'}</p>
+        </div>
+        <div className="quote-right">
+          <span className="quote-label">{sessionLabel(session)}</span>
+          <span className="quote-price">
+            {closePrice != null ? (
+              <>
+                <span className="mono nav">{fmt2(closePrice)}</span>
+                <span className="quote-ccy">{CASH}</span>
+              </>
+            ) : (
+              <span className="mono nav muted">—</span>
+            )}
+          </span>
+          <span className="quote-note">Exogenous reference · every fill prints here</span>
+        </div>
+      </section>
+
       <main className="grid">
         {/* -------- Position / holdings -------- */}
         <section className="card position">
-          <h2>{acting}&rsquo;s position</h2>
-          <p className="hint">Your current holdings on the ledger — spot only, no shorting.</p>
+          <div className="card-head">
+            <h2>Position</h2>
+            <span className="who">{acting}</span>
+          </div>
+          <p className="hint">Holdings on the ledger — spot only, no shorting.</p>
           {holdings.length === 0 ? (
             <p className="empty">No holdings.</p>
           ) : (
-            <table>
+            <table className="blotter">
               <thead>
                 <tr>
                   <th>Instrument</th>
                   <th className="num">Amount</th>
+                  <th className="num">Value ({CASH})</th>
                 </tr>
               </thead>
               <tbody>
-                {aggregate(holdings).map((h) => (
-                  <tr key={h.instrumentId}>
-                    <td>
-                      <span className={`pill ${h.instrumentId === CASH ? 'cash' : 'asset'}`}>
-                        {h.instrumentId}
-                      </span>
-                    </td>
-                    <td className="num strong">{fmt(h.amount)}</td>
-                  </tr>
-                ))}
+                {aggregate(holdings).map((h) => {
+                  const rp = refPriceOf(h.instrumentId);
+                  const val = h.instrumentId === CASH ? h.amount : rp != null ? h.amount * rp : null;
+                  return (
+                    <tr key={h.instrumentId}>
+                      <td>
+                        <span className={`pill ${h.instrumentId === CASH ? 'cash' : 'asset'}`}>
+                          {h.instrumentId}
+                        </span>
+                      </td>
+                      <td className="num mono strong">{fmt(h.amount)}</td>
+                      <td className="num mono muted">{val != null ? fmt2(val) : '—'}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -307,7 +365,9 @@ export default function App() {
 
         {/* -------- Trade panel -------- */}
         <section className="card trade">
-          <h2>Trade</h2>
+          <div className="card-head">
+            <h2>Trade</h2>
+          </div>
 
           <div className="row">
             <label className="field">
@@ -345,17 +405,17 @@ export default function App() {
 
           <div className="mode-toggle">
             <button className={mode === 'DvP' ? 'on' : ''} onClick={() => setMode('DvP')}>
-              Settle now (DvP)
+              Settle now · DvP
             </button>
-            <button className={mode === 'MOC' ? 'on' : ''} onClick={() => setMode('MOC')}>
-              Send to Close (MOC)
+            <button className={mode === 'Auction' ? 'on' : ''} onClick={() => setMode('Auction')}>
+              Send to Auction
             </button>
           </div>
 
           {mode === 'DvP' ? (
             <>
               <p className="hint">
-                <strong>DvP</strong> = an agreed bilateral atomic swap with a known counterparty.
+                <strong>DvP</strong> — an agreed bilateral atomic swap with a named counterparty.
                 Both legs move in one transaction, or neither does.
               </p>
               <div className="row">
@@ -374,6 +434,7 @@ export default function App() {
                 <label className="field small">
                   <span>Price ({CASH})</span>
                   <input
+                    className="mono"
                     type="number"
                     min="0"
                     step="any"
@@ -383,58 +444,79 @@ export default function App() {
                 </label>
               </div>
               <div className="summary">
-                {side === 'Buy' ? 'You pay' : 'You receive'} <strong>{fmt(dvpCash)} {CASH}</strong>{' '}
-                for {fmt(qtyNum)} {asset} @ {fmt(priceNum)}
+                <span>{side === 'Buy' ? 'You pay' : 'You receive'}</span>
+                <strong className="mono">{fmt2(dvpCash)} {CASH}</strong>
+                <span className="summary-sub mono">
+                  {fmt(qtyNum)} {asset} @ {fmt2(priceNum)}
+                </span>
               </div>
               {spotWarning && <div className="warn">{spotWarning}</div>}
               <button className="primary" disabled={!canDvP} onClick={doDvP}>
-                {busy ? 'Settling…' : `${side} ${fmt(qtyNum)} ${asset} · Settle now`}
+                {busy ? 'Settling…' : `${side} ${fmt(qtyNum)} ${asset} · Settle now (DvP)`}
               </button>
             </>
           ) : (
             <>
               <p className="hint">
-                <strong>MOC</strong> = an anonymous sealed order that crosses at the venue&rsquo;s
-                official close. No counterparty, no price you set — the close price is what it is.
+                <strong>Auction</strong> — an anonymous sealed order that crosses at the venue&rsquo;s
+                official price. No counterparty and no price you set — the cross price is what it is.
               </p>
+              <div className="field">
+                <span>Session</span>
+                <div className="segmented session">
+                  <button className={session === 'Open' ? 'on' : ''} onClick={() => setSession('Open')}>
+                    Opening (MOO)
+                  </button>
+                  <button className={session === 'Close' ? 'on' : ''} onClick={() => setSession('Close')}>
+                    Closing (MOC)
+                  </button>
+                </div>
+              </div>
               <div className="summary">
-                Crosses at the published close{' '}
-                <strong>{closePrice != null ? `${fmt(closePrice)} ${CASH}` : '—'}</strong>
+                <span>Crosses at the {sessionLabel(session)}</span>
+                <strong className="mono nav-inline">
+                  {closePrice != null ? `${fmt2(closePrice)} ${CASH}` : '—'}
+                </strong>
                 {closePrice != null && (
-                  <>
-                    {' '}· {side === 'Buy' ? 'commits' : 'delivers'}{' '}
-                    <strong>
-                      {side === 'Buy' ? `${fmt(mocCash)} ${CASH}` : `${fmt(qtyNum)} ${asset}`}
-                    </strong>
-                  </>
+                  <span className="summary-sub mono">
+                    {side === 'Buy'
+                      ? `commits ${fmt2(mocCash)} ${CASH}`
+                      : `delivers ${fmt(qtyNum)} ${asset}`}
+                  </span>
                 )}
               </div>
               {spotWarning && <div className="warn">{spotWarning}</div>}
               <button className="primary" disabled={!canMoc} onClick={doMocOrder}>
-                {busy ? 'Sending…' : `Send ${side.toUpperCase()} ${fmt(qtyNum)} ${asset} to Close`}
+                {busy
+                  ? 'Sending…'
+                  : `Send ${side.toUpperCase()} ${fmt(qtyNum)} ${asset} to ${session} Cross`}
               </button>
             </>
           )}
         </section>
 
-        {/* -------- Close panel (venue view) -------- */}
-        <section className="card close">
-          <h2>The Close · {asset}</h2>
+        {/* -------- Auction / Cross panel (venue view) -------- */}
+        <section className="card cross">
+          <div className="card-head">
+            <h2>The Cross</h2>
+            <span className={`session-tag ${session.toLowerCase()}`}>{session}</span>
+          </div>
           <p className="hint">
-            The venue&rsquo;s call auction. Sealed orders rest privately, then cross together at the
-            uniform close price. Run it as <strong>Venue</strong>.
+            The venue&rsquo;s sealed call auction for <strong>{asset}</strong>. Orders rest privately,
+            then cross together at the uniform {sessionLabel(session).toLowerCase()}. Run as{' '}
+            <strong>Venue</strong>.
           </p>
           {mocState?.auctionCid ? (
             <>
-              <div className="close-meta">
+              <div className="cross-meta">
                 <span className="pill asset">{mocState.instrumentId}</span>
-                <span>
-                  close @ <strong>{mocState.referencePrice != null ? fmt(mocState.referencePrice) : '—'} {CASH}</strong>
+                <span className="cross-meta-price">
+                  @ <strong className="mono">{mocState.referencePrice != null ? fmt2(mocState.referencePrice) : '—'}</strong> {CASH}
                 </span>
-                <span className="tag open">{mocState.orders.length} resting order(s)</span>
+                <span className="tag">{mocState.orders.length} resting</span>
               </div>
               {mocState.orders.length > 0 && (
-                <table className="orders">
+                <table className="blotter orders">
                   <thead>
                     <tr>
                       <th>Trader</th>
@@ -449,34 +531,39 @@ export default function App() {
                         <td>
                           <span className={`side ${o.side.toLowerCase()}`}>{o.side}</span>
                         </td>
-                        <td className="num">{fmt(o.quantity)}</td>
+                        <td className="num mono">{fmt(o.quantity)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               )}
               {!actingIsVenue && (
-                <p className="warn subtle">Switch to <strong>Venue</strong> to run the close.</p>
+                <p className="warn subtle">Switch to <strong>Venue</strong> to run the cross.</p>
               )}
               <button
                 className="primary venue"
                 disabled={busy || !actingIsVenue || mocState.orders.length === 0}
                 onClick={doRunClose}
               >
-                {busy ? 'Crossing…' : 'Run the Close'}
+                {busy ? 'Crossing…' : `Run the ${session} Cross`}
               </button>
             </>
           ) : (
-            <p className="empty">No open auction for {asset}. Send a MOC order to open one.</p>
+            <p className="empty">
+              No open {session.toLowerCase()} auction for {asset}. Send an order to open one.
+            </p>
           )}
-          <button className="ghost" disabled={busy} onClick={() => loadMoc(asset)}>
+          <button className="ghost" disabled={busy} onClick={() => loadMoc(asset, session)}>
             Refresh
           </button>
         </section>
 
         {/* -------- Receipts -------- */}
         <section className="card receipts">
-          <h2>Settlement receipts</h2>
+          <div className="card-head">
+            <h2>Settlement Receipts</h2>
+            <span className="who">{receipts.length} on-ledger</span>
+          </div>
           <p className="hint">Immutable proof written on-ledger inside each atomic settlement.</p>
           {receipts.length === 0 ? (
             <p className="empty">No settlements yet. Execute a trade to see its receipt.</p>
@@ -485,18 +572,20 @@ export default function App() {
               {receipts.map((r) => (
                 <li key={r.key} className={`receipt ${r.kind.toLowerCase()}`}>
                   <div className="receipt-head">
-                    <span className={`badge ${r.kind.toLowerCase()}`}>{r.kind}</span>
+                    <span className={`badge ${r.kind.toLowerCase()}`}>
+                      {r.kind === 'DvP' ? 'DvP' : r.kind === 'Open' ? 'OPEN' : 'CLOSE'}
+                    </span>
                     <span className="receipt-headline">{r.headline}</span>
-                    <span className="receipt-time">{r.time}</span>
+                    <span className="receipt-time mono">{r.time}</span>
                   </div>
                   <div className="receipt-body">
-                    <span>
-                      {fmt(r.quantity)} {r.asset} @ <strong>{fmt(r.unitPrice)}</strong> ={' '}
-                      <strong>{fmt(r.cashAmount)} {CASH}</strong>
+                    <span className="mono">
+                      {fmt(r.quantity)} {r.asset} @ <strong>{fmt2(r.unitPrice)}</strong> ={' '}
+                      <strong>{fmt2(r.cashAmount)} {CASH}</strong>
                     </span>
                     <span className="cp">{r.counterpartyLine}</span>
-                    <code className="cid" title={r.cid}>
-                      {r.kind === 'DvP' ? 'receipt' : 'batch'}: {shortCid(r.cid)}
+                    <code className="cid mono" title={r.cid}>
+                      {r.kind === 'DvP' ? 'receipt' : 'batch'} · {shortCid(r.cid)}
                     </code>
                   </div>
                 </li>
@@ -507,9 +596,9 @@ export default function App() {
       </main>
 
       <footer className="foot">
-        Live against a local Canton sandbox via the Daml Java bindings. Cash token{' '}
-        <code>USDC</code> · assets <code>DEMO:AAPL</code>, <code>cETH</code>. Contract-id plumbing is
-        auto-resolved server-side.
+        Live against a local Canton sandbox via the Daml Java bindings · cash{' '}
+        <code>USDC</code> · assets <code>DEMO:AAPL</code> <code>cETH</code> <code>CBTC</code> ·
+        contract-id plumbing auto-resolved server-side.
       </footer>
     </div>
   );

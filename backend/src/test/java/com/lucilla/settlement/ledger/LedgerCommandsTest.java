@@ -75,11 +75,11 @@ class LedgerCommandsTest {
     void createAuction_buildsClosingAuctionCreate() {
         var cmd = asCreate(LedgerCommands.createAuction(
                 "Venue", "Auditor", "DEMO:AAPL", "USD",
-                new BigDecimal("255.0"), List.of("Alice", "Bob")));
+                "Close", new BigDecimal("255.0"), List.of("Alice", "Bob")));
 
         assertThat(cmd.getTemplateId().getEntityName()).isEqualTo("ClosingAuction");
-        // operator, auditor, instrumentId, cashInstrument, referencePrice, participants, isOpen
-        assertThat(cmd.getCreateArguments().getFields()).hasSize(7);
+        // operator, auditor, instrumentId, cashInstrument, session, referencePrice, participants, isOpen
+        assertThat(cmd.getCreateArguments().getFields()).hasSize(8);
     }
 
     // ---- Exercises: choice name + target contract id round-trip -----------

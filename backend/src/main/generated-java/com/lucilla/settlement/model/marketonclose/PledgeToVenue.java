@@ -24,7 +24,7 @@ import java.util.List;
 import java.util.Objects;
 
 public class PledgeToVenue extends DamlRecord<PledgeToVenue> {
-  public static final String _packageId = "a515edc777c604a66696e5991316c6e0500be01c634f1dcd1c118c3a0ad8c9fe";
+  public static final String _packageId = "698224dbdf62d308e4973c1fca97d735a0f9802f145920fca7e2e45e4cafc507";
 
   public final BigDecimal fillQty;
 

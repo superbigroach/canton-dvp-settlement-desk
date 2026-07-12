@@ -1,11 +1,15 @@
 # Run the Canton DvP Settlement Desk — React app (full stack)
 
-A simple **Buy / Sell** product UI (React + TypeScript, in `frontend/`) over the
-settlement desk. It hides the raw contract-id plumbing: you pick an asset, a side,
-a quantity, and either **Settle now (DvP)** with a chosen counterparty, or **Send
-to Close (MOC)** as an anonymous sealed order that crosses at the official close.
-All ledger orchestration (splitting/merging holdings, propose→accept→settle,
-opening/closing the auction) happens **server-side** against a live Canton sandbox.
+A premium **institutional trading-desk** product UI (React + TypeScript, in
+`frontend/`) over the settlement desk. It hides the raw contract-id plumbing: you
+pick an asset, a side, a quantity, and either **Settle now (DvP)** with a chosen
+counterparty, or **Send to Auction** as an anonymous sealed order that crosses at
+the venue's official price. The auction runs in two sessions — **Opening (MOO)** and
+**Closing (MOC)** — and the price it prints is shown as the **Official Open** or the
+**Official Close / NAV** in a gold quote card. All ledger orchestration
+(splitting/merging holdings, propose→accept→settle, opening/closing the auction)
+happens **server-side** against a live Canton sandbox. UI/number fonts (Inter +
+JetBrains Mono) are bundled via npm (`@fontsource/*`) — no external CDN.
 
 **Open the app at:** <http://localhost:5173>
 
@@ -21,8 +25,10 @@ opening/closing the auction) happens **server-side** against a live Canton sandb
 
 > A separate user `daml start` holds 6865–6868 / 7500 / 7575 — unrelated, leave it.
 
-The demo cash token is **`USDC`**; assets are **`DEMO:AAPL`** (close 255) and
-**`cETH`** (close 2500).
+The demo cash token is **`USDC`**; assets are **`DEMO:AAPL`** (ref 255),
+**`cETH`** (ref 2,400) and **`CBTC`** (ref 65,000). cETH + CBTC are `CryptoWrapped`
+instruments (HackCanton cETH/CBTC bounties). `Test:initialize` seeds Alice and Bob
+with cETH/CBTC/USDC books so the crypto desks trade out of the box.
 
 ---
 
@@ -89,18 +95,28 @@ npm run preview -- --port 5173 --host   # serves dist/, proxies /api -> :8080
 
 ## What the app does (simple product)
 
-- **Acting-as switcher** (top-right) — who you are, fed by `GET /api/parties`.
-- **Position** — your holdings (`GET /api/holdings?party=`), spot only (no shorting).
+- **Acting-as switcher** (top-right) — who you are, fed by `GET /api/parties`, next
+  to a pulsing `● live · ledger localhost:6900` status.
+- **Official Open / Close · NAV quote card** — the selected instrument's reference
+  price in a big gold ticker, labelled **Official Open** or **Official Close / NAV**
+  by the chosen auction session.
+- **Position** — your holdings (`GET /api/holdings?party=`), spot only (no shorting),
+  with a mark-to-reference value column.
 - **Trade** — pick Asset / Side (Buy·Sell) / Quantity, then a mode:
-  - **Settle now (DvP)** — choose a counterparty and price; one click runs
-    propose→accept→settle server-side (`POST /api/trade`). Holdings swap atomically.
-  - **Send to Close (MOC)** — no counterparty, **no price**: a sealed order that
-    crosses at the instrument's published close (`POST /api/moc/order`).
-- **The Close** (as **Venue**) — see resting orders (`GET /api/moc/state`) and
-  **Run the Close** (`POST /api/moc/{auctionCid}/close`) to cross them at the uniform
-  close price. No price is typed — it comes from the instrument.
-- **Settlement receipts** — every DvP settle and MOC fill shows who/what/amount/
-  price/time and the on-ledger receipt (or batch) contract id.
+  - **Settle now · DvP** — choose a counterparty and price (pre-filled to the
+    instrument reference, editable); one click runs propose→accept→settle server-side
+    (`POST /api/trade`). Holdings swap atomically.
+  - **Send to Auction** — pick a **Session (Opening / Closing)**; no counterparty and
+    **no price**: a sealed order that crosses at the instrument's published reference
+    (`POST /api/moc/order`, with `session: "Open"|"Close"`). Opening and closing
+    sessions rest in **separate books**.
+- **The Cross** (as **Venue**) — see the selected session's resting orders
+  (`GET /api/moc/state?…&session=`) and **Run the Cross**
+  (`POST /api/moc/{auctionCid}/close`) to cross them at the uniform official price.
+  No price is typed — it comes from the instrument.
+- **Settlement receipts** — every DvP settle and cross fill shows who/what/amount/
+  price/time, an OPEN/CLOSE/DvP badge, and the on-ledger receipt (or batch)
+  contract id in mono.
 
 ## Verify live (host shell)
 ```bash
@@ -110,6 +126,22 @@ curl "http://localhost:5173/api/holdings?party=Alice"  # before a trade
 curl -X POST http://localhost:5173/api/trade -H 'Content-Type: application/json' \
   -d '{"buyer":"Alice","seller":"Bob","assetInstrument":"DEMO:AAPL","assetAmount":3,"cashInstrument":"USDC","cashAmount":765}'
 curl "http://localhost:5173/api/holdings?party=Alice"  # after: +3 AAPL, -765 USDC
+
+# Opening cross (MOO) on cETH — one sealed BUY + one sealed SELL, then run it.
+curl -X POST :8080/api/moc/order -H 'Content-Type: application/json' \
+  -d '{"trader":"Bob","side":"Sell","quantity":2,"instrumentId":"cETH","session":"Open"}'
+curl -X POST :8080/api/moc/order -H 'Content-Type: application/json' \
+  -d '{"trader":"Alice","side":"Buy","quantity":2,"instrumentId":"cETH","session":"Open"}'
+AUC=$(curl -s ":8080/api/moc/state?instrumentId=cETH&session=Open" | jq -r .auctionCid)
+curl -X POST ":8080/api/moc/$AUC/close"    # -> session "Open", closingPrice 2400 (Official Open)
+
+# Closing cross (MOC) on CBTC — same mechanism, prints the Official Close / NAV.
+curl -X POST :8080/api/moc/order -H 'Content-Type: application/json' \
+  -d '{"trader":"Bob","side":"Sell","quantity":1,"instrumentId":"CBTC","session":"Close"}'
+curl -X POST :8080/api/moc/order -H 'Content-Type: application/json' \
+  -d '{"trader":"Alice","side":"Buy","quantity":1,"instrumentId":"CBTC","session":"Close"}'
+AUC=$(curl -s ":8080/api/moc/state?instrumentId=CBTC&session=Close" | jq -r .auctionCid)
+curl -X POST ":8080/api/moc/$AUC/close"    # -> session "Close", closingPrice 65000 (Official Close/NAV)
 ```
 
 ## Restart

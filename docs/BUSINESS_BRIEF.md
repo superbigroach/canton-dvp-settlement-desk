@@ -7,12 +7,15 @@ DvP settlement — for tokenised assets on the Canton Network.*
 
 ## What it is
 
-A **closing auction** for tokenised assets. Traders lodge **sealed** buy/sell
-interest; at the close the venue crosses everyone at **one uniform price**, rations
-any imbalance pro-rata, and settles every fill **atomically** (delivery-versus-
-payment, all-or-nothing). The order book is **private by construction** — no
-participant sees another's order until after the cross. The single price the
-auction produces **is the official close / NAV**.
+A **sealed call auction** for tokenised assets, run as **both the opening cross
+(Market-on-Open) and the closing cross (Market-on-Close)**. Traders lodge **sealed**
+buy/sell interest; at the open or the close the venue crosses everyone at **one
+uniform price**, rations any imbalance pro-rata, and settles every fill **atomically**
+(delivery-versus-payment, all-or-nothing). The order book is **private by
+construction** — no participant sees another's order until after the cross. The
+single price the auction produces **is the official open** (at the opening cross) or
+the **official close / NAV** (at the closing cross) — the same mechanism prints the
+authoritative mark at both ends of the session.
 
 Two things fall out of one mechanism:
 1. **Fair large-order execution** — size trades at one price, with no market impact

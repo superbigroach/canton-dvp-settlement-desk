@@ -91,7 +91,11 @@ template ClosingAuction
     auditor        : Party    -- compliance observer of the CLOSE (not the book)
     instrumentId   : Text     -- the asset auctioned, e.g. "DEMO:AAPL"
     cashInstrument : Text     -- the cash leg instrument, e.g. "USDC"
-    referencePrice : Decimal  -- the official CLOSING price every fill prints at
+    session        : Text     -- "Open" (opening cross / MOO) or "Close" (closing cross / MOC).
+                              -- Purely a LABEL: the crossing/matching logic is IDENTICAL for
+                              -- both. It only determines whether the printed uniform price is
+                              -- reported as the OFFICIAL OPEN or the OFFICIAL CLOSE / NAV.
+    referencePrice : Decimal  -- the official OPEN/CLOSE price every fill prints at
     participants   : [Party]  -- traders permitted to submit sealed orders
     isOpen         : Bool     -- True while the sealed-order window accepts orders
   where
@@ -100,7 +104,7 @@ template ClosingAuction
     -- and (participants) submit into it — but NOT each other's sealed orders.
     observer auditor :: participants
 
-    ensure referencePrice > 0.0
+    ensure referencePrice > 0.0 && (session == "Open" || session == "Close")
 
     -- SUBMIT ORDER — a participant lodges a SEALED order and pre-commits the
     -- holding it will deliver (cash for a buy, the asset for a sell). Nonconsuming
@@ -128,7 +132,7 @@ template ClosingAuction
         allocated <- exercise holdingCid Disclose with newObserver = operator
         create SealedOrder with
           operator; auditor; trader
-          instrumentId; cashInstrument
+          instrumentId; cashInstrument; session
           side; quantity; limitPrice; holdingCid = allocated
 
     -- CLOSE BIDDING — the operator seals the window (no more orders). Recreates
@@ -242,6 +246,7 @@ template SealedOrder
     trader         : Party            -- the order owner
     instrumentId   : Text
     cashInstrument : Text
+    session        : Text             -- "Open" | "Close": the cross this order rests in
     side           : Side
     quantity       : Decimal
     limitPrice     : Decimal

@@ -52,6 +52,9 @@ usdc = "USDC"
 ceth : Text
 ceth = "cETH"
 
+cbtc : Text
+cbtc = "CBTC"
+
 -- ---------------------------------------------------------------------------
 -- Shared party set. `daml.yaml`'s init-script (Test:initialize) reuses this so
 -- `daml start` also has parties ready for the Navigator UI.
@@ -97,7 +100,12 @@ setupInstruments issuer = do
     createCmd Instrument with
       issuer; depository = issuer; id = ceth; version = "1"
       kind = "CryptoWrapped"; description = "Wrapped ETH on Canton (onRails cETH)"
-      referencePrice = Some 2500.0
+      referencePrice = Some 2400.0
+  _ <- submit issuer do
+    createCmd Instrument with
+      issuer; depository = issuer; id = cbtc; version = "1"
+      kind = "CryptoWrapped"; description = "Wrapped BTC on Canton (cBTC)"
+      referencePrice = Some 65000.0
   pure ()
 
 -- Mint a holding to `owner` (only the issuer signs).
@@ -126,6 +134,16 @@ initialize = do
   -- Bob (the SELLER) holds 10 AAPL; Alice (the BUYER) holds 2,550 USD.
   bobAapl   <- mint issuer aapl bob   10.0
   aliceCash <- mint issuer usdc  alice 2550.0
+
+  -- Crypto-wrapped inventory for the cETH + CBTC desks. Both Alice and Bob carry
+  -- a starting book so the blotter shows real cETH/CBTC/USDC positions and either
+  -- party can settle or send a crypto leg to the opening/closing cross.
+  _ <- mint issuer ceth alice 5.0       -- Alice: 5 cETH  (~12,000 USDC @ 2,400)
+  _ <- mint issuer ceth bob   4.0       -- Bob:   4 cETH
+  _ <- mint issuer cbtc alice 1.0       -- Alice: 1 CBTC  (~65,000 USDC)
+  _ <- mint issuer cbtc bob   2.0       -- Bob:   2 CBTC
+  _ <- mint issuer usdc bob   50000.0   -- Bob: working USDC cash for crypto buys
+  _ <- mint issuer usdc alice 150000.0  -- Alice: working USDC cash for crypto buys
 
   -- Bob proposes to sell 10 AAPL for 2,550 USD (255.0 each). Alice is counterparty.
   _ <- submit bob do
@@ -252,6 +270,7 @@ testMarketOnClose = do
   auctionCid <- submit venue do
     createCmd ClosingAuction with
       operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"
       referencePrice = 255.0
       participants = [alice, bob, carol, dave]; isOpen = True
 
@@ -305,6 +324,52 @@ testMarketOnClose = do
   aliceUsd === 50.0
 
 -- ---------------------------------------------------------------------------
+-- TEST 3a — OPENING CROSS (Market-on-Open / MOO): the SAME sealed uniform-price
+-- auction run as an OPENING session. The crossing logic is identical to the
+-- close; only `session = "Open"` differs, so the printed uniform price is the
+-- OFFICIAL OPEN. Crossed on cETH to exercise a CryptoWrapped instrument.
+-- ---------------------------------------------------------------------------
+testOpeningCross : Script ()
+testOpeningCross = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  -- Bob sells 3 cETH; Alice buys 3 cETH; both pre-commit. Official open = 2,400.
+  bobCeth   <- mint issuer ceth bob   3.0
+  aliceCash <- mint issuer usdc alice 7500.0
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = ceth; cashInstrument = usdc
+      session = "Open"
+      referencePrice = 2400.0
+      participants = [alice, bob]; isOpen = True
+
+  bobSell <- submit bob do
+    exerciseCmd auctionCid SubmitOrder with
+      trader = bob; side = Sell; quantity = 3.0; limitPrice = 2350.0; holdingCid = bobCeth
+  aliceBuy <- submit alice do
+    exerciseCmd auctionCid SubmitOrder with
+      trader = alice; side = Buy; quantity = 3.0; limitPrice = 2500.0; holdingCid = aliceCash
+
+  closedCid <- submit venue do exerciseCmd auctionCid CloseBidding
+  batchCid  <- submit venue do
+    exerciseCmd closedCid RunClose with buyOrders = [aliceBuy]; sellOrders = [bobSell]
+
+  -- The opening cross prints every fill at the ONE official open (2,400).
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 2400.0
+  length batch.fills === 2
+  assertMsg "all opening fills print at the uniform official open"
+    (all (\f -> f.price == 2400.0) batch.fills)
+
+  -- Post-open: Alice holds 3 cETH, Bob holds the 7,200 USDC proceeds (3 @ 2,400).
+  aliceCeth <- ownedAmount alice ceth
+  bobUsd    <- ownedAmount bob   usdc
+  aliceCeth === 3.0
+  bobUsd    === 7200.0
+
+-- ---------------------------------------------------------------------------
 -- TEST 3b — MARKET-ON-CLOSE with an IMBALANCE: the heavy side is rationed
 -- PRO-RATA at the ONE uniform closing price; the light side fills in full; the
 -- unmatched residual does NOT settle.
@@ -329,6 +394,7 @@ testMarketOnCloseImbalance = do
   auctionCid <- submit venue do
     createCmd ClosingAuction with
       operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"
       referencePrice = 255.0
       participants = [alice, bank, bob]; isOpen = True
 
@@ -389,6 +455,7 @@ testDarkPoolPrivacy = do
   auctionCid <- submit venue do
     createCmd ClosingAuction with
       operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"
       referencePrice = 255.0
       participants = [alice, bob]; isOpen = True
   aliceBuy <- submit alice do

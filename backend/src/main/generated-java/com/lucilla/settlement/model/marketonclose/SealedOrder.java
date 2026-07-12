@@ -44,11 +44,11 @@ import java.util.Optional;
 import java.util.Set;
 
 public final class SealedOrder extends Template {
-  public static final Identifier TEMPLATE_ID = new Identifier("a515edc777c604a66696e5991316c6e0500be01c634f1dcd1c118c3a0ad8c9fe", "MarketOnClose", "SealedOrder");
+  public static final Identifier TEMPLATE_ID = new Identifier("698224dbdf62d308e4973c1fca97d735a0f9802f145920fca7e2e45e4cafc507", "MarketOnClose", "SealedOrder");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("a515edc777c604a66696e5991316c6e0500be01c634f1dcd1c118c3a0ad8c9fe", "MarketOnClose", "SealedOrder");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("698224dbdf62d308e4973c1fca97d735a0f9802f145920fca7e2e45e4cafc507", "MarketOnClose", "SealedOrder");
 
-  public static final String PACKAGE_ID = "a515edc777c604a66696e5991316c6e0500be01c634f1dcd1c118c3a0ad8c9fe";
+  public static final String PACKAGE_ID = "698224dbdf62d308e4973c1fca97d735a0f9802f145920fca7e2e45e4cafc507";
 
   public static final Choice<SealedOrder, com.lucilla.settlement.model.da.internal.template.Archive, Unit> CHOICE_Archive = 
       Choice.create("Archive", value$ -> value$.toValue(), value$ ->
@@ -84,6 +84,8 @@ public final class SealedOrder extends Template {
 
   public final String cashInstrument;
 
+  public final String session;
+
   public final Side side;
 
   public final BigDecimal quantity;
@@ -93,13 +95,14 @@ public final class SealedOrder extends Template {
   public final Holding.ContractId holdingCid;
 
   public SealedOrder(String operator, String auditor, String trader, String instrumentId,
-      String cashInstrument, Side side, BigDecimal quantity, BigDecimal limitPrice,
+      String cashInstrument, String session, Side side, BigDecimal quantity, BigDecimal limitPrice,
       Holding.ContractId holdingCid) {
     this.operator = operator;
     this.auditor = auditor;
     this.trader = trader;
     this.instrumentId = instrumentId;
     this.cashInstrument = cashInstrument;
+    this.session = session;
     this.side = side;
     this.quantity = quantity;
     this.limitPrice = limitPrice;
@@ -162,10 +165,10 @@ public final class SealedOrder extends Template {
   }
 
   public static Update<Created<ContractId>> create(String operator, String auditor, String trader,
-      String instrumentId, String cashInstrument, Side side, BigDecimal quantity,
+      String instrumentId, String cashInstrument, String session, Side side, BigDecimal quantity,
       BigDecimal limitPrice, Holding.ContractId holdingCid) {
-    return new SealedOrder(operator, auditor, trader, instrumentId, cashInstrument, side, quantity,
-        limitPrice, holdingCid).create();
+    return new SealedOrder(operator, auditor, trader, instrumentId, cashInstrument, session, side,
+        quantity, limitPrice, holdingCid).create();
   }
 
   @Override
@@ -191,12 +194,13 @@ public final class SealedOrder extends Template {
   }
 
   public DamlRecord toValue() {
-    ArrayList<DamlRecord.Field> fields = new ArrayList<DamlRecord.Field>(9);
+    ArrayList<DamlRecord.Field> fields = new ArrayList<DamlRecord.Field>(10);
     fields.add(new DamlRecord.Field("operator", new Party(this.operator)));
     fields.add(new DamlRecord.Field("auditor", new Party(this.auditor)));
     fields.add(new DamlRecord.Field("trader", new Party(this.trader)));
     fields.add(new DamlRecord.Field("instrumentId", new Text(this.instrumentId)));
     fields.add(new DamlRecord.Field("cashInstrument", new Text(this.cashInstrument)));
+    fields.add(new DamlRecord.Field("session", new Text(this.session)));
     fields.add(new DamlRecord.Field("side", this.side.toValue()));
     fields.add(new DamlRecord.Field("quantity", new Numeric(this.quantity)));
     fields.add(new DamlRecord.Field("limitPrice", new Numeric(this.limitPrice)));
@@ -207,38 +211,40 @@ public final class SealedOrder extends Template {
   private static ValueDecoder<SealedOrder> templateValueDecoder() throws IllegalArgumentException {
     return value$ -> {
       Value recordValue$ = value$;
-      List<DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(9,0, recordValue$);
+      List<DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(10,0, recordValue$);
       String operator = PrimitiveValueDecoders.fromParty.decode(fields$.get(0).getValue());
       String auditor = PrimitiveValueDecoders.fromParty.decode(fields$.get(1).getValue());
       String trader = PrimitiveValueDecoders.fromParty.decode(fields$.get(2).getValue());
       String instrumentId = PrimitiveValueDecoders.fromText.decode(fields$.get(3).getValue());
       String cashInstrument = PrimitiveValueDecoders.fromText.decode(fields$.get(4).getValue());
-      Side side = Side.valueDecoder().decode(fields$.get(5).getValue());
-      BigDecimal quantity = PrimitiveValueDecoders.fromNumeric.decode(fields$.get(6).getValue());
-      BigDecimal limitPrice = PrimitiveValueDecoders.fromNumeric.decode(fields$.get(7).getValue());
+      String session = PrimitiveValueDecoders.fromText.decode(fields$.get(5).getValue());
+      Side side = Side.valueDecoder().decode(fields$.get(6).getValue());
+      BigDecimal quantity = PrimitiveValueDecoders.fromNumeric.decode(fields$.get(7).getValue());
+      BigDecimal limitPrice = PrimitiveValueDecoders.fromNumeric.decode(fields$.get(8).getValue());
       Holding.ContractId holdingCid =
-          new Holding.ContractId(fields$.get(8).getValue().asContractId().orElseThrow(() -> new IllegalArgumentException("Expected holdingCid to be of type com.daml.ledger.javaapi.data.ContractId")).getValue());
-      return new SealedOrder(operator, auditor, trader, instrumentId, cashInstrument, side,
+          new Holding.ContractId(fields$.get(9).getValue().asContractId().orElseThrow(() -> new IllegalArgumentException("Expected holdingCid to be of type com.daml.ledger.javaapi.data.ContractId")).getValue());
+      return new SealedOrder(operator, auditor, trader, instrumentId, cashInstrument, session, side,
           quantity, limitPrice, holdingCid);
     } ;
   }
 
   public static JsonLfDecoder<SealedOrder> jsonDecoder() {
-    return JsonLfDecoders.record(Arrays.asList("operator", "auditor", "trader", "instrumentId", "cashInstrument", "side", "quantity", "limitPrice", "holdingCid"), name -> {
+    return JsonLfDecoders.record(Arrays.asList("operator", "auditor", "trader", "instrumentId", "cashInstrument", "session", "side", "quantity", "limitPrice", "holdingCid"), name -> {
           switch (name) {
             case "operator": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
             case "auditor": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(1, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
             case "trader": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(2, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
             case "instrumentId": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(3, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text);
             case "cashInstrument": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(4, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text);
-            case "side": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(5, new com.lucilla.settlement.model.marketonclose.Side.JsonDecoder$().get());
-            case "quantity": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(6, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10));
-            case "limitPrice": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(7, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10));
-            case "holdingCid": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(8, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.contractId(com.lucilla.settlement.model.holding.Holding.ContractId::new));
+            case "session": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(5, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text);
+            case "side": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(6, new com.lucilla.settlement.model.marketonclose.Side.JsonDecoder$().get());
+            case "quantity": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(7, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10));
+            case "limitPrice": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(8, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10));
+            case "holdingCid": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(9, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.contractId(com.lucilla.settlement.model.holding.Holding.ContractId::new));
             default: return null;
           }
         }
-        , (Object[] args) -> new SealedOrder(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6]), JsonLfDecoders.cast(args[7]), JsonLfDecoders.cast(args[8])));
+        , (Object[] args) -> new SealedOrder(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6]), JsonLfDecoders.cast(args[7]), JsonLfDecoders.cast(args[8]), JsonLfDecoders.cast(args[9])));
   }
 
   public static SealedOrder fromJson(String json) throws JsonLfDecoder.Error {
@@ -252,6 +258,7 @@ public final class SealedOrder extends Template {
         JsonLfEncoders.Field.of("trader", apply(JsonLfEncoders::party, trader)),
         JsonLfEncoders.Field.of("instrumentId", apply(JsonLfEncoders::text, instrumentId)),
         JsonLfEncoders.Field.of("cashInstrument", apply(JsonLfEncoders::text, cashInstrument)),
+        JsonLfEncoders.Field.of("session", apply(JsonLfEncoders::text, session)),
         JsonLfEncoders.Field.of("side", apply(Side::jsonEncoder, side)),
         JsonLfEncoders.Field.of("quantity", apply(JsonLfEncoders::numeric, quantity)),
         JsonLfEncoders.Field.of("limitPrice", apply(JsonLfEncoders::numeric, limitPrice)),
@@ -278,7 +285,8 @@ public final class SealedOrder extends Template {
         Objects.equals(this.auditor, other.auditor) && Objects.equals(this.trader, other.trader) &&
         Objects.equals(this.instrumentId, other.instrumentId) &&
         Objects.equals(this.cashInstrument, other.cashInstrument) &&
-        Objects.equals(this.side, other.side) && Objects.equals(this.quantity, other.quantity) &&
+        Objects.equals(this.session, other.session) && Objects.equals(this.side, other.side) &&
+        Objects.equals(this.quantity, other.quantity) &&
         Objects.equals(this.limitPrice, other.limitPrice) &&
         Objects.equals(this.holdingCid, other.holdingCid);
   }
@@ -286,14 +294,15 @@ public final class SealedOrder extends Template {
   @Override
   public int hashCode() {
     return Objects.hash(this.operator, this.auditor, this.trader, this.instrumentId,
-        this.cashInstrument, this.side, this.quantity, this.limitPrice, this.holdingCid);
+        this.cashInstrument, this.session, this.side, this.quantity, this.limitPrice,
+        this.holdingCid);
   }
 
   @Override
   public String toString() {
-    return String.format("com.lucilla.settlement.model.marketonclose.SealedOrder(%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        this.operator, this.auditor, this.trader, this.instrumentId, this.cashInstrument, this.side,
-        this.quantity, this.limitPrice, this.holdingCid);
+    return String.format("com.lucilla.settlement.model.marketonclose.SealedOrder(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        this.operator, this.auditor, this.trader, this.instrumentId, this.cashInstrument,
+        this.session, this.side, this.quantity, this.limitPrice, this.holdingCid);
   }
 
   public static final class ContractId extends com.daml.ledger.javaapi.data.codegen.ContractId<SealedOrder> implements Exercises<ExerciseCommand> {

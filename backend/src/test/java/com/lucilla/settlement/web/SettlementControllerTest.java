@@ -59,6 +59,7 @@ class SettlementControllerTest {
 
     @Test
     void getHoldings_returnsVisibleHoldings() throws Exception {
+        when(ledger.resolveParty("Alice")).thenReturn("Alice");
         when(ledger.holdingsVisibleTo("Alice")).thenReturn(List.of(
                 new LedgerService.HoldingView(
                         "h#1", "Issuer", "USD", "Alice", new BigDecimal("50.0"), List.of())));

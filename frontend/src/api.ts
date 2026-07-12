@@ -47,12 +47,15 @@ export interface TradeResponse {
   unitPrice: number;
 }
 
+export type Session = 'Open' | 'Close';
+
 export interface MocOrderRequest {
   trader: string;
   side: 'Buy' | 'Sell';
   quantity: number;
   instrumentId: string;
   cashInstrument?: string; // defaults to USDC server-side
+  session?: Session;       // Open (MOO) | Close (MOC); defaults to Close server-side
 }
 
 export interface MocOrderResponse {
@@ -74,6 +77,7 @@ export interface MocState {
   auctionCid: string | null;
   instrumentId: string;
   cashInstrument: string;
+  session: string;              // "Open" | "Close"
   referencePrice: number | null;
   isOpen: boolean;
   orders: MocOrderView[];
@@ -88,6 +92,7 @@ export interface MocFill {
 
 export interface MocCloseResponse {
   settlementBatchCid: string;
+  session: string;              // "Open" | "Close"
   closingPrice: number;
   fills: MocFill[];
 }
@@ -126,10 +131,11 @@ export const api = {
   // Market-on-Close: lodge a sealed order (no price), inspect the book, run the close.
   mocOrder: (body: MocOrderRequest) =>
     req<MocOrderResponse>('/moc/order', { method: 'POST', body: JSON.stringify(body) }),
-  mocState: (instrumentId: string, cashInstrument = 'USDC') =>
+  mocState: (instrumentId: string, session: Session = 'Close', cashInstrument = 'USDC') =>
     req<MocState>(
       `/moc/state?instrumentId=${encodeURIComponent(instrumentId)}` +
-        `&cashInstrument=${encodeURIComponent(cashInstrument)}`,
+        `&cashInstrument=${encodeURIComponent(cashInstrument)}` +
+        `&session=${encodeURIComponent(session)}`,
     ),
   mocClose: (auctionCid: string) =>
     req<MocCloseResponse>(`/moc/${encodeURIComponent(auctionCid)}/close`, {

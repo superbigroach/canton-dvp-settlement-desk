@@ -90,11 +90,24 @@ public final class LedgerCommands {
 
     public static Update<?> createAuction(
             String operator, String auditor, String instrumentId, String cashInstrument,
-            BigDecimal referencePrice, List<String> participants) {
+            String session, BigDecimal referencePrice, List<String> participants) {
         return new ClosingAuction(
                 operator, auditor, instrumentId, cashInstrument,
-                referencePrice, participants, /* isOpen = */ Boolean.TRUE)
+                session, referencePrice, participants, /* isOpen = */ Boolean.TRUE)
                 .create();
+    }
+
+    /** Normalise a caller session hint to the ledger's "Open" | "Close" label. */
+    public static String session(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "Close";
+        }
+        return switch (raw.trim().toLowerCase()) {
+            case "open", "opening", "moo" -> "Open";
+            case "close", "closing", "moc" -> "Close";
+            default -> throw new IllegalArgumentException(
+                    "session must be Open or Close, got: " + raw);
+        };
     }
 
     public static Update<?> submitOrder(

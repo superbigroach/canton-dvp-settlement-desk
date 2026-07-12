@@ -80,6 +80,7 @@ public final class Dtos {
             @NotBlank String auditor,
             @NotBlank String instrumentId,
             @NotBlank String cashInstrument,
+            String session,                  // Open | Close (defaults to Close when blank)
             @NotNull @Positive BigDecimal referencePrice,
             @NotNull List<@NotBlank String> participants) {
     }
@@ -140,7 +141,8 @@ public final class Dtos {
             @NotBlank String side,           // Buy | Sell
             @NotNull @Positive BigDecimal quantity,
             @NotBlank String instrumentId,
-            String cashInstrument) {          // defaults to "USDC" when blank
+            String cashInstrument,            // defaults to "USDC" when blank
+            String session) {                 // Open | Close (defaults to Close when blank)
     }
 
     public record InstrumentResponse(
@@ -160,7 +162,7 @@ public final class Dtos {
     }
 
     public record MocStateResponse(
-            String auctionCid, String instrumentId, String cashInstrument,
+            String auctionCid, String instrumentId, String cashInstrument, String session,
             BigDecimal referencePrice, boolean isOpen, List<MocOrderView> orders) {
     }
 
@@ -169,7 +171,8 @@ public final class Dtos {
     }
 
     public record MocCloseResponse(
-            String settlementBatchCid, BigDecimal closingPrice, List<MocFillView> fills) {
+            String settlementBatchCid, String session, BigDecimal closingPrice,
+            List<MocFillView> fills) {
     }
 
     // ---- Generic responses ------------------------------------------------

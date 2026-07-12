@@ -248,7 +248,7 @@ public class LedgerService {
                         for (ClosingAuction.Contract c : active.activeContracts) {
                             ClosingAuction a = c.data;
                             out.add(new AuctionView(c.id.contractId, a.operator, a.instrumentId,
-                                    a.cashInstrument, a.referencePrice, a.participants, a.isOpen));
+                                    a.cashInstrument, a.session, a.referencePrice, a.participants, a.isOpen));
                         }
                     });
             return out;
@@ -268,7 +268,7 @@ public class LedgerService {
                         for (SealedOrder.Contract c : active.activeContracts) {
                             SealedOrder o = c.data;
                             out.add(new OrderView(c.id.contractId, o.operator, labelOf(o.trader),
-                                    o.instrumentId, o.cashInstrument,
+                                    o.instrumentId, o.cashInstrument, o.session,
                                     o.side.toString().equalsIgnoreCase("BUY") ? "Buy" : "Sell",
                                     o.quantity, o.limitPrice));
                         }
@@ -492,13 +492,14 @@ public class LedgerService {
     /** Flat, JSON-friendly view of a ClosingAuction. */
     public record AuctionView(
             String contractId, String operator, String instrumentId, String cashInstrument,
-            java.math.BigDecimal referencePrice, List<String> participants, boolean isOpen) {
+            String session, java.math.BigDecimal referencePrice, List<String> participants,
+            boolean isOpen) {
     }
 
     /** Flat, JSON-friendly view of a resting SealedOrder (as seen by the operator). */
     public record OrderView(
             String contractId, String operator, String trader, String instrumentId,
-            String cashInstrument, String side, java.math.BigDecimal quantity,
+            String cashInstrument, String session, String side, java.math.BigDecimal quantity,
             java.math.BigDecimal limitPrice) {
     }
 
