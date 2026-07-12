@@ -123,6 +123,16 @@ public final class LedgerCommands {
         return new ClosingAuction.ContractId(auctionCid).exerciseCloseBidding();
     }
 
+    /** Trader withdraws their OWN resting order; unlocks the reserved holding. */
+    public static Update<?> cancelOrder(String orderCid) {
+        return new SealedOrder.ContractId(orderCid).exerciseCancel();
+    }
+
+    /** Venue clears a resting order off the book (operator-controlled). */
+    public static Update<?> venueCancelOrder(String orderCid) {
+        return new SealedOrder.ContractId(orderCid).exerciseVenueCancel();
+    }
+
     /** Run the uniform-price cross over the sealed book → a SettlementBatch. */
     public static Update<?> runClose(
             String sealedAuctionCid, List<String> buyOrderCids, List<String> sellOrderCids) {

@@ -91,10 +91,11 @@ export default function App() {
     }
   }, []);
 
-  const loadMoc = useCallback(async (assetId: string, sess: Session) => {
+  const loadMoc = useCallback(async (assetId: string, sess: Session, actingAs: string) => {
     if (!assetId) return;
     try {
-      setMocState(await api.mocState(assetId, sess, CASH));
+      // Query the book AS the acting party — the ledger filters it (dark pool).
+      setMocState(await api.mocState(assetId, sess, actingAs, CASH));
     } catch {
       setMocState(null);
     }
@@ -123,8 +124,8 @@ export default function App() {
     void loadHoldings(acting);
   }, [acting, loadHoldings]);
   useEffect(() => {
-    void loadMoc(asset, session);
-  }, [asset, session, loadMoc]);
+    void loadMoc(asset, session, acting);
+  }, [asset, session, acting, loadMoc]);
 
   // When the asset changes, seed the DvP price with its published reference so the
   // "You pay X" line computes immediately (still editable — DvP is negotiated).
@@ -210,7 +211,7 @@ export default function App() {
       ...r,
     ]);
     flash('Trade executed — both legs settled atomically.');
-    await Promise.all([loadHoldings(acting), loadMoc(asset, session)]);
+    await Promise.all([loadHoldings(acting), loadMoc(asset, session, acting)]);
   }
 
   async function doMocOrder() {
@@ -223,7 +224,7 @@ export default function App() {
       `Sealed ${side.toUpperCase()} order sent to the ${session.toLowerCase()} cross ` +
         `(crosses at ${fmt2(res.closingPrice)} ${CASH}).`,
     );
-    await Promise.all([loadHoldings(acting), loadMoc(asset, session)]);
+    await Promise.all([loadHoldings(acting), loadMoc(asset, session, acting)]);
   }
 
   async function doRunClose() {
@@ -252,7 +253,22 @@ export default function App() {
       `${kind === 'Open' ? 'Opening' : 'Closing'} cross printed ${res.fills.length} fill(s) ` +
         `at ${fmt2(res.closingPrice)} ${CASH}.`,
     );
-    await Promise.all([loadHoldings(acting), loadMoc(asset, session)]);
+    await Promise.all([loadHoldings(acting), loadMoc(asset, session, acting)]);
+  }
+
+  async function doWithdraw(orderCid: string) {
+    const res = await runAction(() => api.withdrawOrder(orderCid, acting));
+    if (!res) return;
+    flash('Order withdrawn — your reserved balance is unlocked.');
+    await Promise.all([loadHoldings(acting), loadMoc(asset, session, acting)]);
+  }
+
+  async function doClearBook() {
+    if (!mocState?.auctionCid) return;
+    const res = await runAction(() => api.clearBook(asset, session, CASH));
+    if (!res) return;
+    flash(`Book cleared — ${res.cleared} resting order(s) cancelled.`);
+    await Promise.all([loadHoldings(acting), loadMoc(asset, session, acting)]);
   }
 
   const actingIsVenue = acting.toLowerCase() === 'venue';
@@ -502,9 +518,12 @@ export default function App() {
             <span className={`session-tag ${session.toLowerCase()}`}>{session}</span>
           </div>
           <p className="hint">
-            The venue&rsquo;s sealed call auction for <strong>{asset}</strong>. Orders rest privately,
-            then cross together at the uniform {sessionLabel(session).toLowerCase()}. Run as{' '}
-            <strong>Venue</strong>.
+            The venue&rsquo;s sealed call auction for <strong>{asset}</strong>. Orders rest privately —
+            {actingIsVenue ? (
+              <> as <strong>Venue</strong> you see the FULL book and run the cross.</>
+            ) : (
+              <> as <strong>{acting}</strong> you see ONLY your own resting orders (the ledger hides rivals&rsquo;).</>
+            )}
           </p>
           {mocState?.auctionCid ? (
             <>
@@ -513,15 +532,25 @@ export default function App() {
                 <span className="cross-meta-price">
                   @ <strong className="mono">{mocState.referencePrice != null ? fmt2(mocState.referencePrice) : '—'}</strong> {CASH}
                 </span>
-                <span className="tag">{mocState.orders.length} resting</span>
+                <span className="tag">
+                  {actingIsVenue
+                    ? `${mocState.orders.length} resting`
+                    : `${mocState.orders.length} yours`}
+                </span>
+                {!actingIsVenue && mocState.othersResting > 0 && (
+                  <span className="tag muted" title="Sealed — hidden from you by the ledger">
+                    sealed · {mocState.othersResting} other{mocState.othersResting === 1 ? '' : 's'} hidden
+                  </span>
+                )}
               </div>
-              {mocState.orders.length > 0 && (
+              {mocState.orders.length > 0 ? (
                 <table className="blotter orders">
                   <thead>
                     <tr>
                       <th>Trader</th>
                       <th>Side</th>
                       <th className="num">Qty</th>
+                      <th className="num">Action</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -532,28 +561,59 @@ export default function App() {
                           <span className={`side ${o.side.toLowerCase()}`}>{o.side}</span>
                         </td>
                         <td className="num mono">{fmt(o.quantity)}</td>
+                        <td className="num">
+                          {o.trader === acting ? (
+                            <button
+                              className="ghost small"
+                              disabled={busy}
+                              onClick={() => doWithdraw(o.contractId)}
+                            >
+                              Withdraw
+                            </button>
+                          ) : (
+                            <span className="muted">—</span>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+              ) : (
+                <p className="empty">
+                  {actingIsVenue
+                    ? 'No orders resting yet.'
+                    : 'You have no resting orders in this cross.'}
+                </p>
               )}
               {!actingIsVenue && (
-                <p className="warn subtle">Switch to <strong>Venue</strong> to run the cross.</p>
+                <p className="warn subtle">Switch to <strong>Venue</strong> to see the full book and run the cross.</p>
               )}
-              <button
-                className="primary venue"
-                disabled={busy || !actingIsVenue || mocState.orders.length === 0}
-                onClick={doRunClose}
-              >
-                {busy ? 'Crossing…' : `Run the ${session} Cross`}
-              </button>
+              {actingIsVenue && (
+                <div className="row">
+                  <button
+                    className="primary venue"
+                    disabled={busy || mocState.orders.length === 0}
+                    onClick={doRunClose}
+                  >
+                    {busy ? 'Crossing…' : `Run the ${session} Cross`}
+                  </button>
+                  <button
+                    className="ghost"
+                    disabled={busy || mocState.orders.length === 0}
+                    onClick={doClearBook}
+                    title="Cancel every resting order for this instrument/session"
+                  >
+                    Clear book
+                  </button>
+                </div>
+              )}
             </>
           ) : (
             <p className="empty">
               No open {session.toLowerCase()} auction for {asset}. Send an order to open one.
             </p>
           )}
-          <button className="ghost" disabled={busy} onClick={() => loadMoc(asset, session)}>
+          <button className="ghost" disabled={busy} onClick={() => loadMoc(asset, session, acting)}>
             Refresh
           </button>
         </section>

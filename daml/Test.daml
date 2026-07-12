@@ -442,6 +442,113 @@ testMarketOnCloseImbalance = do
   bobAapl === 10.0
 
 -- ---------------------------------------------------------------------------
+-- TEST 3c — RESERVED BACKING survives a same-trader SECOND order (the fix for the
+-- stale-holding CONTRACT_NOT_FOUND). One trader lodges TWO buys out of a SINGLE
+-- cash holding; each order reserves its own dedicated slice, so submitting the
+-- second does NOT invalidate the first, and the close crosses both without a
+-- missing-contract error. Bob sells enough to fill them.
+-- ---------------------------------------------------------------------------
+testReservedBackingSurvivesResubmit : Script ()
+testReservedBackingSurvivesResubmit = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  -- Alice has ONE 5,100 USDC holding backing BOTH of her buys (10 @ 255 each).
+  aliceCash <- mint issuer usdc alice 5100.0
+  bobAsset  <- mint issuer aapl bob   20.0
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bob]; isOpen = True
+
+  -- First buy reserves 2,550 out of Alice's single holding into a dedicated slice
+  -- (disclosed to the venue); the 2,550 change stays FREE and private to Alice.
+  aliceBuy1 <- submit alice do
+    exerciseCmd auctionCid SubmitOrder with
+      trader = alice; side = Buy; quantity = 10.0; limitPrice = 260.0; holdingCid = aliceCash
+  -- Alice still owns all 5,100 (2,550 reserved + 2,550 free) until the cross.
+  aliceTotal <- ownedAmount alice usdc
+  aliceTotal === 5100.0
+  -- Second buy: pick Alice's FREE cash (NOT the slice already committed to the
+  -- venue), exactly as the desk's provisioning does — so buy1's reserved slice is
+  -- never re-consumed. This is the crux: a same-trader re-submit is safe.
+  aliceFree <- head . map fst
+    . filter (\(_, h) -> h.owner == alice && h.instrumentId == usdc && null h.disclosedTo)
+    <$> query @Holding alice
+  aliceBuy2 <- submit alice do
+    exerciseCmd auctionCid SubmitOrder with
+      trader = alice; side = Buy; quantity = 10.0; limitPrice = 260.0; holdingCid = aliceFree
+  bobSell <- submit bob do
+    exerciseCmd auctionCid SubmitOrder with
+      trader = bob; side = Sell; quantity = 20.0; limitPrice = 250.0; holdingCid = bobAsset
+
+  -- The FIRST order's pinned holding is still valid at the close: both buys cross.
+  closedCid <- submit venue do exerciseCmd auctionCid CloseBidding
+  batchCid  <- submit venue do
+    exerciseCmd closedCid RunClose with
+      buyOrders  = [aliceBuy1, aliceBuy2]
+      sellOrders = [bobSell]
+  Some batch <- queryContractId auditor batchCid
+  length batch.fills === 3     -- 2 buys + 1 sell, no CONTRACT_NOT_FOUND
+  aliceAapl <- ownedAmount alice aapl
+  aliceAapl === 20.0           -- Alice bought all 20 across her two orders
+
+-- ---------------------------------------------------------------------------
+-- TEST 3d — WITHDRAW + VENUE CLEAR: a trader withdraws their own resting order
+-- (its reserved cash returns to being freely theirs), and the venue can clear a
+-- resting order off the book. Neither loses the trader any balance.
+-- ---------------------------------------------------------------------------
+testWithdrawAndVenueClear : Script ()
+testWithdrawAndVenueClear = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  aliceCash <- mint issuer usdc alice 2550.0
+  bobAsset  <- mint issuer aapl bob   10.0
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bob]; isOpen = True
+
+  aliceBuy <- submit alice do
+    exerciseCmd auctionCid SubmitOrder with
+      trader = alice; side = Buy; quantity = 10.0; limitPrice = 260.0; holdingCid = aliceCash
+  bobSell <- submit bob do
+    exerciseCmd auctionCid SubmitOrder with
+      trader = bob; side = Sell; quantity = 10.0; limitPrice = 250.0; holdingCid = bobAsset
+
+  -- Alice WITHDRAWS her order. It is gone from the book; her 2,550 USDC is
+  -- unlocked back to a free, private holding (venue no longer observes it).
+  unlocked <- submit alice do exerciseCmd aliceBuy Cancel
+  goneA <- queryContractId venue aliceBuy
+  assertMsg "withdrawn order must be archived" (isNone goneA)
+  aliceUsd <- ownedAmount alice usdc
+  aliceUsd === 2550.0
+  Some uh <- queryContractId alice unlocked
+  assertMsg "unlocked holding is private to Alice again" (null uh.disclosedTo)
+  assertMsg "venue can no longer see the unlocked holding" . isNone
+    =<< queryContractId venue unlocked
+
+  -- The VENUE CLEARS Bob's resting sell off the book. Bob keeps his 10 AAPL.
+  submit venue do exerciseCmd bobSell VenueCancel
+  goneB <- queryContractId venue bobSell
+  assertMsg "venue-cleared order must be archived" (isNone goneB)
+  bobAapl <- ownedAmount bob aapl
+  bobAapl === 10.0
+
+  -- A trader cannot clear the book (only the operator can VenueCancel), and a
+  -- non-owner cannot withdraw someone else's order.
+  aliceBuy2 <- submit alice do
+    exerciseCmd auctionCid SubmitOrder with
+      trader = alice; side = Buy; quantity = 10.0; limitPrice = 260.0; holdingCid = unlocked
+  submitMustFail bob   do exerciseCmd aliceBuy2 Cancel        -- not the owner
+  submitMustFail alice do exerciseCmd aliceBuy2 VenueCancel   -- not the operator
+
+-- ---------------------------------------------------------------------------
 -- TEST 4 — DARK-POOL PRIVACY: an outsider (Eve) sees no order, no holding, no
 -- batch — and cannot settle anything.
 -- ---------------------------------------------------------------------------

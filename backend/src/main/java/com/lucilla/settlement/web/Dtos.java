@@ -163,11 +163,30 @@ public final class Dtos {
 
     public record MocStateResponse(
             String auctionCid, String instrumentId, String cashInstrument, String session,
-            BigDecimal referencePrice, boolean isOpen, List<MocOrderView> orders) {
+            BigDecimal referencePrice, boolean isOpen, List<MocOrderView> orders,
+            // The dark-pool hint: how many OTHER traders' orders rest HIDDEN from the
+            // acting party (0 for the venue, which sees the full book). Never reveals
+            // their side/size/price — only that sealed interest exists.
+            int othersResting) {
+    }
+
+    /** Trader withdraws their own resting order (actAs the trader). */
+    public record WithdrawOrderRequest(
+            @NotBlank String trader) {
+    }
+
+    /** Venue clears the resting book for an instrument/session (actAs the venue). */
+    public record ClearBookRequest(
+            @NotBlank String instrumentId,
+            String cashInstrument,            // defaults to "USDC" when blank
+            String session) {                 // Open | Close (defaults to Close when blank)
     }
 
     public record MocFillView(
             String trader, String side, BigDecimal quantity, BigDecimal price) {
+    }
+
+    public record ClearBookResponse(int cleared) {
     }
 
     public record MocCloseResponse(

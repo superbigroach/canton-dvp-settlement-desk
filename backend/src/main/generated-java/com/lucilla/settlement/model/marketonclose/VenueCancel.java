@@ -1,4 +1,4 @@
-package com.lucilla.settlement.model.holding;
+package com.lucilla.settlement.model.marketonclose;
 
 import static com.daml.ledger.javaapi.data.codegen.json.JsonLfEncoders.apply;
 
@@ -21,57 +21,49 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
-public class Merge extends DamlRecord<Merge> {
+public class VenueCancel extends DamlRecord<VenueCancel> {
   public static final String _packageId = "85b662c2e7d0a4d42bea5a2232989bd04641057da99c8bda47d7f7b912ef699c";
 
-  public final Holding.ContractId otherCid;
-
-  public Merge(Holding.ContractId otherCid) {
-    this.otherCid = otherCid;
+  public VenueCancel() {
   }
 
   /**
    * @deprecated since Daml 2.5.0; use {@code valueDecoder} instead
    */
   @Deprecated
-  public static Merge fromValue(Value value$) throws IllegalArgumentException {
+  public static VenueCancel fromValue(Value value$) throws IllegalArgumentException {
     return valueDecoder().decode(value$);
   }
 
-  public static ValueDecoder<Merge> valueDecoder() throws IllegalArgumentException {
+  public static ValueDecoder<VenueCancel> valueDecoder() throws IllegalArgumentException {
     return value$ -> {
       Value recordValue$ = value$;
-      List<com.daml.ledger.javaapi.data.DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(1,0,
+      List<com.daml.ledger.javaapi.data.DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(0,0,
           recordValue$);
-      Holding.ContractId otherCid =
-          new Holding.ContractId(fields$.get(0).getValue().asContractId().orElseThrow(() -> new IllegalArgumentException("Expected otherCid to be of type com.daml.ledger.javaapi.data.ContractId")).getValue());
-      return new Merge(otherCid);
+      return new VenueCancel();
     } ;
   }
 
   public com.daml.ledger.javaapi.data.DamlRecord toValue() {
-    ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field> fields = new ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field>(1);
-    fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("otherCid", this.otherCid.toValue()));
+    ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field> fields = new ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field>(0);
     return new com.daml.ledger.javaapi.data.DamlRecord(fields);
   }
 
-  public static JsonLfDecoder<Merge> jsonDecoder() {
-    return JsonLfDecoders.record(Arrays.asList("otherCid"), name -> {
+  public static JsonLfDecoder<VenueCancel> jsonDecoder() {
+    return JsonLfDecoders.record(Arrays.asList(), name -> {
           switch (name) {
-            case "otherCid": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.contractId(com.lucilla.settlement.model.holding.Holding.ContractId::new));
             default: return null;
           }
         }
-        , (Object[] args) -> new Merge(JsonLfDecoders.cast(args[0])));
+        , (Object[] args) -> new VenueCancel());
   }
 
-  public static Merge fromJson(String json) throws JsonLfDecoder.Error {
+  public static VenueCancel fromJson(String json) throws JsonLfDecoder.Error {
     return jsonDecoder().decode(new JsonLfReader(json));
   }
 
   public JsonLfEncoder jsonEncoder() {
-    return JsonLfEncoders.record(
-        JsonLfEncoders.Field.of("otherCid", apply(JsonLfEncoders::contractId, otherCid)));
+    return JsonLfEncoders.record();
   }
 
   @Override
@@ -82,28 +74,27 @@ public class Merge extends DamlRecord<Merge> {
     if (object == null) {
       return false;
     }
-    if (!(object instanceof Merge)) {
+    if (!(object instanceof VenueCancel)) {
       return false;
     }
-    Merge other = (Merge) object;
-    return Objects.equals(this.otherCid, other.otherCid);
+    return true;
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(this.otherCid);
+    return Objects.hash();
   }
 
   @Override
   public String toString() {
-    return String.format("com.lucilla.settlement.model.holding.Merge(%s)", this.otherCid);
+    return "com.lucilla.settlement.model.marketonclose.VenueCancel";
   }
 
   /**
    * Proxies the jsonDecoder(...) static method, to provide an alternative calling synatx, which avoids some cases in generated code where javac gets confused
    */
   public static class JsonDecoder$ {
-    public JsonLfDecoder<Merge> get() {
+    public JsonLfDecoder<VenueCancel> get() {
       return jsonDecoder();
     }
   }

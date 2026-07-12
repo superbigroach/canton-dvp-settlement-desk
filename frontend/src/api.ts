@@ -80,7 +80,12 @@ export interface MocState {
   session: string;              // "Open" | "Close"
   referencePrice: number | null;
   isOpen: boolean;
-  orders: MocOrderView[];
+  orders: MocOrderView[];       // filtered by the ledger to the acting party's view
+  othersResting: number;        // OTHER sealed orders hidden from a trader (0 for venue)
+}
+
+export interface ClearBookResponse {
+  cleared: number;
 }
 
 export interface MocFill {
@@ -131,14 +136,36 @@ export const api = {
   // Market-on-Close: lodge a sealed order (no price), inspect the book, run the close.
   mocOrder: (body: MocOrderRequest) =>
     req<MocOrderResponse>('/moc/order', { method: 'POST', body: JSON.stringify(body) }),
-  mocState: (instrumentId: string, session: Session = 'Close', cashInstrument = 'USDC') =>
+  // The book is filtered server-side BY THE ACTING PARTY (the dark-pool property):
+  // a trader sees only their own resting orders; the venue sees the full book.
+  mocState: (
+    instrumentId: string,
+    session: Session = 'Close',
+    actingAs = '',
+    cashInstrument = 'USDC',
+  ) =>
     req<MocState>(
       `/moc/state?instrumentId=${encodeURIComponent(instrumentId)}` +
         `&cashInstrument=${encodeURIComponent(cashInstrument)}` +
-        `&session=${encodeURIComponent(session)}`,
+        `&session=${encodeURIComponent(session)}` +
+        (actingAs ? `&actingAs=${encodeURIComponent(actingAs)}` : ''),
     ),
   mocClose: (auctionCid: string) =>
     req<MocCloseResponse>(`/moc/${encodeURIComponent(auctionCid)}/close`, {
       method: 'POST',
+    }),
+
+  // Withdraw a resting order (trader pulls their own; reserved backing unlocked).
+  withdrawOrder: (orderCid: string, trader: string) =>
+    req<{ contractId: string }>(
+      `/moc/order/${encodeURIComponent(orderCid)}/withdraw`,
+      { method: 'POST', body: JSON.stringify({ trader }) },
+    ),
+
+  // Venue clears the whole resting book for an instrument/session.
+  clearBook: (instrumentId: string, session: Session = 'Close', cashInstrument = 'USDC') =>
+    req<ClearBookResponse>('/moc/clear', {
+      method: 'POST',
+      body: JSON.stringify({ instrumentId, cashInstrument, session }),
     }),
 };

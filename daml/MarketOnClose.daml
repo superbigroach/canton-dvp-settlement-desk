@@ -125,15 +125,25 @@ template ClosingAuction
         -- Sanity-check the pre-committed holding actually belongs to the trader.
         h <- fetch holdingCid
         assertMsg "committed holding must belong to the trader" (h.owner == trader)
-        -- ALLOCATE TO THE VENUE. Disclose the committed holding to the operator so
-        -- the close can legitimately read and move it (no deprecated divulgence).
-        -- The trader owns and sees the holding here, so it can disclose it; the
-        -- resulting cid is what the sealed order pre-commits.
-        allocated <- exercise holdingCid Disclose with newObserver = operator
+        -- RESERVE THE EXACT BACKING (the fix for stale-holding CONTRACT_NOT_FOUND).
+        -- Carve off EXACTLY the amount this order can consume into a DEDICATED
+        -- holding that only this SealedOrder references, and disclose that slice to
+        -- the operator (honest visibility, never divulgence). Change returns to the
+        -- trader immediately. Because each order owns its own reserved slice, no
+        -- later order, split/merge, or re-submission can consume or re-create the
+        -- holding this order pinned — so the cross always finds valid backing.
+        --   * a SELL reserves `quantity` of the ASSET it will deliver;
+        --   * a BUY reserves `quantity * referencePrice` of CASH — the most it can
+        --     ever owe, since every fill prints at the uniform `referencePrice`
+        --     (an eligible buy has limitPrice >= referencePrice, so this covers it).
+        let reserveAmount = case side of
+              Sell -> quantity
+              Buy  -> quantity * referencePrice
+        reserved <- reserveExact holdingCid reserveAmount operator
         create SealedOrder with
           operator; auditor; trader
           instrumentId; cashInstrument; session
-          side; quantity; limitPrice; holdingCid = allocated
+          side; quantity; limitPrice; holdingCid = reserved
 
     -- CLOSE BIDDING — the operator seals the window (no more orders). Recreates
     -- the auction with isOpen = False so RunClose runs against a sealed book.
@@ -280,11 +290,49 @@ template SealedOrder
             -- deliver exactly the CASH owed to the venue; change back to the buyer.
             deliverExact holdingCid (fillQty * closingPrice) operator
 
-    -- CANCEL — the trader pulls a resting order before the close. Consuming; the
-    -- pre-committed holding is untouched (it was never moved).
-    choice Cancel : ()
+    -- CANCEL / WITHDRAW — the trader pulls their OWN resting order before the
+    -- close. Consuming: the order is archived and no longer crosses. The reserved
+    -- backing is UNLOCKED — transferring the reserved slice back to the trader
+    -- re-creates it PRIVATE (disclosedTo reset to []), so the balance is freely
+    -- theirs again to spend or re-commit and the venue no longer observes it.
+    -- Only the order owner may withdraw it. Returns the unlocked holding.
+    choice Cancel : ContractId Holding
       controller trader
+      do exercise holdingCid Transfer with newOwner = trader
+
+    -- VENUE CANCEL / CLEAR BOOK — the operator clears a resting order from the
+    -- book (e.g. a "clear the book" for an instrument, or dropping a stale order
+    -- so the cross is not aborted by it). The operator signs this order, so it has
+    -- the authority to archive it. The trader's reserved holding is left intact and
+    -- remains the trader's — clearing the book cancels the ORDER, not the balance.
+    choice VenueCancel : ()
+      controller operator
       do pure ()
+
+-- ---------------------------------------------------------------------------
+-- reserveExact — carve off EXACTLY `amt` units of `holdingCid` (a holding the
+-- trader owns) into a dedicated holding, disclosed to `operator`, and return it.
+-- This is what makes a sealed order's backing STABLE: the order references only
+-- its own reserved slice, so nothing else (a later order, a split/merge, a
+-- re-submission) can consume or re-create it and make the pinned cid go stale.
+-- The unreserved change stays with the trader (private). Must be called where the
+-- holding OWNER's authority is in scope (Split/Disclose are owner-controlled) —
+-- SubmitOrder is a choice controlled by the trader, so it is.
+-- ---------------------------------------------------------------------------
+reserveExact : ContractId Holding -> Decimal -> Party -> Update (ContractId Holding)
+reserveExact holdingCid amt operator = do
+  h <- fetch holdingCid
+  assertMsg "committed holding is too small to back this order" (h.amount >= amt)
+  reserved <-
+    if h.amount == amt
+      then pure holdingCid                 -- exact: reserve the whole holding
+      else do
+        -- Split asserts 0 < amt < amount, so the reserved slice is exact and the
+        -- remainder returns to the trader in the same transaction.
+        (r, _change) <- exercise holdingCid Split with splitAmount = amt
+        pure r
+  -- Disclose the reserved slice to the operator so the close can read/move it.
+  exercise reserved Disclose with newObserver = operator
 
 -- ---------------------------------------------------------------------------
 -- mergeAll — merge a non-empty list of holdings (same issuer/owner/instrument)

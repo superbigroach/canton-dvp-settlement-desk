@@ -41,6 +41,9 @@ import java.util.Optional;
 @RequestMapping("/api")
 public class SettlementController {
 
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(SettlementController.class);
+
     private final LedgerService ledger;
 
     public SettlementController(LedgerService ledger) {
@@ -251,27 +254,46 @@ public class SettlementController {
     }
 
     /**
-     * The venue view of the close: the open auction for an instrument (if any) and
-     * every sealed order resting in it (side + size, which only the operator sees).
+     * The order-book view of the close — PARTY-AWARE (the dark-pool property).
+     * The book is queried from the ACS <b>as the acting party</b>, so Daml's own
+     * visibility does the filtering:
+     * <ul>
+     *   <li>acting as the <b>Venue</b> (operator, signs every order) → the FULL book;</li>
+     *   <li>acting as a <b>trader</b> → ONLY that trader's own resting orders
+     *       (a SealedOrder is signed by operator + trader and observed by nobody
+     *       else, so a rival's order is simply not visible).</li>
+     * </ul>
+     * A muted {@code othersResting} count is added for the trader's view (how many
+     * other sealed orders exist, without any of their details).
      */
     @GetMapping("/moc/state")
     public Dtos.MocStateResponse mocState(
             @RequestParam String instrumentId,
             @RequestParam(required = false, defaultValue = "USDC") String cashInstrument,
-            @RequestParam(required = false, defaultValue = "Close") String session) {
+            @RequestParam(required = false, defaultValue = "Close") String session,
+            @RequestParam(required = false) String actingAs) {
         String venue = ledger.resolveParty("Venue");
         String sess = LedgerCommands.session(session);
-        var open = ledger.auctionsVisibleTo(venue).stream()
+        // Default to the venue when no acting party is supplied (back-compat).
+        String acting = (actingAs == null || actingAs.isBlank())
+                ? venue : ledger.resolveParty(actingAs);
+        boolean isVenue = acting.equals(venue);
+
+        // The auction is observed by the operator + participants, so the acting
+        // party (venue or a registered trader) sees it directly on its own stream.
+        var open = ledger.auctionsVisibleTo(acting).stream()
                 .filter(a -> a.isOpen()
                         && a.instrumentId().equals(instrumentId)
                         && a.cashInstrument().equals(cashInstrument)
                         && a.session().equals(sess))
                 .findFirst();
         if (open.isEmpty()) {
-            return new Dtos.MocStateResponse(null, instrumentId, cashInstrument, sess, null, false, List.of());
+            return new Dtos.MocStateResponse(
+                    null, instrumentId, cashInstrument, sess, null, false, List.of(), 0);
         }
         var a = open.get();
-        List<Dtos.MocOrderView> orders = ledger.sealedOrdersVisibleTo(venue).stream()
+        // PRIVACY ENFORCED AT THE LEDGER: query the book AS THE ACTING PARTY.
+        List<Dtos.MocOrderView> orders = ledger.sealedOrdersVisibleTo(acting).stream()
                 .filter(o -> o.operator().equals(venue)
                         && o.instrumentId().equals(instrumentId)
                         && o.cashInstrument().equals(cashInstrument)
@@ -279,8 +301,64 @@ public class SettlementController {
                 .map(o -> new Dtos.MocOrderView(
                         o.contractId(), o.trader(), o.side(), o.quantity(), o.limitPrice()))
                 .toList();
+        // Dark-pool hint (traders only): count of OTHER resting orders, no details.
+        int othersResting = 0;
+        if (!isVenue) {
+            long total = ledger.sealedOrdersVisibleTo(venue).stream()
+                    .filter(o -> o.operator().equals(venue)
+                            && o.instrumentId().equals(instrumentId)
+                            && o.cashInstrument().equals(cashInstrument)
+                            && o.session().equals(sess))
+                    .count();
+            othersResting = Math.max(0, (int) total - orders.size());
+        }
         return new Dtos.MocStateResponse(a.contractId(), instrumentId, cashInstrument, a.session(),
-                a.referencePrice(), a.isOpen(), orders);
+                a.referencePrice(), a.isOpen(), orders, othersResting);
+    }
+
+    /**
+     * Withdraw a resting sealed order — a trader pulls their OWN order before the
+     * close (exercise Cancel, actAs the trader). The reserved backing is unlocked
+     * back to a free, private holding. Only the order's owner may withdraw it.
+     */
+    @PostMapping("/moc/order/{orderCid}/withdraw")
+    public ResponseEntity<Dtos.CidResponse> withdrawOrder(
+            @PathVariable String orderCid, @Valid @RequestBody Dtos.WithdrawOrderRequest req) {
+        String trader = ledger.resolveParty(req.trader());
+        TransactionTree tree = ledger.submit(trader, LedgerCommands.cancelOrder(orderCid));
+        List<String> unlocked = ledger.createdOf(tree, LedgerCommands.holdingTemplateId());
+        return created(new Dtos.CidResponse(unlocked.isEmpty() ? orderCid : unlocked.get(0)));
+    }
+
+    /**
+     * Clear the resting book for an instrument/session as the venue — the operator
+     * cancels every resting order (exercise VenueCancel, actAs the venue). Used to
+     * reset a book (e.g. after aborted retries) so the next cross starts clean.
+     * Returns the number of orders cleared.
+     */
+    @PostMapping("/moc/clear")
+    public Dtos.ClearBookResponse clearBook(@Valid @RequestBody Dtos.ClearBookRequest req) {
+        String venue = ledger.resolveParty("Venue");
+        String cashInstrument = blankTo(req.cashInstrument(), "USDC");
+        String sess = LedgerCommands.session(req.session());
+        var orders = ledger.sealedOrdersVisibleTo(venue).stream()
+                .filter(o -> o.operator().equals(venue)
+                        && o.instrumentId().equals(req.instrumentId())
+                        && o.cashInstrument().equals(cashInstrument)
+                        && o.session().equals(sess))
+                .toList();
+        int cleared = 0;
+        for (var o : orders) {
+            try {
+                ledger.submit(venue, LedgerCommands.venueCancelOrder(o.contractId()));
+                cleared++;
+            } catch (RuntimeException e) {
+                // A concurrently-consumed order is already gone — skip it cleanly
+                // rather than failing the whole clear.
+                log.warn("skip clearing order {}: {}", o.contractId(), e.getMessage());
+            }
+        }
+        return new Dtos.ClearBookResponse(cleared);
     }
 
     /**

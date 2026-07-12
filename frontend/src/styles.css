@@ -310,6 +310,13 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); o
 .cross-meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 6px 0 12px; font-size: 13px; color: var(--muted); }
 .cross-meta-price strong { color: var(--text); }
 .tag { font-size: 11px; padding: 3px 10px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border-2); color: var(--muted); }
+.tag.muted { color: var(--faint); border-style: dashed; font-style: italic; }
+
+/* Small inline action button (e.g. Withdraw on the trader's own order row). */
+button.ghost.small { margin-top: 0; padding: 3px 10px; font-size: 12px; }
+/* The venue's cross + clear-book controls sit side by side. */
+.card.cross .row { display: flex; gap: 10px; align-items: stretch; margin-top: 6px; }
+.card.cross .row button { margin-top: 0; }
 
 .side { font-weight: 600; font-size: 13px; }
 .side.buy  { color: #6fce9f; }

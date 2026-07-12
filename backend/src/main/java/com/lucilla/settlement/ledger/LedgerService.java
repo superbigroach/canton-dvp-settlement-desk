@@ -179,9 +179,18 @@ public class LedgerService {
      * returned as change when the leg settles). Used to pre-commit a MOC order.
      */
     public String provisionAtLeastHolding(String owner, String instrumentId, BigDecimal minAmount) {
-        List<HoldingView> mine = ownedHoldings(owner, instrumentId);
+        // Only FREE holdings back a new order: skip any slice already committed to
+        // an order (disclosed to the venue). A sealed order reserves its exact
+        // backing into a dedicated, venue-disclosed holding; re-using that slice for
+        // a second order would consume the first order's pinned holding and make its
+        // cid stale at the cross (the CONTRACT_NOT_FOUND bug). Picking only
+        // uncommitted holdings keeps every resting order's backing valid.
+        List<HoldingView> mine = ownedHoldings(owner, instrumentId).stream()
+                .filter(h -> h.disclosedTo() == null || h.disclosedTo().isEmpty())
+                .toList();
         if (mine.isEmpty()) {
-            throw new LedgerException(labelOf(owner) + " holds no " + instrumentId + " to commit");
+            throw new LedgerException(labelOf(owner) + " has no uncommitted " + instrumentId
+                    + " to commit (any balance is already reserved in a resting order)");
         }
         for (HoldingView h : mine) {                       // any single one already big enough
             if (h.amount().compareTo(minAmount) >= 0) {

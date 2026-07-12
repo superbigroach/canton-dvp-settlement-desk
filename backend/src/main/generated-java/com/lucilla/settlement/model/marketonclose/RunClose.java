@@ -23,7 +23,7 @@ import java.util.List;
 import java.util.Objects;
 
 public class RunClose extends DamlRecord<RunClose> {
-  public static final String _packageId = "698224dbdf62d308e4973c1fca97d735a0f9802f145920fca7e2e45e4cafc507";
+  public static final String _packageId = "85b662c2e7d0a4d42bea5a2232989bd04641057da99c8bda47d7f7b912ef699c";
 
   public final List<SealedOrder.ContractId> buyOrders;
 

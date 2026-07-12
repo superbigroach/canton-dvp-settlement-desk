@@ -44,19 +44,19 @@ import java.util.Optional;
 import java.util.Set;
 
 public final class SealedOrder extends Template {
-  public static final Identifier TEMPLATE_ID = new Identifier("698224dbdf62d308e4973c1fca97d735a0f9802f145920fca7e2e45e4cafc507", "MarketOnClose", "SealedOrder");
+  public static final Identifier TEMPLATE_ID = new Identifier("85b662c2e7d0a4d42bea5a2232989bd04641057da99c8bda47d7f7b912ef699c", "MarketOnClose", "SealedOrder");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("698224dbdf62d308e4973c1fca97d735a0f9802f145920fca7e2e45e4cafc507", "MarketOnClose", "SealedOrder");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("85b662c2e7d0a4d42bea5a2232989bd04641057da99c8bda47d7f7b912ef699c", "MarketOnClose", "SealedOrder");
 
-  public static final String PACKAGE_ID = "698224dbdf62d308e4973c1fca97d735a0f9802f145920fca7e2e45e4cafc507";
+  public static final String PACKAGE_ID = "85b662c2e7d0a4d42bea5a2232989bd04641057da99c8bda47d7f7b912ef699c";
 
   public static final Choice<SealedOrder, com.lucilla.settlement.model.da.internal.template.Archive, Unit> CHOICE_Archive = 
       Choice.create("Archive", value$ -> value$.toValue(), value$ ->
         com.lucilla.settlement.model.da.internal.template.Archive.valueDecoder().decode(value$),
         value$ -> PrimitiveValueDecoders.fromUnit.decode(value$));
 
-  public static final Choice<SealedOrder, Cancel, Unit> CHOICE_Cancel = 
-      Choice.create("Cancel", value$ -> value$.toValue(), value$ -> Cancel.valueDecoder()
+  public static final Choice<SealedOrder, VenueCancel, Unit> CHOICE_VenueCancel = 
+      Choice.create("VenueCancel", value$ -> value$.toValue(), value$ -> VenueCancel.valueDecoder()
         .decode(value$), value$ -> PrimitiveValueDecoders.fromUnit.decode(value$));
 
   public static final Choice<SealedOrder, PledgeToVenue, Holding.ContractId> CHOICE_PledgeToVenue = 
@@ -64,11 +64,16 @@ public final class SealedOrder extends Template {
         PledgeToVenue.valueDecoder().decode(value$), value$ ->
         new Holding.ContractId(value$.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected value$ to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()));
 
+  public static final Choice<SealedOrder, Cancel, Holding.ContractId> CHOICE_Cancel = 
+      Choice.create("Cancel", value$ -> value$.toValue(), value$ -> Cancel.valueDecoder()
+        .decode(value$), value$ ->
+        new Holding.ContractId(value$.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected value$ to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()));
+
   public static final ContractCompanion.WithoutKey<Contract, ContractId, SealedOrder> COMPANION = 
       new ContractCompanion.WithoutKey<>("com.lucilla.settlement.model.marketonclose.SealedOrder",
         TEMPLATE_ID, TEMPLATE_ID_WITH_PACKAGE_ID, ContractId::new,
         v -> SealedOrder.templateValueDecoder().decode(v), SealedOrder::fromJson, Contract::new,
-        List.of(CHOICE_Archive, CHOICE_Cancel, CHOICE_PledgeToVenue));
+        List.of(CHOICE_Archive, CHOICE_VenueCancel, CHOICE_PledgeToVenue, CHOICE_Cancel));
 
   public static final String PACKAGE_NAME = "canton-dvp-settlement-desk";
 
@@ -132,19 +137,19 @@ public final class SealedOrder extends Template {
   }
 
   /**
-   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseCancel} instead
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseVenueCancel} instead
    */
   @Deprecated
-  public Update<Exercised<Unit>> createAndExerciseCancel(Cancel arg) {
-    return createAnd().exerciseCancel(arg);
+  public Update<Exercised<Unit>> createAndExerciseVenueCancel(VenueCancel arg) {
+    return createAnd().exerciseVenueCancel(arg);
   }
 
   /**
-   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseCancel} instead
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseVenueCancel} instead
    */
   @Deprecated
-  public Update<Exercised<Unit>> createAndExerciseCancel() {
-    return createAndExerciseCancel(new Cancel());
+  public Update<Exercised<Unit>> createAndExerciseVenueCancel() {
+    return createAndExerciseVenueCancel(new VenueCancel());
   }
 
   /**
@@ -162,6 +167,22 @@ public final class SealedOrder extends Template {
   public Update<Exercised<Holding.ContractId>> createAndExercisePledgeToVenue(BigDecimal fillQty,
       BigDecimal closingPrice) {
     return createAndExercisePledgeToVenue(new PledgeToVenue(fillQty, closingPrice));
+  }
+
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseCancel} instead
+   */
+  @Deprecated
+  public Update<Exercised<Holding.ContractId>> createAndExerciseCancel(Cancel arg) {
+    return createAnd().exerciseCancel(arg);
+  }
+
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseCancel} instead
+   */
+  @Deprecated
+  public Update<Exercised<Holding.ContractId>> createAndExerciseCancel() {
+    return createAndExerciseCancel(new Cancel());
   }
 
   public static Update<Created<ContractId>> create(String operator, String auditor, String trader,
@@ -353,12 +374,12 @@ public final class SealedOrder extends Template {
       return exerciseArchive(new com.lucilla.settlement.model.da.internal.template.Archive());
     }
 
-    default Update<Exercised<Unit>> exerciseCancel(Cancel arg) {
-      return makeExerciseCmd(CHOICE_Cancel, arg);
+    default Update<Exercised<Unit>> exerciseVenueCancel(VenueCancel arg) {
+      return makeExerciseCmd(CHOICE_VenueCancel, arg);
     }
 
-    default Update<Exercised<Unit>> exerciseCancel() {
-      return exerciseCancel(new Cancel());
+    default Update<Exercised<Unit>> exerciseVenueCancel() {
+      return exerciseVenueCancel(new VenueCancel());
     }
 
     default Update<Exercised<Holding.ContractId>> exercisePledgeToVenue(PledgeToVenue arg) {
@@ -368,6 +389,14 @@ public final class SealedOrder extends Template {
     default Update<Exercised<Holding.ContractId>> exercisePledgeToVenue(BigDecimal fillQty,
         BigDecimal closingPrice) {
       return exercisePledgeToVenue(new PledgeToVenue(fillQty, closingPrice));
+    }
+
+    default Update<Exercised<Holding.ContractId>> exerciseCancel(Cancel arg) {
+      return makeExerciseCmd(CHOICE_Cancel, arg);
+    }
+
+    default Update<Exercised<Holding.ContractId>> exerciseCancel() {
+      return exerciseCancel(new Cancel());
     }
   }
 
