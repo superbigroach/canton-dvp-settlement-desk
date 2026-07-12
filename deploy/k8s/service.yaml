@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: canton-dvp-desk
+  labels:
+    app: canton-dvp-desk
+spec:
+  type: ClusterIP
+  selector:
+    app: canton-dvp-desk
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

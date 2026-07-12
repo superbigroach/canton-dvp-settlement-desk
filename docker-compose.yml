@@ -1,0 +1,36 @@
+# docker-compose.yml — run the Spring Boot desk in a container, wired to a Daml
+# sandbox you run on the HOST.
+# ---------------------------------------------------------------------------
+# WHY the ledger is not a compose service:
+#   The Daml sandbox ships with the Daml SDK (`daml sandbox`), not as a pinned,
+#   publicly-hosted OCI image we can depend on reproducibly, and a full Canton
+#   participant is a heavier, license-gated deployment (see deploy/GKE_RUNBOOK.md).
+#   So this compose file runs the app tier and points it at a sandbox on the host
+#   started per run-local.md. That is the honest, reproducible local topology.
+#
+# Two-terminal flow:
+#   Terminal 1 (host):  daml sandbox  (Ledger API on localhost:6865)
+#                       daml ledger upload-dar .daml/dist/canton-dvp-settlement-desk-1.0.0.dar --host localhost --port 6865
+#   Terminal 2 (host):  docker compose up --build
+#   Then:               curl localhost:8080/api/health
+#
+# host.docker.internal resolves to the host from inside the container (Docker
+# Desktop on Windows/macOS; on Linux the extra_hosts mapping below provides it).
+# ---------------------------------------------------------------------------
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: canton-dvp-desk:1.0.0
+    ports:
+      - "8080:8080"
+    environment:
+      SERVER_PORT: "8080"
+      LEDGER_HOST: "host.docker.internal"
+      LEDGER_PORT: "6865"
+      LEDGER_TLS: "false"
+      # LEDGER_JWT: ""   # empty for the local sandbox (no auth)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

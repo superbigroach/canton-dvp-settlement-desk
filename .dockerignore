@@ -1,0 +1,12 @@
+# Build-context ignore for `docker build -f backend/Dockerfile .` (context = repo
+# root). The image rebuilds the jar inside the build stage, so host build output
+# and the Daml/Canton artifacts must NOT bloat or pollute the context.
+backend/build/
+backend/.gradle/
+.daml/
+.git/
+**/*.log
+canton.log
+node_modules/
+.idea/
+.vscode/

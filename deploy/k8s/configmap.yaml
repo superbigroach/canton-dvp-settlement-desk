@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: canton-dvp-desk-ledger
+  labels:
+    app: canton-dvp-desk
+data:
+  # Point at your Canton participant (TLS) or a sandbox (plaintext).
+  LEDGER_HOST: "canton-participant"
+  LEDGER_PORT: "6865"
+  LEDGER_TLS: "true"
+  LEDGER_APPLICATION_ID: "canton-dvp-desk"

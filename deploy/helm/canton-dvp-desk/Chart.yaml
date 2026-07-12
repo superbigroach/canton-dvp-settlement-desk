@@ -1,0 +1,18 @@
+apiVersion: v2
+name: canton-dvp-desk
+description: >-
+  Spring Boot REST desk for atomic DvP and a sealed Market-on-Close auction on a
+  Canton/Daml ledger. Deploys the APPLICATION tier only; point it at a Canton
+  participant or a sandbox via values (see GKE_RUNBOOK.md).
+type: application
+# Chart version (bump on chart changes); appVersion tracks the backend image.
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - canton
+  - daml
+  - settlement
+  - dvp
+home: https://github.com/
+maintainers:
+  - name: Canton DvP Settlement Desk

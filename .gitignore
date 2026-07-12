@@ -10,6 +10,13 @@ log/
 # Node (any tooling / scripts)
 node_modules/
 
+# Backend (Spring Boot / Gradle) build artifacts. The Gradle WRAPPER
+# (backend/gradlew, backend/gradle/wrapper/*) and the committed Daml codegen
+# output (backend/src/main/generated-java/**) are intentionally NOT ignored.
+backend/build/
+backend/.gradle/
+.gradle/
+
 # Secrets & local config — NEVER commit Devnet credentials / participant keys
 .env
 .env.*

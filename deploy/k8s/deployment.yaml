@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canton-dvp-desk
+  labels:
+    app: canton-dvp-desk
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: canton-dvp-desk
+  template:
+    metadata:
+      labels:
+        app: canton-dvp-desk
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: canton-dvp-desk
+          # REPLACE with your pushed image:
+          #   REGION-docker.pkg.dev/PROJECT/REPO/canton-dvp-desk:1.0.0
+          image: canton-dvp-desk:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: canton-dvp-desk-ledger
+          env:
+            - name: SERVER_PORT
+              value: "8080"
+            # Remove this block for a no-auth sandbox (and delete secret.yaml).
+            - name: LEDGER_JWT
+              valueFrom:
+                secretKeyRef:
+                  name: canton-dvp-desk-jwt
+                  key: jwt
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi

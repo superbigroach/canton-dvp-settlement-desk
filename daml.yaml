@@ -46,3 +46,24 @@ dependencies:
 # Compiled DAR output location.
 build-options:
   - --output=.daml/dist/canton-dvp-settlement-desk-1.0.0.dar
+
+# ---------------------------------------------------------------------------
+# Java codegen — generates the strongly-typed Java bindings for every template
+# (Instrument, Holding, DvPProposal/DvPAgreement, ClosingAuction/SealedOrder,
+# SettlementReceipt/SettlementBatch, TradingMandate, …) that the Spring Boot
+# backend (backend/) uses to build Ledger API Create/Exercise commands.
+#
+# Run it (after `daml build`) with:
+#     daml codegen java
+#
+# Output lands in `backend/src/main/generated-java` under the package
+# `com.lucilla.settlement.model`, and the Gradle build adds that directory as a
+# source root (see backend/build.gradle → sourceSets.main.java). The generated
+# sources ARE committed so `./gradlew build` (and the Docker build, which has no
+# Daml SDK) compiles without needing to regenerate.
+# ---------------------------------------------------------------------------
+codegen:
+  java:
+    package-prefix: com.lucilla.settlement.model
+    output-directory: backend/src/main/generated-java
+    verbosity: 1

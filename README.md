@@ -246,6 +246,84 @@ self-issued tokens.
 
 ---
 
+## Backend (Spring Boot) + Deploy
+
+A production-shaped **Java 17 / Spring Boot 3** service in [`backend/`](./backend)
+drives this Daml model over the **Ledger API** (gRPC) using the **Daml Java
+Bindings 2.9.4** — the exact institutional stack (Java + Spring Boot + TDD in
+front of a Canton settlement engine). REST in, Ledger API commands out.
+
+### What it exposes
+
+| Method + path | Daml action | acts as |
+|---|---|---|
+| `POST /api/instruments` | create `Instrument` | issuer |
+| `POST /api/holdings` | create `Holding` | issuer |
+| `GET  /api/holdings?party=` | active `Holding`s visible to a party | — |
+| `POST /api/dvp/propose` | create `DvPProposal` | proposer (seller) |
+| `POST /api/dvp/{cid}/accept` | `Accept` → `DvPAgreement` | counterparty (buyer) |
+| `POST /api/dvp/{cid}/settle` | `Settle` (both legs, atomic) | proposer |
+| `POST /api/auction` | create `ClosingAuction` | operator |
+| `POST /api/auction/{cid}/order` | `SubmitOrder` (sealed) | trader |
+| `POST /api/auction/{cid}/close` | `CloseBidding` + `RunClose` → `SettlementBatch` | operator |
+| `GET  /api/health` | liveness + which ledger it points at (no ledger call) | — |
+
+### How it's wired
+
+- **Daml Java codegen** — `daml codegen java` (configured in [`daml.yaml`](./daml.yaml))
+  emits strongly-typed template classes into `backend/src/main/generated-java`
+  (package `com.lucilla.settlement.model`), committed so the Gradle/Docker builds
+  need no Daml SDK.
+- **`LedgerCommands`** (pure) maps requests → Ledger API Create/Exercise commands;
+  **`LedgerService`** submits them under the right `actAs` party and reads active
+  contracts back; **`SettlementController`** is the REST surface.
+- **Same jar, two ledgers.** `application.yml` (all env-overridable) selects a
+  local **sandbox** (`localhost:6865`, plaintext, no auth — the default) or a real
+  **Canton participant** (`LEDGER_TLS=true` + `LEDGER_JWT=<bearer>`).
+- **TDD.** `./gradlew build` runs JUnit 5 unit tests for the command mapping
+  (`LedgerCommandsTest`) and a MockMvc web-slice test (`SettlementControllerTest`)
+  — **no ledger required**. A `@Tag("integration")` end-to-end test
+  (`LedgerIntegrationIT`) runs a full issue→propose→accept→settle→query flow
+  against a live ledger and is **excluded from the default build** (run it with
+  `./gradlew integrationTest`, ledger up).
+
+### Run it
+
+```bash
+cd backend
+./gradlew build            # compile + unit/web tests (no ledger needed)
+./gradlew bootRun          # starts on :8080, points at localhost:6865 by default
+```
+
+End-to-end against a local sandbox (two-terminal flow, full `curl` walkthrough):
+see [`backend/run-local.md`](./backend/run-local.md).
+
+### Containerize
+
+```bash
+# multi-stage build (Temurin 21); build from the REPO ROOT:
+docker build -f backend/Dockerfile -t canton-dvp-desk:1.0.0 .
+docker run -p 8080:8080 -e LEDGER_HOST=host.docker.internal canton-dvp-desk:1.0.0
+curl localhost:8080/api/health
+
+# or the app tier + a host sandbox via compose:
+docker compose up --build
+```
+
+### Deploy on GKE (Helm or plain YAML)
+
+A values-driven **Helm chart** ([`deploy/helm/canton-dvp-desk`](./deploy/helm/canton-dvp-desk))
+and equivalent **plain manifests** ([`deploy/k8s`](./deploy/k8s)) deploy the app
+tier (Deployment/Service/Ingress/ConfigMap/Secret), with the ledger endpoint +
+JWT as config. The copy-paste **[`deploy/GKE_RUNBOOK.md`](./deploy/GKE_RUNBOOK.md)**
+covers project + Artifact Registry + cluster + `helm install`, and — importantly —
+**cost + teardown** (a GKE control plane is ~$73/mo; delete the cluster to stop
+the meter — a demo is a few dollars) plus the honest note that a full production
+Canton participant is a separate, license-gated deployment (point the desk at a
+Devnet participant or sandbox for the demo).
+
+---
+
 ## Share it / deploy to Devnet
 
 **Share the code.** Push this repo to GitHub; anyone can then clone it and run
@@ -266,6 +344,8 @@ Devnet is Canton Coin, free from the tap.
 
 ## Further reading
 
+- **[backend/](./backend)** — the Spring Boot desk (REST → Ledger API via the Daml Java bindings), with **[backend/run-local.md](./backend/run-local.md)** for the local sandbox walkthrough.
+- **[deploy/GKE_RUNBOOK.md](./deploy/GKE_RUNBOOK.md)** — containerize + deploy the app tier on GKE (Helm or plain YAML), with cost + teardown.
 - **[docs/DAML_FINANCE_INTEGRATION.md](./docs/DAML_FINANCE_INTEGRATION.md)** — the precise mapping of every template to its Daml Finance V4 equivalent, and the documented (low-risk) library swap.
 - **[DEPLOY.md](./DEPLOY.md)** — Canton Devnet deployment.
 - **[docs/BUSINESS_BRIEF.md](./docs/BUSINESS_BRIEF.md)** — the 1-page RWA brief.

@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "canton-dvp-desk.fullname" . }}-ledger
+  labels:
+    {{- include "canton-dvp-desk.labels" . | nindent 4 }}
+data:
+  # Non-secret ledger connection config, injected as env into the container.
+  LEDGER_HOST: {{ .Values.ledger.host | quote }}
+  LEDGER_PORT: {{ .Values.ledger.port | quote }}
+  LEDGER_TLS: {{ .Values.ledger.tls | quote }}
+  LEDGER_APPLICATION_ID: {{ .Values.ledger.applicationId | quote }}

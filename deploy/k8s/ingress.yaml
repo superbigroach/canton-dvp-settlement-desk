@@ -1,0 +1,25 @@
+# Optional. GKE's built-in GCE ingress controller provisions an external L7 load
+# balancer + public IP. Delete this file and use `kubectl port-forward` if you
+# don't want a public endpoint. Set your host below.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: canton-dvp-desk
+  labels:
+    app: canton-dvp-desk
+  annotations: {}
+    # kubernetes.io/ingress.global-static-ip-name: dvp-desk-ip
+    # networking.gke.io/managed-certificates: dvp-desk-cert
+spec:
+  ingressClassName: gce
+  rules:
+    - host: dvp-desk.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: canton-dvp-desk
+                port:
+                  number: 80

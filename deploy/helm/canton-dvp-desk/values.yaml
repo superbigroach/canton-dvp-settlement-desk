@@ -1,0 +1,81 @@
+# Default values for canton-dvp-desk.
+# Override with -f my-values.yaml or --set on `helm install`.
+
+replicaCount: 1
+
+image:
+  # Set to your Artifact Registry image, e.g.
+  #   REGION-docker.pkg.dev/PROJECT/REPO/canton-dvp-desk
+  repository: canton-dvp-desk
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+
+# --- Ledger endpoint (rendered into a ConfigMap) --------------------------
+# Point the desk at your Canton participant or sandbox. For a full production
+# participant, see the license note in GKE_RUNBOOK.md.
+ledger:
+  host: "canton-participant"
+  port: 6865
+  tls: true
+  applicationId: "canton-dvp-desk"
+  # JWT bearer token. Prefer an EXISTING secret you manage out-of-band; only use
+  # the inline value for a quick demo (it lands in a Helm-managed Secret).
+  jwt:
+    # If existingSecret is set, the token is read from it (key: jwtSecretKey) and
+    # the inline value is ignored.
+    existingSecret: ""
+    jwtSecretKey: "jwt"
+    value: ""   # inline token for demo only; leave "" for a no-auth sandbox
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+# GKE ingress (GCE controller). Set a host and, optionally, a managed cert.
+ingress:
+  enabled: false
+  className: "gce"
+  host: "dvp-desk.example.com"
+  annotations: {}
+    # kubernetes.io/ingress.global-static-ip-name: dvp-desk-ip
+    # networking.gke.io/managed-certificates: dvp-desk-cert
+  path: /
+  pathType: Prefix
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+# Probes hit /api/health, which does NOT touch the ledger (so the pod is Ready
+# even before the participant is reachable).
+probes:
+  liveness:
+    path: /api/health
+    initialDelaySeconds: 30
+    periodSeconds: 15
+  readiness:
+    path: /api/health
+    initialDelaySeconds: 15
+    periodSeconds: 10
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Extra environment variables (name/value) merged into the container.
+extraEnv: []

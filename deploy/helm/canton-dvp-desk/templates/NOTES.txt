@@ -1,0 +1,18 @@
+canton-dvp-desk {{ .Chart.AppVersion }} installed as release "{{ .Release.Name }}".
+
+Ledger endpoint (from values):
+  host : {{ .Values.ledger.host }}:{{ .Values.ledger.port }}
+  tls  : {{ .Values.ledger.tls }}
+  auth : {{ if eq (include "canton-dvp-desk.jwtEnabled" .) "true" }}JWT{{ else }}none (sandbox){{ end }}
+
+Reach the desk:
+{{- if .Values.ingress.enabled }}
+  http://{{ .Values.ingress.host }}{{ .Values.ingress.path }}api/health
+  (GKE provisions the ingress IP in a few minutes: kubectl get ingress {{ include "canton-dvp-desk.fullname" . }})
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "canton-dvp-desk.fullname" . }} 8080:{{ .Values.service.port }}
+  curl localhost:8080/api/health
+{{- end }}
+
+Check status:
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
