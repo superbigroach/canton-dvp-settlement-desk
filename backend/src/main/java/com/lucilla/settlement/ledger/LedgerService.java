@@ -9,13 +9,21 @@ import com.daml.ledger.javaapi.data.TreeEvent;
 import com.daml.ledger.javaapi.data.codegen.HasCommands;
 import com.daml.ledger.rxjava.DamlLedgerClient;
 import com.lucilla.settlement.config.LedgerConnection;
+import com.lucilla.settlement.ledger.LedgerCommands;
 import com.lucilla.settlement.model.holding.Holding;
+import com.lucilla.settlement.model.instrument.Instrument;
+import com.lucilla.settlement.model.marketonclose.ClosingAuction;
+import com.lucilla.settlement.model.marketonclose.SealedOrder;
+import com.lucilla.settlement.model.settlement.FillRecord;
+import com.lucilla.settlement.model.settlement.SettlementBatch;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -83,6 +91,229 @@ public class LedgerService {
             log.warn("Command submission failed (actAs={}): {}", actAs, e.getMessage());
             throw new LedgerException(rootMessage(e), e);
         }
+    }
+
+    /** Holdings CREATED by a transaction (cid + amount), decoded from the tree. */
+    public List<HoldingView> createdHoldingsOf(TransactionTree tree) {
+        List<HoldingView> out = new ArrayList<>();
+        for (TreeEvent ev : tree.getEventsById().values()) {
+            if (ev instanceof CreatedEvent created
+                    && sameTemplate(created.getTemplateId(), Holding.TEMPLATE_ID)) {
+                Holding.Contract c = Holding.Contract.fromCreatedEvent(created);
+                out.add(new HoldingView(c.id.contractId, c.data.issuer, c.data.instrumentId,
+                        c.data.owner, c.data.amount, c.data.disclosedTo));
+            }
+        }
+        return out;
+    }
+
+    /** The SettlementBatch created by a close transaction, decoded to a flat view. */
+    public Optional<BatchView> batchOf(TransactionTree tree) {
+        for (TreeEvent ev : tree.getEventsById().values()) {
+            if (ev instanceof CreatedEvent created
+                    && sameTemplate(created.getTemplateId(), SettlementBatch.TEMPLATE_ID)) {
+                SettlementBatch b = SettlementBatch.Contract.fromCreatedEvent(created).data;
+                List<FillView> fills = new ArrayList<>();
+                for (FillRecord f : b.fills) {
+                    // The operator is the momentary CCP: whichever side ISN'T the operator
+                    // is the real trader, and that determines Buy vs Sell for display.
+                    boolean isBuy = b.operator.equals(f.seller);
+                    String trader = isBuy ? f.buyer : f.seller;
+                    fills.add(new FillView(labelOf(trader), isBuy ? "Buy" : "Sell",
+                            f.quantity, f.price));
+                }
+                return Optional.of(new BatchView(created.getContractId(), b.instrumentId,
+                        b.closingPrice, fills));
+            }
+        }
+        return Optional.empty();
+    }
+
+    // -----------------------------------------------------------------------
+    // Holding provisioning (auto-resolve the exact/sufficient cid for a leg)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Return the contract id of a holding owned by {@code owner} of {@code instrumentId}
+     * with EXACTLY {@code amount} units — splitting a larger holding (or merging
+     * several smaller ones) as needed. This is what lets the desk offer a simple
+     * "Buy 5 AAPL" without the caller hand-picking holding contract ids: a DvP leg
+     * must match its holding amount exactly (Settlement.daml re-checks it).
+     */
+    public String provisionExactHolding(String owner, String instrumentId, BigDecimal amount) {
+        List<HoldingView> mine = ownedHoldings(owner, instrumentId);
+        if (mine.isEmpty()) {
+            throw new LedgerException(labelOf(owner) + " holds no " + instrumentId);
+        }
+        for (HoldingView h : mine) {
+            if (h.amount().compareTo(amount) == 0) {
+                return h.contractId();
+            }
+        }
+        BigDecimal total = mine.stream().map(HoldingView::amount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (total.compareTo(amount) < 0) {
+            throw new LedgerException(labelOf(owner) + " has only " + strip(total) + " "
+                    + instrumentId + " but this trade needs " + strip(amount));
+        }
+        // Ascending: the smallest single holding that covers -> one split, minimal change.
+        for (HoldingView h : mine) {
+            if (h.amount().compareTo(amount) > 0) {
+                return splitForExact(owner, h.contractId(), amount);
+            }
+        }
+        // No single holding covers it: merge (descending) until it does, then split.
+        String baseCid = mergeUntil(owner, mine, amount);
+        HoldingView merged = ownedHoldings(owner, instrumentId).stream()
+                .filter(h -> h.contractId().equals(baseCid)).findFirst().orElseThrow();
+        if (merged.amount().compareTo(amount) == 0) {
+            return baseCid;
+        }
+        return splitForExact(owner, baseCid, amount);
+    }
+
+    /**
+     * Return the contract id of a SINGLE holding owned by {@code owner} of
+     * {@code instrumentId} with AT LEAST {@code minAmount} units — merging smaller
+     * holdings if necessary, but never splitting (the surplus rides along and is
+     * returned as change when the leg settles). Used to pre-commit a MOC order.
+     */
+    public String provisionAtLeastHolding(String owner, String instrumentId, BigDecimal minAmount) {
+        List<HoldingView> mine = ownedHoldings(owner, instrumentId);
+        if (mine.isEmpty()) {
+            throw new LedgerException(labelOf(owner) + " holds no " + instrumentId + " to commit");
+        }
+        for (HoldingView h : mine) {                       // any single one already big enough
+            if (h.amount().compareTo(minAmount) >= 0) {
+                return h.contractId();
+            }
+        }
+        BigDecimal total = mine.stream().map(HoldingView::amount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (total.compareTo(minAmount) < 0) {
+            throw new LedgerException(labelOf(owner) + " has only " + strip(total) + " "
+                    + instrumentId + " but must commit " + strip(minAmount));
+        }
+        return mergeUntil(owner, mine, minAmount);
+    }
+
+    /** Owned (owner == party) holdings of one instrument, ascending by amount. */
+    private List<HoldingView> ownedHoldings(String owner, String instrumentId) {
+        List<HoldingView> mine = new ArrayList<>(holdingsVisibleTo(owner).stream()
+                .filter(h -> h.owner().equals(owner) && h.instrumentId().equals(instrumentId))
+                .toList());
+        mine.sort(Comparator.comparing(HoldingView::amount));
+        return mine;
+    }
+
+    /** Merge holdings (largest-first) into one cid until it holds >= target. */
+    private String mergeUntil(String owner, List<HoldingView> mine, BigDecimal target) {
+        List<HoldingView> desc = new ArrayList<>(mine);
+        desc.sort(Comparator.comparing(HoldingView::amount).reversed());
+        String baseCid = desc.get(0).contractId();
+        BigDecimal running = desc.get(0).amount();
+        for (int i = 1; i < desc.size() && running.compareTo(target) < 0; i++) {
+            baseCid = submitForCreated(owner,
+                    LedgerCommands.mergeHolding(baseCid, desc.get(i).contractId()),
+                    LedgerCommands.holdingTemplateId());
+            running = running.add(desc.get(i).amount());
+        }
+        return baseCid;
+    }
+
+    /** Split {@code holdingCid} and return the cid of the piece worth exactly {@code amount}. */
+    private String splitForExact(String owner, String holdingCid, BigDecimal amount) {
+        TransactionTree tree = submit(owner, LedgerCommands.splitHolding(holdingCid, amount));
+        return createdHoldingsOf(tree).stream()
+                .filter(h -> h.amount().compareTo(amount) == 0)
+                .map(HoldingView::contractId).findFirst()
+                .orElseThrow(() -> new LedgerException(
+                        "split did not yield an exact " + strip(amount) + " holding"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Market-on-Close reads (as the venue/operator)
+    // -----------------------------------------------------------------------
+
+    /** Active ClosingAuctions visible to {@code party} (the operator sees its own). */
+    public List<AuctionView> auctionsVisibleTo(String party) {
+        return withRetry("auctions for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<ClosingAuction.Contract> filter = ContractFilter.of(ClosingAuction.COMPANION);
+            List<AuctionView> out = new ArrayList<>();
+            client.getActiveContractSetClient()
+                    .getActiveContracts(filter, Set.of(party), false)
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (ClosingAuction.Contract c : active.activeContracts) {
+                            ClosingAuction a = c.data;
+                            out.add(new AuctionView(c.id.contractId, a.operator, a.instrumentId,
+                                    a.cashInstrument, a.referencePrice, a.participants, a.isOpen));
+                        }
+                    });
+            return out;
+        });
+    }
+
+    /** Active SealedOrders visible to {@code party} (the operator signs every order). */
+    public List<OrderView> sealedOrdersVisibleTo(String party) {
+        return withRetry("orders for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<SealedOrder.Contract> filter = ContractFilter.of(SealedOrder.COMPANION);
+            List<OrderView> out = new ArrayList<>();
+            client.getActiveContractSetClient()
+                    .getActiveContracts(filter, Set.of(party), false)
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (SealedOrder.Contract c : active.activeContracts) {
+                            SealedOrder o = c.data;
+                            out.add(new OrderView(c.id.contractId, o.operator, labelOf(o.trader),
+                                    o.instrumentId, o.cashInstrument,
+                                    o.side.toString().equalsIgnoreCase("BUY") ? "Buy" : "Sell",
+                                    o.quantity, o.limitPrice));
+                        }
+                    });
+            return out;
+        });
+    }
+
+    /** Published instruments (id, kind, reference price) visible to {@code party}. */
+    public List<InstrumentView> instrumentsVisibleTo(String party) {
+        return withRetry("instruments for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<Instrument.Contract> filter = ContractFilter.of(Instrument.COMPANION);
+            List<InstrumentView> out = new ArrayList<>();
+            client.getActiveContractSetClient()
+                    .getActiveContracts(filter, Set.of(party), false)
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (Instrument.Contract c : active.activeContracts) {
+                            Instrument in = c.data;
+                            out.add(new InstrumentView(in.id, in.kind, in.description,
+                                    in.referencePrice.orElse(null)));
+                        }
+                    });
+            return out;
+        });
+    }
+
+    /** The published reference (close) price for an instrument id, or empty. */
+    public Optional<BigDecimal> referencePriceOf(String issuerRef, String instrumentId) {
+        return instrumentsVisibleTo(resolveParty(issuerRef)).stream()
+                .filter(i -> i.id().equals(instrumentId))
+                .map(InstrumentView::referencePrice)
+                .filter(java.util.Objects::nonNull)
+                .findFirst();
+    }
+
+    /** Friendly label (hint prefix before "::") for a full party id. */
+    public static String labelOf(String party) {
+        return (party != null && party.contains("::"))
+                ? party.substring(0, party.indexOf("::")) : party;
+    }
+
+    private static String strip(BigDecimal v) {
+        return v.stripTrailingZeros().toPlainString();
     }
 
     /** Contract ids of ALL created contracts of a template in a transaction tree. */
@@ -251,6 +482,35 @@ public class LedgerService {
     public record HoldingView(
             String contractId, String issuer, String instrumentId, String owner,
             java.math.BigDecimal amount, List<String> disclosedTo) {
+    }
+
+    /** Flat, JSON-friendly view of a published Instrument. */
+    public record InstrumentView(
+            String id, String kind, String description, java.math.BigDecimal referencePrice) {
+    }
+
+    /** Flat, JSON-friendly view of a ClosingAuction. */
+    public record AuctionView(
+            String contractId, String operator, String instrumentId, String cashInstrument,
+            java.math.BigDecimal referencePrice, List<String> participants, boolean isOpen) {
+    }
+
+    /** Flat, JSON-friendly view of a resting SealedOrder (as seen by the operator). */
+    public record OrderView(
+            String contractId, String operator, String trader, String instrumentId,
+            String cashInstrument, String side, java.math.BigDecimal quantity,
+            java.math.BigDecimal limitPrice) {
+    }
+
+    /** One fill from a settled batch, resolved to the trader's side. */
+    public record FillView(
+            String trader, String side, java.math.BigDecimal quantity, java.math.BigDecimal price) {
+    }
+
+    /** Flat view of a SettlementBatch and its fills. */
+    public record BatchView(
+            String contractId, String instrumentId, java.math.BigDecimal closingPrice,
+            List<FillView> fills) {
     }
 
     /** Wraps ledger/command failures as a clean runtime error for the web layer. */

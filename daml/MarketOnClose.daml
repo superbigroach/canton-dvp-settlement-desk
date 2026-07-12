@@ -90,7 +90,7 @@ template ClosingAuction
     operator       : Party    -- the venue / auction operator
     auditor        : Party    -- compliance observer of the CLOSE (not the book)
     instrumentId   : Text     -- the asset auctioned, e.g. "DEMO:AAPL"
-    cashInstrument : Text     -- the cash leg instrument, e.g. "USD"
+    cashInstrument : Text     -- the cash leg instrument, e.g. "USDC"
     referencePrice : Decimal  -- the official CLOSING price every fill prints at
     participants   : [Party]  -- traders permitted to submit sealed orders
     isOpen         : Bool     -- True while the sealed-order window accepts orders

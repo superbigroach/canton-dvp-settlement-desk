@@ -44,11 +44,11 @@ import java.util.Optional;
 import java.util.Set;
 
 public final class DvPProposal extends Template {
-  public static final Identifier TEMPLATE_ID = new Identifier("686f466cc26deeb74b73fb7f5ee448959dec397b966196641a6e0925ac652c79", "Settlement", "DvPProposal");
+  public static final Identifier TEMPLATE_ID = new Identifier("a515edc777c604a66696e5991316c6e0500be01c634f1dcd1c118c3a0ad8c9fe", "Settlement", "DvPProposal");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("686f466cc26deeb74b73fb7f5ee448959dec397b966196641a6e0925ac652c79", "Settlement", "DvPProposal");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("a515edc777c604a66696e5991316c6e0500be01c634f1dcd1c118c3a0ad8c9fe", "Settlement", "DvPProposal");
 
-  public static final String PACKAGE_ID = "686f466cc26deeb74b73fb7f5ee448959dec397b966196641a6e0925ac652c79";
+  public static final String PACKAGE_ID = "a515edc777c604a66696e5991316c6e0500be01c634f1dcd1c118c3a0ad8c9fe";
 
   public static final Choice<DvPProposal, com.lucilla.settlement.model.da.internal.template.Archive, Unit> CHOICE_Archive = 
       Choice.create("Archive", value$ -> value$.toValue(), value$ ->

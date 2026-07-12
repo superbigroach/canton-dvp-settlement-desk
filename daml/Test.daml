@@ -46,8 +46,8 @@ import Agent
 aapl : Text
 aapl = "DEMO:AAPL"
 
-usd : Text
-usd = "USD"
+usdc : Text
+usdc = "USDC"
 
 ceth : Text
 ceth = "cETH"
@@ -90,8 +90,8 @@ setupInstruments issuer = do
       referencePrice = Some 255.0
   _ <- submit issuer do
     createCmd Instrument with
-      issuer; depository = issuer; id = usd; version = "1"
-      kind = "Cash"; description = "Tokenised USD cash / bank deposit"
+      issuer; depository = issuer; id = usdc; version = "1"
+      kind = "Cash"; description = "Tokenised USD cash (USDC demo token) / bank deposit"
       referencePrice = None
   _ <- submit issuer do
     createCmd Instrument with
@@ -125,7 +125,7 @@ initialize = do
 
   -- Bob (the SELLER) holds 10 AAPL; Alice (the BUYER) holds 2,550 USD.
   bobAapl   <- mint issuer aapl bob   10.0
-  aliceCash <- mint issuer usd  alice 2550.0
+  aliceCash <- mint issuer usdc  alice 2550.0
 
   -- Bob proposes to sell 10 AAPL for 2,550 USD (255.0 each). Alice is counterparty.
   _ <- submit bob do
@@ -137,7 +137,7 @@ initialize = do
       cashHoldingCid = aliceCash
       assetInstrument = aapl
       assetAmount = 10.0
-      cashInstrument = usd
+      cashInstrument = usdc
       cashAmount = 2550.0
   pure ()
 
@@ -185,7 +185,7 @@ testBilateralDvP = do
   Parties{..} <- setup
 
   bobAapl   <- mint issuer aapl bob   10.0    -- Bob (seller) delivers the asset
-  aliceCash <- mint issuer usd  alice 2550.0  -- Alice (buyer) delivers the cash
+  aliceCash <- mint issuer usdc  alice 2550.0  -- Alice (buyer) delivers the cash
 
   -- Bob proposes; Alice + the auditor are observers.
   propCid <- submit bob do
@@ -193,7 +193,7 @@ testBilateralDvP = do
       proposer = bob; counterparty = alice; auditor
       assetHoldingCid = bobAapl; cashHoldingCid = aliceCash
       assetInstrument = aapl; assetAmount = 10.0
-      cashInstrument = usd;   cashAmount = 2550.0
+      cashInstrument = usdc;   cashAmount = 2550.0
 
   -- PRIVACY: Alice sees the proposal (observer); so does the auditor.
   assertMsg "buyer must see the proposal"  . isSome =<< queryContractId alice propCid
@@ -243,15 +243,15 @@ testMarketOnClose = do
   -- Sellers pre-hold the asset; buyers pre-hold cash to commit.
   bobAsset   <- mint issuer aapl bob   10.0
   carolAsset <- mint issuer aapl carol 8.0
-  aliceCash  <- mint issuer usd  alice 2600.0
-  daveCash   <- mint issuer usd  dave  2040.0
+  aliceCash  <- mint issuer usdc  alice 2600.0
+  daveCash   <- mint issuer usdc  dave  2040.0
 
   -- The venue opens the auction for AAPL with four registered participants. The
   -- official closing price (255.0, the AAPL reference price) is published on the
   -- auction — every fill will print at THIS one price.
   auctionCid <- submit venue do
     createCmd ClosingAuction with
-      operator = venue; auditor; instrumentId = aapl; cashInstrument = usd
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
       referencePrice = 255.0
       participants = [alice, bob, carol, dave]; isOpen = True
 
@@ -294,14 +294,14 @@ testMarketOnClose = do
   -- Post-close ownership: buyers hold the asset, sellers hold the cash.
   aliceAapl <- ownedAmount alice aapl
   daveAapl  <- ownedAmount dave  aapl
-  bobUsd    <- ownedAmount bob   usd
-  carolUsd  <- ownedAmount carol usd
+  bobUsd    <- ownedAmount bob   usdc
+  carolUsd  <- ownedAmount carol usdc
   aliceAapl === 10.0            -- Alice bought 10 AAPL
   daveAapl  === 8.0             -- Dave bought 8 AAPL
   bobUsd    === 2550.0          -- Bob sold 10 @ 255
   carolUsd  === 2040.0          -- Carol sold 8 @ 255
   -- Alice committed 2,600 USD but paid 2,550 — 50 USD change returned to her.
-  aliceUsd <- ownedAmount alice usd
+  aliceUsd <- ownedAmount alice usdc
   aliceUsd === 50.0
 
 -- ---------------------------------------------------------------------------
@@ -323,12 +323,12 @@ testMarketOnCloseImbalance = do
 
   -- One big seller vs two smaller buyers -> a sell-heavy imbalance.
   bobAsset  <- mint issuer aapl bob  30.0     -- Bob offers 30 AAPL
-  aliceCash <- mint issuer usd alice 2550.0   -- each buyer commits enough for 10 @ 255
-  bankCash  <- mint issuer usd bank  2550.0
+  aliceCash <- mint issuer usdc alice 2550.0   -- each buyer commits enough for 10 @ 255
+  bankCash  <- mint issuer usdc bank  2550.0
 
   auctionCid <- submit venue do
     createCmd ClosingAuction with
-      operator = venue; auditor; instrumentId = aapl; cashInstrument = usd
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
       referencePrice = 255.0
       participants = [alice, bank, bob]; isOpen = True
 
@@ -363,14 +363,14 @@ testMarketOnCloseImbalance = do
   bankAapl  <- ownedAmount bank  aapl
   aliceAapl === 10.0
   bankAapl  === 10.0
-  aliceUsd <- ownedAmount alice usd
-  bankUsd  <- ownedAmount bank  usd
+  aliceUsd <- ownedAmount alice usdc
+  bankUsd  <- ownedAmount bank  usdc
   aliceUsd === 0.0
   bankUsd  === 0.0
 
   -- Bob sold the pro-rated 20 @ 255 = 5,100 USD, and KEEPS the 10 unfilled AAPL
   -- (the residual did not settle) — proving partial, rationed settlement.
-  bobUsd  <- ownedAmount bob usd
+  bobUsd  <- ownedAmount bob usdc
   bobAapl <- ownedAmount bob aapl
   bobUsd  === 5100.0
   bobAapl === 10.0
@@ -383,12 +383,12 @@ testDarkPoolPrivacy : Script ()
 testDarkPoolPrivacy = do
   Parties{..} <- setup
 
-  aliceCash <- mint issuer usd alice 2550.0
+  aliceCash <- mint issuer usdc alice 2550.0
   bobAsset  <- mint issuer aapl bob  10.0
 
   auctionCid <- submit venue do
     createCmd ClosingAuction with
-      operator = venue; auditor; instrumentId = aapl; cashInstrument = usd
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
       referencePrice = 255.0
       participants = [alice, bob]; isOpen = True
   aliceBuy <- submit alice do
@@ -419,13 +419,13 @@ testAtomicRollback = do
 
   bobAapl   <- mint issuer aapl bob   10.0
   -- Alice's cash is only 2,500 — but the proposal states a price of 2,550.
-  aliceCash <- mint issuer usd  alice 2500.0
+  aliceCash <- mint issuer usdc  alice 2500.0
   propCid <- submit bob do
     createCmd DvPProposal with
       proposer = bob; counterparty = alice; auditor
       assetHoldingCid = bobAapl; cashHoldingCid = aliceCash
       assetInstrument = aapl; assetAmount = 10.0
-      cashInstrument = usd;   cashAmount = 2550.0   -- disagrees with the actual 2,500
+      cashInstrument = usdc;   cashAmount = 2550.0   -- disagrees with the actual 2,500
 
   -- Accept ALLOCATES (discloses) the cash leg to the proposer — that re-creates
   -- Alice's cash holding under a new contract id (same owner, same 2,500 amount),
@@ -440,9 +440,9 @@ testAtomicRollback = do
   Some aaplStill <- queryContractId bob bobAapl
   aaplStill.owner  === bob
   aaplStill.amount === 10.0
-  aliceUsd <- ownedAmount alice usd
+  aliceUsd <- ownedAmount alice usdc
   aliceUsd === 2500.0
-  bobUsd <- ownedAmount bob usd
+  bobUsd <- ownedAmount bob usdc
   bobUsd === 0.0                    -- Bob received no cash: the swap did not happen
 
 -- ---------------------------------------------------------------------------
@@ -455,7 +455,7 @@ testAgentInitiatedDvP = do
   Parties{..} <- setup
 
   aliceCeth0 <- mint issuer ceth alice 2.0     -- Alice's 2 cETH to sell
-  bobCash    <- mint issuer usd  bob   5000.0  -- Bob's cash to pay
+  bobCash    <- mint issuer usdc  bob   5000.0  -- Bob's cash to pay
 
   -- Alice ALLOCATES the cETH to her Agent: she discloses the holding so the agent
   -- can reference/validate it inside InitiateDvP (the mandate carries Alice's
@@ -476,14 +476,14 @@ testAgentInitiatedDvP = do
     exerciseCmd mandateCid InitiateDvP with
       counterparty = bob; auditor
       assetHoldingCid = bigCeth; cashHoldingCid = bobCash
-      assetAmount = 4.0; cashInstrument = usd; cashAmount = 5000.0
+      assetAmount = 4.0; cashInstrument = usdc; cashAmount = 5000.0
 
   -- WITHIN LIMIT: the Agent initiates a valid 2 cETH settlement on Alice's behalf.
   propCid <- submit agent do
     exerciseCmd mandateCid InitiateDvP with
       counterparty = bob; auditor
       assetHoldingCid = aliceCeth; cashHoldingCid = bobCash
-      assetAmount = 2.0; cashInstrument = usd; cashAmount = 5000.0
+      assetAmount = 2.0; cashInstrument = usdc; cashAmount = 5000.0
 
   -- The proposal names Alice as proposer — Bob never sees the agent.
   Some prop <- queryContractId bob propCid

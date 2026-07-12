@@ -63,6 +63,15 @@ public class SettlementController {
 
     // ---- Instruments ------------------------------------------------------
 
+    /** The published instruments (id, kind, reference/close price) for the pickers. */
+    @GetMapping("/instruments")
+    public List<Dtos.InstrumentResponse> instruments() {
+        return ledger.instrumentsVisibleTo(ledger.resolveParty("Issuer")).stream()
+                .map(i -> new Dtos.InstrumentResponse(
+                        i.id(), i.kind(), i.description(), i.referencePrice()))
+                .toList();
+    }
+
     @PostMapping("/instruments")
     public ResponseEntity<Dtos.CidResponse> issueInstrument(
             @Valid @RequestBody Dtos.IssueInstrumentRequest req) {
@@ -128,6 +137,187 @@ public class SettlementController {
         List<String> receipts = ledger.createdOf(tree, LedgerCommands.settlementReceiptTemplateId());
         List<String> holdings = ledger.createdOf(tree, LedgerCommands.holdingTemplateId());
         return new Dtos.SettleResponse(receipts.isEmpty() ? null : receipts.get(0), holdings);
+    }
+
+    // ---- One-click Buy/Sell (server-orchestrated DvP) ---------------------
+
+    /**
+     * Execute a whole bilateral trade in one call. The desk resolves each side's
+     * holding to the exact leg amount (splitting/merging as needed), then runs
+     * propose (seller) → accept (buyer) → settle (seller) — all against the live
+     * ledger. Returns the settlement receipt id and the agreed economics.
+     */
+    @PostMapping("/trade")
+    public Dtos.TradeResponse trade(@Valid @RequestBody Dtos.TradeRequest req) {
+        String seller = ledger.resolveParty(req.seller());
+        String buyer = ledger.resolveParty(req.buyer());
+        String auditor = ledger.resolveParty(blankTo(req.auditor(), "Auditor"));
+        if (seller.equals(buyer)) {
+            throw new IllegalArgumentException("buyer and seller must be different parties");
+        }
+
+        // Auto-resolve the exact holdings each leg will move.
+        String assetCid = ledger.provisionExactHolding(seller, req.assetInstrument(), req.assetAmount());
+        String cashCid = ledger.provisionExactHolding(buyer, req.cashInstrument(), req.cashAmount());
+
+        // propose → accept → settle, each under the correct actAs party.
+        String proposalCid = ledger.submitForCreated(seller,
+                LedgerCommands.createDvPProposal(seller, buyer, auditor, assetCid, cashCid,
+                        req.assetInstrument(), req.assetAmount(),
+                        req.cashInstrument(), req.cashAmount()),
+                LedgerCommands.dvpProposalTemplateId());
+        String agreementCid = ledger.submitForCreated(buyer,
+                LedgerCommands.acceptProposal(proposalCid),
+                LedgerCommands.dvpAgreementTemplateId());
+        TransactionTree tree = ledger.submit(seller, LedgerCommands.settleAgreement(agreementCid));
+        List<String> receipts = ledger.createdOf(tree, LedgerCommands.settlementReceiptTemplateId());
+
+        BigDecimal unitPrice = req.cashAmount()
+                .divide(req.assetAmount(), 10, java.math.RoundingMode.HALF_UP)
+                .stripTrailingZeros();
+        return new Dtos.TradeResponse(
+                receipts.isEmpty() ? null : receipts.get(0),
+                req.buyer(), req.seller(),
+                req.assetInstrument(), req.assetAmount(),
+                req.cashInstrument(), req.cashAmount(), unitPrice);
+    }
+
+    // ---- Simple Market-on-Close ------------------------------------------
+
+    /**
+     * Lodge one sealed order into the close. Opens (or reuses) the open auction
+     * for the instrument, auto-commits the trader's cash (Buy) or asset (Sell)
+     * holding, and submits the sealed order. All orchestration is server-side.
+     */
+    @PostMapping("/moc/order")
+    public ResponseEntity<Dtos.MocOrderResponse> mocOrder(
+            @Valid @RequestBody Dtos.MocOrderRequest req) {
+        String trader = ledger.resolveParty(req.trader());
+        String venue = ledger.resolveParty("Venue");
+        String auditor = ledger.resolveParty("Auditor");
+        String cashInstrument = blankTo(req.cashInstrument(), "USDC");
+        var sideEnum = LedgerCommands.side(req.side());
+        boolean isBuy = "buy".equalsIgnoreCase(req.side().trim());
+
+        // Find an open auction for this instrument/cash, else open a fresh one whose
+        // participant set is every known trader (so anyone in the picker can join).
+        // The close price is NEVER supplied by the trader: it is the instrument's
+        // published reference price ("price is what it is at the close").
+        var open = ledger.auctionsVisibleTo(venue).stream()
+                .filter(a -> a.isOpen()
+                        && a.instrumentId().equals(req.instrumentId())
+                        && a.cashInstrument().equals(cashInstrument))
+                .findFirst();
+        String auctionCid;
+        BigDecimal closingPrice;
+        boolean opened;
+        if (open.isPresent()) {
+            auctionCid = open.get().contractId();
+            closingPrice = open.get().referencePrice();
+            opened = false;
+        } else {
+            closingPrice = ledger.referencePriceOf("Issuer", req.instrumentId())
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            req.instrumentId() + " has no published reference price to close at"));
+            List<String> participants = ledger.listParties().stream()
+                    .map(p -> p.party())
+                    .filter(p -> !LedgerService.labelOf(p).equalsIgnoreCase("sandbox"))
+                    .toList();
+            auctionCid = ledger.submitForCreated(venue,
+                    LedgerCommands.createAuction(venue, auditor, req.instrumentId(),
+                            cashInstrument, closingPrice, participants),
+                    LedgerCommands.closingAuctionTemplateId());
+            opened = true;
+        }
+
+        // The trader sets no price; the order's limit is pinned to the close so it
+        // always crosses (Buy limit >= close, Sell limit <= close are both met).
+        BigDecimal limitPrice = closingPrice;
+
+        // Pre-commit the trader's holding: cash worth qty*close for a Buy, else the asset.
+        String holdingCid = isBuy
+                ? ledger.provisionAtLeastHolding(trader, cashInstrument,
+                        req.quantity().multiply(closingPrice))
+                : ledger.provisionAtLeastHolding(trader, req.instrumentId(), req.quantity());
+
+        String orderCid = ledger.submitForCreated(trader,
+                LedgerCommands.submitOrder(auctionCid, trader, sideEnum,
+                        req.quantity(), limitPrice, holdingCid),
+                LedgerCommands.sealedOrderTemplateId());
+        return created(new Dtos.MocOrderResponse(orderCid, auctionCid, opened, closingPrice));
+    }
+
+    /**
+     * The venue view of the close: the open auction for an instrument (if any) and
+     * every sealed order resting in it (side + size, which only the operator sees).
+     */
+    @GetMapping("/moc/state")
+    public Dtos.MocStateResponse mocState(
+            @RequestParam String instrumentId,
+            @RequestParam(required = false, defaultValue = "USDC") String cashInstrument) {
+        String venue = ledger.resolveParty("Venue");
+        var open = ledger.auctionsVisibleTo(venue).stream()
+                .filter(a -> a.isOpen()
+                        && a.instrumentId().equals(instrumentId)
+                        && a.cashInstrument().equals(cashInstrument))
+                .findFirst();
+        if (open.isEmpty()) {
+            return new Dtos.MocStateResponse(null, instrumentId, cashInstrument, null, false, List.of());
+        }
+        var a = open.get();
+        List<Dtos.MocOrderView> orders = ledger.sealedOrdersVisibleTo(venue).stream()
+                .filter(o -> o.operator().equals(venue)
+                        && o.instrumentId().equals(instrumentId)
+                        && o.cashInstrument().equals(cashInstrument))
+                .map(o -> new Dtos.MocOrderView(
+                        o.contractId(), o.trader(), o.side(), o.quantity(), o.limitPrice()))
+                .toList();
+        return new Dtos.MocStateResponse(a.contractId(), instrumentId, cashInstrument,
+                a.referencePrice(), a.isOpen(), orders);
+    }
+
+    /**
+     * Run the close as the venue: auto-discover the eligible sealed orders for this
+     * auction, seal the window, and cross them at the uniform closing price. Returns
+     * the batch id and the fills.
+     */
+    @PostMapping("/moc/{auctionCid}/close")
+    public Dtos.MocCloseResponse mocClose(@PathVariable String auctionCid) {
+        String venue = ledger.resolveParty("Venue");
+        var auction = ledger.auctionsVisibleTo(venue).stream()
+                .filter(a -> a.contractId().equals(auctionCid))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("no such auction: " + auctionCid));
+        BigDecimal close = auction.referencePrice();
+
+        var orders = ledger.sealedOrdersVisibleTo(venue).stream()
+                .filter(o -> o.operator().equals(venue)
+                        && o.instrumentId().equals(auction.instrumentId())
+                        && o.cashInstrument().equals(auction.cashInstrument()))
+                .toList();
+        // Only orders that are in-the-money at the close cross; the rest would abort it.
+        List<String> buyCids = orders.stream()
+                .filter(o -> o.side().equalsIgnoreCase("Buy") && o.limitPrice().compareTo(close) >= 0)
+                .map(com.lucilla.settlement.ledger.LedgerService.OrderView::contractId).toList();
+        List<String> sellCids = orders.stream()
+                .filter(o -> o.side().equalsIgnoreCase("Sell") && o.limitPrice().compareTo(close) <= 0)
+                .map(com.lucilla.settlement.ledger.LedgerService.OrderView::contractId).toList();
+        if (buyCids.isEmpty() || sellCids.isEmpty()) {
+            throw new IllegalArgumentException("the close needs at least one eligible buy AND one "
+                    + "eligible sell at the closing price " + close.stripTrailingZeros().toPlainString()
+                    + " (have " + buyCids.size() + " buys, " + sellCids.size() + " sells)");
+        }
+
+        String sealedCid = ledger.submitForCreated(venue,
+                LedgerCommands.closeBidding(auctionCid), LedgerCommands.closingAuctionTemplateId());
+        TransactionTree tree = ledger.submit(venue,
+                LedgerCommands.runClose(sealedCid, buyCids, sellCids));
+        var batch = ledger.batchOf(tree).orElseThrow(() ->
+                new IllegalStateException("close produced no settlement batch"));
+        List<Dtos.MocFillView> fills = batch.fills().stream()
+                .map(f -> new Dtos.MocFillView(f.trader(), f.side(), f.quantity(), f.price()))
+                .toList();
+        return new Dtos.MocCloseResponse(batch.contractId(), batch.closingPrice(), fills);
     }
 
     // ---- Market-on-Close --------------------------------------------------

@@ -50,6 +50,17 @@ public final class LedgerCommands {
         return new Holding(issuer, instrumentId, owner, amount, List.of()).create();
     }
 
+    /** Split a holding into (exact, change); used to size a leg to an agreed amount. */
+    public static Update<?> splitHolding(String holdingCid, BigDecimal splitAmount) {
+        return new Holding.ContractId(holdingCid).exerciseSplit(splitAmount);
+    }
+
+    /** Merge {@code otherCid} into {@code baseCid} (same issuer/owner/instrument). */
+    public static Update<?> mergeHolding(String baseCid, String otherCid) {
+        return new Holding.ContractId(baseCid)
+                .exerciseMerge(new Holding.ContractId(otherCid));
+    }
+
     // ---- Bilateral DvP ----------------------------------------------------
 
     public static Update<?> createDvPProposal(

@@ -40,7 +40,7 @@ module Holding where
 template Holding
   with
     issuer       : Party    -- obligor / registrar backing the balance
-    instrumentId : Text     -- matches Instrument.id: "DEMO:AAPL" | "USD" | "cETH"
+    instrumentId : Text     -- matches Instrument.id: "DEMO:AAPL" | "USDC" | "cETH"
     owner        : Party    -- current holder
     amount       : Decimal  -- units held (Decimal is exact — no float rounding)
     disclosedTo  : [Party]  -- extra parties the owner has explicitly allocated this

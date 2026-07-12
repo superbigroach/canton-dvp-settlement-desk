@@ -19,7 +19,7 @@
 --
 -- WE INSTANTIATE THREE INSTRUMENTS in this project (see Test.daml):
 --   * DEMO:AAPL  — a tokenised equity (kind = "Equity", referencePrice 255.0).
---   * USD        — a tokenised cash / bank-deposit token (kind = "Cash").
+--   * USDC       — a tokenised cash / bank-deposit token (kind = "Cash").
 --   * cETH       — wrapped Ethereum on Canton, by onRails (kind = "CryptoWrapped").
 -- ===========================================================================
 
@@ -33,7 +33,7 @@ module Instrument where
 --   * depository — the party that maintains its reference data / registry
 --                  (often == issuer for a simple token; kept distinct so the
 --                  shape matches Daml Finance and a custodian model drops in).
---   * id         — the human-facing symbol, e.g. "DEMO:AAPL", "USD", "cETH".
+--   * id         — the human-facing symbol, e.g. "DEMO:AAPL", "USDC", "cETH".
 --   * version    — lets an issuer supersede reference data without changing id.
 -- Deriving Ord so it can be used as a contract key and sorted in reports.
 data InstrumentKey = InstrumentKey
@@ -51,7 +51,7 @@ template Instrument
   with
     issuer         : Party            -- obligor / registrar (onRails for cETH, a bank for USD)
     depository     : Party            -- reference-data maintainer (== issuer here)
-    id             : Text             -- "DEMO:AAPL" | "USD" | "cETH"
+    id             : Text             -- "DEMO:AAPL" | "USDC" | "cETH"
     version        : Text             -- reference-data version, e.g. "1"
     kind           : Text             -- "Equity" | "Cash" | "CryptoWrapped"
     description     : Text            -- human description

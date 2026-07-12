@@ -67,7 +67,7 @@ DAR=.daml/dist/canton-dvp-settlement-desk-1.0.0.dar
 /root/.daml/bin/daml ledger list-parties --host localhost --port 6900
 ```
 This allocates **Issuer, Venue, Alice, Bob, Bank, Auditor, Agent, Eve**, publishes the
-instruments (`DEMO:AAPL`, `USD`, `cETH`), mints seed holdings, and posts a seed DvP proposal.
+instruments (`DEMO:AAPL`, `USDC`, `cETH`), mints seed holdings, and posts a seed DvP proposal.
 
 > `Test:initialize` can be run only ONCE per sandbox — re-running fails because the parties
 > already exist. To reseed, stop the sandbox and start a fresh one (state is in-memory).

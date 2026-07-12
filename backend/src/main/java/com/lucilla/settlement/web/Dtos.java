@@ -98,6 +98,80 @@ public final class Dtos {
             @NotNull List<@NotBlank String> sellOrderCids) {
     }
 
+    // ---- One-click Buy/Sell (server-orchestrated DvP) ---------------------
+
+    /**
+     * A whole bilateral trade in one call: the desk resolves each side's holding
+     * (splitting/merging to the exact leg amount) then runs propose → accept →
+     * settle server-side. {@code auditor} defaults to "Auditor" when blank.
+     */
+    public record TradeRequest(
+            @NotBlank String buyer,          // delivers cash, receives the asset
+            @NotBlank String seller,         // delivers the asset, receives cash
+            String auditor,                  // defaults to "Auditor"
+            @NotBlank String assetInstrument,
+            @NotNull @Positive BigDecimal assetAmount,
+            @NotBlank String cashInstrument,
+            @NotNull @Positive BigDecimal cashAmount) {
+    }
+
+    public record TradeResponse(
+            String receiptCid,
+            String buyer,
+            String seller,
+            String assetInstrument,
+            BigDecimal assetAmount,
+            String cashInstrument,
+            BigDecimal cashAmount,
+            BigDecimal unitPrice) {
+    }
+
+    // ---- Simple Market-on-Close (auto-resolve auction + committed holding) --
+
+    /**
+     * Send one sealed order to the close — DEAD SIMPLE: just the asset, the side,
+     * and the amount. No price and no counterparty: a MOC order takes the official
+     * close price (the instrument's published reference price, resolved server-side)
+     * and the desk auto-commits the backing holding (cash for a Buy, the asset for a
+     * Sell). The acting party is {@code trader} (the logged-in party from the switcher).
+     */
+    public record MocOrderRequest(
+            @NotBlank String trader,
+            @NotBlank String side,           // Buy | Sell
+            @NotNull @Positive BigDecimal quantity,
+            @NotBlank String instrumentId,
+            String cashInstrument) {          // defaults to "USDC" when blank
+    }
+
+    public record InstrumentResponse(
+            String id, String kind, String description, BigDecimal referencePrice) {
+    }
+
+    public record MocOrderResponse(
+            String orderCid,
+            String auctionCid,
+            boolean openedAuction,
+            BigDecimal closingPrice) {
+    }
+
+    public record MocOrderView(
+            String contractId, String trader, String side,
+            BigDecimal quantity, BigDecimal limitPrice) {
+    }
+
+    public record MocStateResponse(
+            String auctionCid, String instrumentId, String cashInstrument,
+            BigDecimal referencePrice, boolean isOpen, List<MocOrderView> orders) {
+    }
+
+    public record MocFillView(
+            String trader, String side, BigDecimal quantity, BigDecimal price) {
+    }
+
+    public record MocCloseResponse(
+            String settlementBatchCid, BigDecimal closingPrice, List<MocFillView> fills) {
+    }
+
     // ---- Generic responses ------------------------------------------------
 
     public record CidResponse(String contractId) {

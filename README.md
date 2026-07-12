@@ -2,7 +2,7 @@
 
 **Atomic Delivery-versus-Payment (DvP) and a sealed-order Market-on-Close auction
 between tokenised assets — private by construction.** Two institutions swap a
-tokenised equity (`DEMO:AAPL`), tokenised cash (`USD`), and wrapped Ethereum
+tokenised equity (`DEMO:AAPL`), tokenised cash (`USDC`), and wrapped Ethereum
 (`cETH`, by [onRails](https://onrails.io)) with **zero principal risk**
 (all-or-nothing settlement) and **zero information leakage** (each party sees only
 its own side).
@@ -102,14 +102,14 @@ header explains the *why*, not just the *what*.
 | Instrument | `kind` | Reference | Role |
 |---|---|---|---|
 | `DEMO:AAPL` | `Equity` | `referencePrice = 255.0` | the auctioned asset in the MOC demo |
-| `USD` | `Cash` | — | the cash leg |
+| `USDC` | `Cash` | — | the cash leg |
 | `cETH` | `CryptoWrapped` | onRails | the crypto delivery leg (wrapped ETH, no bridge) |
 
 ---
 
 ## Flow 1 — Atomic bilateral DvP
 
-Alice buys 10 `DEMO:AAPL` from Bob for 2,550 `USD`. Bob (the seller) proposes;
+Alice buys 10 `DEMO:AAPL` from Bob for 2,550 `USDC`. Bob (the seller) proposes;
 Alice accepts; the settle moves both legs at once. An auditor sees the trade but
 not the books; Eve (an outsider) sees nothing.
 
@@ -117,15 +117,15 @@ not the books; Eve (an outsider) sees nothing.
 sequenceDiagram
     autonumber
     actor Bob as Bob — Seller (holds AAPL)
-    actor Alice as Alice — Buyer (holds USD)
+    actor Alice as Alice — Buyer (holds USDC)
     participant Aud as Auditor
     participant L as Canton Ledger + Synchronizer
 
     Note over Bob,Alice: Holdings exist privately on each holder's participant
     L-->>Bob: Holding AAPL x10   [signatory Issuer, observer Bob]
-    L-->>Alice: Holding USD x2,550 [signatory Issuer, observer Alice]
+    L-->>Alice: Holding USDC x2,550 [signatory Issuer, observer Alice]
 
-    Bob->>L: create DvPProposal (sell 10 AAPL ⇄ 2,550 USD)
+    Bob->>L: create DvPProposal (sell 10 AAPL ⇄ 2,550 USDC)
     L-->>Alice: sees the proposal (observer)
     L-->>Aud: sees the proposal (need-to-know)
 
@@ -133,10 +133,10 @@ sequenceDiagram
     Bob->>L: exercise Settle
     activate L
     L->>L: leg 1 — AAPL Transfer → Alice
-    L->>L: leg 2 — USD Transfer → Bob
+    L->>L: leg 2 — USDC Transfer → Bob
     L->>L: write SettlementReceipt (signed Bob+Alice, observed by Auditor)
     deactivate L
-    Note over Bob,Alice: Alice owns the AAPL, Bob owns the USD.<br/>If EITHER leg failed, BOTH roll back — no principal risk.
+    Note over Bob,Alice: Alice owns the AAPL, Bob owns the USDC.<br/>If EITHER leg failed, BOTH roll back — no principal risk.
     L-->>Aud: sees the receipt (the trade) — NOT the holdings
 ```
 
@@ -152,8 +152,8 @@ does not settle. Every fill lands atomically in a single `SettlementBatch`.
 ```mermaid
 flowchart TD
     subgraph Sealed["Sealed order window — each order private to venue + its trader"]
-        BO1["Alice BUY 10 @ 260<br/>(commits 2,550 USD)"]
-        BO2["Bank  BUY 10 @ 258<br/>(commits 2,550 USD)"]
+        BO1["Alice BUY 10 @ 260<br/>(commits 2,550 USDC)"]
+        BO2["Bank  BUY 10 @ 258<br/>(commits 2,550 USDC)"]
         SO1["Bob  SELL 30 @ 250<br/>(commits 30 AAPL)"]
     end
     Op["Venue / Operator<br/>CloseBidding → RunClose @ 255.0<br/>totalBuy 20 vs totalSell 30 → matched 20"]
@@ -162,7 +162,7 @@ flowchart TD
     SO1 --> Op
     Op --> P["Pledge → pool → deliver (one atomic tx)<br/>buyers fill FULL; Bob rationed 30·20/30 = 20"]
     P --> B["SettlementBatch @ 255.0<br/>+ SettlementReceipts (venue-signed)"]
-    B --> R["Alice +10 AAPL, Bank +10 AAPL<br/>Bob +5,100 USD, KEEPS 10 unfilled AAPL"]
+    B --> R["Alice +10 AAPL, Bank +10 AAPL<br/>Bob +5,100 USDC, KEEPS 10 unfilled AAPL"]
 ```
 
 No participant saw another's order; every fill printed at the same price with no
@@ -178,7 +178,7 @@ This is a scale model of institutional tokenised settlement:
 
 | Here | JPMorgan / Kinexys reality |
 |---|---|
-| `USD` cash leg (`Holding`, `kind = "Cash"`) | **JPMD** / a tokenised deposit as the on-chain cash leg |
+| `USDC` cash leg (`Holding`, `kind = "Cash"`) | **JPMD** / a tokenised deposit as the on-chain cash leg |
 | `DEMO:AAPL`, `cETH` asset legs | tokenised securities / MMF shares / wrapped assets |
 | `DvPAgreement.Settle` (atomic two-leg) | intraday, atomic DvP with no principal risk |
 | `SealedOrder` privacy | confidential order handling / dark liquidity |

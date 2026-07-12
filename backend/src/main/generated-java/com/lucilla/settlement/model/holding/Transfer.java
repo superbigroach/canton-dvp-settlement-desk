@@ -23,7 +23,7 @@ import java.util.List;
 import java.util.Objects;
 
 public class Transfer extends DamlRecord<Transfer> {
-  public static final String _packageId = "686f466cc26deeb74b73fb7f5ee448959dec397b966196641a6e0925ac652c79";
+  public static final String _packageId = "a515edc777c604a66696e5991316c6e0500be01c634f1dcd1c118c3a0ad8c9fe";
 
   public final String newOwner;
 

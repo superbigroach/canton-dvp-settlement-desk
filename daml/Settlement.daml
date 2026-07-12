@@ -65,7 +65,7 @@ template DvPProposal
     -- verify what was agreed. Settle re-checks these against the real holdings.
     assetInstrument : Text              -- e.g. "DEMO:AAPL" or "cETH"
     assetAmount     : Decimal           -- units of the asset delivered
-    cashInstrument  : Text              -- e.g. "USD"
+    cashInstrument  : Text              -- e.g. "USDC"
     cashAmount      : Decimal           -- units of cash paid
   where
     -- The proposer signs: creating the proposal authorises its asset leg to move
