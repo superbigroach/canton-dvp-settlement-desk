@@ -1,0 +1,239 @@
+-- MarketOnClose.daml
+-- ===========================================================================
+-- MARKET-ON-CLOSE / SEALED-ORDER AUCTION — a programmable dark pool on Canton.
+-- ===========================================================================
+-- THE OWNER'S DOMAIN. As an equities trader I ran Market-on-Close (MOC): at the
+-- session close, buy and sell interest is collected into a single call auction
+-- and printed at ONE clearing price (the official close). Two properties make it
+-- work, and BOTH are about information:
+--
+--   1. ORDERS ARE SEALED. Until the cross runs, no participant can see the
+--      resting book — sizes, sides, or prices. If a 500k-share sell order were
+--      visible, everyone would step in front of it (front-running) and the price
+--      would gap against the seller before a single share traded. The auction's
+--      value comes from HIDING interest until the simultaneous match.
+--
+--   2. ONE PRICE, ONE INSTANT, NO IMPACT. Every crossing order settles at the
+--      same closing price, together, atomically. A big order gets filled without
+--      walking the book — no market impact, no leg risk, instant finality.
+--
+-- WHY A TRANSPARENT BLOCKCHAIN BREAKS THIS
+--   On a public EVM chain the mempool is the book: every pending order is visible
+--   before it executes. That is a front-runner's and an MEV searcher's paradise —
+--   the exact opposite of a sealed auction. You cannot build an honest MOC or a
+--   dark pool on a chain where all pending state is public.
+--
+-- WHY CANTON FIXES IT
+--   On Canton a contract is visible ONLY to its signatories and observers. A
+--   SealedOrder is signed by the operator and the one trader who placed it, with
+--   NO other observer — so no other participant (and not even the auditor) can
+--   see it while it rests. Yet the operator, holding all the orders, can run the
+--   cross and settle every matched pair in ONE atomic transaction at the closing
+--   price. Sealed order book + atomic multilateral settlement + instant finality:
+--   a programmable dark pool with none of the leakage of a transparent chain.
+--
+-- HOW THE AUTHORITY WORKS (the subtle, load-bearing part)
+--   To move a trader's holding you need that trader's authority, and in Daml a
+--   party's authority is only in scope inside a choice on a contract the party
+--   SIGNS. Each SealedOrder is signed by operator + trader, so:
+--     * the BUYER's cash moves inside a choice on the BUY order (buyer signs it);
+--     * the SELLER's asset moves inside a choice on the SELL order (seller signs
+--       it), which the buy-order choice invokes.
+--   Both moves land in the SAME transaction (RunClose -> CrossBuy -> DeliverAsset),
+--   so the cross is atomic. The operator signs the resulting SettlementReceipt —
+--   the exchange's confirm — and a SettlementBatch records the whole close.
+-- ===========================================================================
+
+module MarketOnClose where
+
+import Holding
+import Settlement
+
+-- Order side. Deriving Eq/Show so choices can compare and reports can print it.
+data Side = Buy | Sell
+  deriving (Eq, Show)
+
+-- A matched pair the operator submits to RunClose: one buy order crossed with
+-- one sell order. (In a fuller engine the operator would derive these from the
+-- book; here the operator supplies the crossing pairs explicitly.)
+data Match = Match
+  with
+    buyOrder  : ContractId SealedOrder
+    sellOrder : ContractId SealedOrder
+  deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- ClosingAuction — the venue's call auction for one instrument.
+-- ---------------------------------------------------------------------------
+template ClosingAuction
+  with
+    operator       : Party    -- the venue / auction operator
+    auditor        : Party    -- compliance observer of the CLOSE (not the book)
+    instrumentId   : Text     -- the asset auctioned, e.g. "DEMO:AAPL"
+    cashInstrument : Text     -- the cash leg instrument, e.g. "USD"
+    participants   : [Party]  -- traders permitted to submit sealed orders
+    isOpen         : Bool     -- True while the sealed-order window accepts orders
+  where
+    signatory operator
+    -- The auditor and the registered participants can SEE that an auction exists
+    -- and (participants) submit into it — but NOT each other's sealed orders.
+    observer auditor :: participants
+
+    -- SUBMIT ORDER — a participant lodges a SEALED order and pre-commits the
+    -- holding it will deliver (cash for a buy, the asset for a sell). Nonconsuming
+    -- so many traders submit against the same auction.
+    nonconsuming choice SubmitOrder : ContractId SealedOrder
+      with
+        trader     : Party              -- the submitting participant
+        side       : Side               -- Buy or Sell
+        quantity   : Decimal            -- units of the asset to buy/sell
+        limitPrice : Decimal            -- worst acceptable price (buy: max, sell: min)
+        holdingCid : ContractId Holding -- pre-committed: cash (Buy) or asset (Sell)
+      controller trader
+      do
+        assertMsg "the sealed-order window is closed"          isOpen
+        assertMsg "quantity must be positive"                  (quantity > 0.0)
+        assertMsg "limit price must be positive"               (limitPrice > 0.0)
+        assertMsg "submitter must be a registered participant"  (trader `elem` participants)
+        -- Sanity-check the pre-committed holding actually belongs to the trader.
+        h <- fetch holdingCid
+        assertMsg "committed holding must belong to the trader" (h.owner == trader)
+        create SealedOrder with
+          operator; auditor; trader
+          instrumentId; cashInstrument
+          side; quantity; limitPrice; holdingCid
+
+    -- CLOSE BIDDING — the operator seals the window (no more orders). Recreates
+    -- the auction with isOpen = False so RunClose runs against a sealed book.
+    choice CloseBidding : ContractId ClosingAuction
+      controller operator
+      do create this with isOpen = False
+
+    -- RUN CLOSE — the headline. The operator supplies the crossing pairs and the
+    -- official closing price; every matched pair settles at that ONE price in
+    -- this single transaction. All-or-nothing: if any cross fails a check, the
+    -- WHOLE close rolls back — no partial print.
+    choice RunClose : ContractId SettlementBatch
+      with
+        closingPrice : Decimal
+        matches      : [Match]
+      controller operator
+      do
+        assertMsg "closing price must be positive" (closingPrice > 0.0)
+        -- Settle each matched pair at the closing price, collecting the fills.
+        fills <- mapA
+          (\m -> exercise m.buyOrder CrossBuy with sellCid = m.sellOrder; closingPrice)
+          matches
+        -- Emit the immutable batch record (the venue's signed proof of the close).
+        now <- getTime
+        create SettlementBatch with
+          operator; auditor; instrumentId; closingPrice
+          fills
+          traders = participants
+          settledAt = now
+
+-- ---------------------------------------------------------------------------
+-- SealedOrder — a single PRIVATE order resting in the auction.
+-- ---------------------------------------------------------------------------
+-- THE DARK-POOL PRIMITIVE. Signed by operator + trader, observed by NOBODY else
+-- (not other participants, not the auditor). While it rests, only the venue and
+-- the trader who placed it know it exists — its side, size, and limit are hidden
+-- from the rest of the market. This is what a transparent chain cannot provide
+-- and what makes an honest sealed auction possible.
+template SealedOrder
+  with
+    operator       : Party
+    auditor        : Party
+    trader         : Party            -- the order owner
+    instrumentId   : Text
+    cashInstrument : Text
+    side           : Side
+    quantity       : Decimal
+    limitPrice     : Decimal
+    holdingCid     : ContractId Holding -- pre-committed cash (Buy) or asset (Sell)
+  where
+    -- Operator + trader only. Deliberately NO further observer — the venue
+    -- discloses fills (SettlementReceipt), never the resting book.
+    signatory operator, trader
+
+    -- CROSS BUY — exercised on the BUY order during RunClose. Here the BUYER's
+    -- authority is in scope (the buyer signs this order), so the buyer's cash can
+    -- move. It reaches into the SELL order (via DeliverAsset) to move the
+    -- seller's asset, and the operator signs the venue confirm. Consuming: the
+    -- buy order is filled and archived.
+    choice CrossBuy : FillRecord
+      with
+        sellCid      : ContractId SealedOrder
+        closingPrice : Decimal
+      controller operator
+      do
+        assertMsg "CrossBuy must be exercised on a BUY order"   (side == Buy)
+        assertMsg "buy limit must be >= the closing price"       (limitPrice >= closingPrice)
+
+        sell <- fetch sellCid
+        assertMsg "counter order must be a SELL order"           (sell.side == Sell)
+        assertMsg "sell limit must be <= the closing price"      (sell.limitPrice <= closingPrice)
+        assertMsg "orders must be for the same instrument"       (sell.instrumentId == instrumentId)
+        assertMsg "orders must share the same operator"          (sell.operator == operator)
+        assertMsg "orders must share the same cash instrument"   (sell.cashInstrument == cashInstrument)
+
+        -- Matched quantity = the smaller of the two orders. (This demo fully
+        -- consumes both orders even on a partial cross; a fuller book would rest
+        -- the remainder — see JOURNAL for the roadmap note.)
+        let fillQty = min quantity sell.quantity
+        assertMsg "fill quantity must be positive" (fillQty > 0.0)
+        let cashDue = fillQty * closingPrice
+
+        -- CASH LEG — buyer pays the seller. Buyer authority present (buyer signs
+        -- THIS buy order). deliverExact splits change back to the buyer if the
+        -- committed cash holding exceeds cashDue.
+        _cashToSeller <- deliverExact holdingCid cashDue sell.trader
+
+        -- ASSET LEG — reach into the SELL order, where the SELLER's authority
+        -- lives, to move the seller's asset to the buyer.
+        _assetToBuyer <- exercise sellCid DeliverAsset with
+          buyer = trader
+          fillQty
+
+        -- VENUE CONFIRM — the operator signs the settlement receipt (the exchange
+        -- confirm); the two traders and the auditor observe it. Operator authority
+        -- present (operator signs this order).
+        now <- getTime
+        receipt <- create SettlementReceipt with
+          seller = sell.trader
+          buyer = trader
+          venue = Some operator
+          auditor
+          assetInstrument = instrumentId
+          assetAmount = fillQty
+          cashInstrument
+          cashAmount = cashDue
+          unitPrice = closingPrice
+          settledAt = now
+
+        pure FillRecord with
+          seller = sell.trader
+          buyer = trader
+          quantity = fillQty
+          price = closingPrice
+          receipt
+
+    -- DELIVER ASSET — exercised (by CrossBuy) on the SELL order to move the
+    -- seller's committed asset to the buyer. Seller authority present (seller
+    -- signs this order). Consuming: the sell order is filled and archived.
+    choice DeliverAsset : ContractId Holding
+      with
+        buyer   : Party
+        fillQty : Decimal
+      controller operator
+      do
+        assertMsg "DeliverAsset must be exercised on a SELL order" (side == Sell)
+        assertMsg "fill exceeds the sell order quantity"           (fillQty <= quantity)
+        -- change (unsold asset) returns to the seller.
+        deliverExact holdingCid fillQty buyer
+
+    -- CANCEL — the trader pulls a resting order before the close. Consuming; the
+    -- pre-committed holding is untouched (it was never moved).
+    choice Cancel : ()
+      controller trader
+      do pure ()

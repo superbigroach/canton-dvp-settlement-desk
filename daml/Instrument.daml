@@ -1,0 +1,83 @@
+-- Instrument.daml
+-- ===========================================================================
+-- TOKENISED-ASSET REFERENCE DATA — the "what is this thing" layer.
+-- ===========================================================================
+-- This models the *definition* of a tradable asset (its issuer, kind, and
+-- reference price), SEPARATELY from any particular holding of it. That split —
+-- Instrument (the definition) vs. Holding (a balance of it) — is the exact shape
+-- Daml Finance uses, and it is the reason the same settlement engine can move an
+-- equity, a cash deposit, and a wrapped crypto asset with identical code.
+--
+-- MAPPING TO DAML FINANCE (see docs/DAML_FINANCE_INTEGRATION.md)
+--   * `InstrumentKey` here  == `Daml.Finance.Interface.Types.Common.Types.InstrumentKey`
+--     (the {issuer, depository, id, version} 4-tuple that uniquely names an
+--     instrument across the whole network).
+--   * `Instrument` here     == the contract a `Daml.Finance.Instrument.Token.V4`
+--     Factory would create. We ship a self-contained version so the project
+--     compiles with only the SDK's standard library (no external .dar version
+--     pinning); swapping in the real library is a documented, low-risk upgrade.
+--
+-- WE INSTANTIATE THREE INSTRUMENTS in this project (see Test.daml):
+--   * DEMO:AAPL  — a tokenised equity (kind = "Equity", referencePrice 255.0).
+--   * USD        — a tokenised cash / bank-deposit token (kind = "Cash").
+--   * cETH       — wrapped Ethereum on Canton, by onRails (kind = "CryptoWrapped").
+-- ===========================================================================
+
+module Instrument where
+
+-- ---------------------------------------------------------------------------
+-- InstrumentKey — the canonical, network-wide name of an instrument.
+-- ---------------------------------------------------------------------------
+-- Four fields, exactly like Daml Finance:
+--   * issuer     — the party economically responsible for the instrument.
+--   * depository — the party that maintains its reference data / registry
+--                  (often == issuer for a simple token; kept distinct so the
+--                  shape matches Daml Finance and a custodian model drops in).
+--   * id         — the human-facing symbol, e.g. "DEMO:AAPL", "USD", "cETH".
+--   * version    — lets an issuer supersede reference data without changing id.
+-- Deriving Ord so it can be used as a contract key and sorted in reports.
+data InstrumentKey = InstrumentKey
+  with
+    issuer     : Party
+    depository : Party
+    id         : Text
+    version    : Text
+  deriving (Eq, Show, Ord)
+
+-- ---------------------------------------------------------------------------
+-- Instrument — the on-ledger definition of a tradable asset.
+-- ---------------------------------------------------------------------------
+template Instrument
+  with
+    issuer         : Party            -- obligor / registrar (onRails for cETH, a bank for USD)
+    depository     : Party            -- reference-data maintainer (== issuer here)
+    id             : Text             -- "DEMO:AAPL" | "USD" | "cETH"
+    version        : Text             -- reference-data version, e.g. "1"
+    kind           : Text             -- "Equity" | "Cash" | "CryptoWrapped"
+    description     : Text            -- human description
+    referencePrice : Optional Decimal -- last/indicative price in the cash unit (None for cash)
+  where
+    -- Only the issuer signs the definition — nobody can forge an instrument in
+    -- the issuer's name. The depository observes the reference data.
+    signatory issuer
+    observer depository
+
+    -- Contract key: an instrument is uniquely identified by its InstrumentKey.
+    -- This is what lets holdings/settlement refer to an instrument by NAME and
+    -- resolve it, exactly as Daml Finance does. Maintainer must be a signatory.
+    key (InstrumentKey issuer depository id version) : InstrumentKey
+    maintainer key.issuer
+
+    -- The issuer republishes the reference/closing price (e.g. the auction
+    -- operator's mark, or an end-of-day fix). Consuming: it supersedes the old
+    -- reference-data record in one atomic step.
+    choice SetReferencePrice : ContractId Instrument
+      with
+        newPrice : Decimal
+      controller issuer
+      do
+        create this with referencePrice = Some newPrice
+
+-- Convenience: build this Instrument's key. Handy in tests and settlement code.
+instrumentKey : Instrument -> InstrumentKey
+instrumentKey i = InstrumentKey i.issuer i.depository i.id i.version

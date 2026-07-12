@@ -1,20 +1,30 @@
 -- Test.daml
 -- ===========================================================================
--- DAML SCRIPT tests for the Private cETH Settlement Desk. Run them all with:
+-- DAML SCRIPT scenarios for the Private Settlement Desk. Run them all with:
 --
 --     daml test
 --
--- DAML Script runs against a ledger (the in-memory one under `daml test`, or a
+-- Daml Script runs against a ledger (the in-memory one under `daml test`, or a
 -- real Canton ledger under `daml script`). It can allocate parties, submit
--- commands, and QUERY what each party can see — which is exactly how we PROVE
--- the privacy model, not just assert it in prose.
+-- commands, and QUERY what each party can see — which is exactly how we PROVE the
+-- privacy model, not merely assert it in prose.
 --
--- Assertion helpers:
+-- Assertion helpers used below:
 --   submit p cmds          — p submits; MUST succeed (else the test fails).
 --   submitMustFail p cmds  — p submits; MUST fail   (proves a guard/limit works).
---   submitMulti [a,b] [] c — a and b jointly authorise (multi-controller choice).
---   queryContractId p cid  — Some c if p can SEE cid, else None (the privacy probe).
+--   query @T p             — the contracts of template T that p can SEE (privacy probe).
+--   queryContractId p cid  — Some c if p can SEE cid, else None.
 --   (===) / assertMsg      — fail the script if a predicate is false.
+--
+-- END-TO-END COVERAGE:
+--   testInstrumentAndHolding — reference data + mint/transfer/split/merge.
+--   testBilateralDvP         — Alice buys AAPL from Bob for USD, atomically.
+--   testMarketOnClose        — a sealed-order MOC auction: many orders → one
+--                              close price → atomic BATCH settlement.
+--   testDarkPoolPrivacy      — a non-party (and even a rival participant) cannot
+--                              see a resting sealed order.
+--   testAtomicRollback       — a bad leg rolls the WHOLE settlement back.
+--   testAgentInitiatedDvP    — an agent settles cETH within a ledger-enforced mandate.
 -- ===========================================================================
 
 module Test where
@@ -23,16 +33,21 @@ import Daml.Script
 import DA.Assert ((===))
 import DA.Optional (isNone, isSome)
 
-import Token
+import Instrument
+import Holding
 import Settlement
+import MarketOnClose
 import Agent
 
--- Instrument constants — keep string literals consistent across tests.
-cETH : Text
-cETH = "cETH"
+-- Instrument ids — keep string literals consistent across scenarios.
+aapl : Text
+aapl = "DEMO:AAPL"
 
-usdc : Text
-usdc = "USDC"
+usd : Text
+usd = "USD"
+
+ceth : Text
+ceth = "cETH"
 
 -- ---------------------------------------------------------------------------
 -- Shared party set. `daml.yaml`'s init-script (Test:initialize) reuses this so
@@ -40,308 +55,347 @@ usdc = "USDC"
 -- ---------------------------------------------------------------------------
 data Parties = Parties
   with
-    issuer    : Party   -- issuer/registrar for cETH & cash (stands in for onRails + a bank)
-    alice     : Party   -- MAKER: holds cETH, wants cash
-    bob       : Party   -- COUNTERPARTY: holds cash, wants cETH
-    regulator : Party   -- compliance AUDITOR: observer of settlements only
-    agent     : Party   -- Alice's authorised trading agent (the agentic angle)
-    eve       : Party   -- OUTSIDER: party to nothing (the privacy control)
+    issuer  : Party   -- registrar/obligor for the tokenised instruments (stands in for onRails + a bank)
+    venue   : Party   -- the Market-on-Close auction operator (the exchange)
+    alice   : Party   -- trader
+    bob     : Party   -- trader
+    bank    : Party   -- another trader / liquidity provider
+    auditor : Party   -- compliance observer of settlements (need-to-know)
+    agent   : Party   -- Alice's authorised trading agent (the agentic angle)
+    eve     : Party   -- OUTSIDER: party to nothing (the privacy control)
 
 setup : Script Parties
 setup = do
-  issuer    <- allocatePartyWithHint "Issuer"    (PartyIdHint "Issuer")
-  alice     <- allocatePartyWithHint "Alice"     (PartyIdHint "Alice")
-  bob       <- allocatePartyWithHint "Bob"       (PartyIdHint "Bob")
-  regulator <- allocatePartyWithHint "Regulator" (PartyIdHint "Regulator")
-  agent     <- allocatePartyWithHint "Agent"     (PartyIdHint "Agent")
-  eve       <- allocatePartyWithHint "Eve"       (PartyIdHint "Eve")
-  pure (Parties issuer alice bob regulator agent eve)
+  issuer  <- allocatePartyWithHint "Issuer"  (PartyIdHint "Issuer")
+  venue   <- allocatePartyWithHint "Venue"   (PartyIdHint "Venue")
+  alice   <- allocatePartyWithHint "Alice"   (PartyIdHint "Alice")
+  bob     <- allocatePartyWithHint "Bob"     (PartyIdHint "Bob")
+  bank    <- allocatePartyWithHint "Bank"    (PartyIdHint "Bank")
+  auditor <- allocatePartyWithHint "Auditor" (PartyIdHint "Auditor")
+  agent   <- allocatePartyWithHint "Agent"   (PartyIdHint "Agent")
+  eve     <- allocatePartyWithHint "Eve"     (PartyIdHint "Eve")
+  pure (Parties issuer venue alice bob bank auditor agent eve)
+
+-- Publish the three tokenised instruments (the reference-data layer). onRails is
+-- the real cETH issuer on Devnet — here one `issuer` stands in for all three.
+setupInstruments : Party -> Script ()
+setupInstruments issuer = do
+  _ <- submit issuer do
+    createCmd Instrument with
+      issuer; depository = issuer; id = aapl; version = "1"
+      kind = "Equity"; description = "Demo tokenised equity (AAPL-like)"
+      referencePrice = Some 255.0
+  _ <- submit issuer do
+    createCmd Instrument with
+      issuer; depository = issuer; id = usd; version = "1"
+      kind = "Cash"; description = "Tokenised USD cash / bank deposit"
+      referencePrice = None
+  _ <- submit issuer do
+    createCmd Instrument with
+      issuer; depository = issuer; id = ceth; version = "1"
+      kind = "CryptoWrapped"; description = "Wrapped ETH on Canton (onRails cETH)"
+      referencePrice = Some 2500.0
+  pure ()
+
+-- Mint a holding to `owner` (only the issuer signs).
+mint : Party -> Text -> Party -> Decimal -> Script (ContractId Holding)
+mint issuer instrumentId owner amount =
+  submit issuer do createCmd Holding with issuer; instrumentId; owner; amount
+
+-- Total units of `inst` that party `p` currently owns (sums over holdings p sees).
+ownedAmount : Party -> Text -> Script Decimal
+ownedAmount p inst = do
+  hs <- query @Holding p
+  pure $ foldl
+    (\acc (_, h) -> if h.instrumentId == inst && h.owner == p then acc + h.amount else acc)
+    0.0 hs
 
 -- ---------------------------------------------------------------------------
--- initialize — the `daml start` init-script. Allocates parties and seeds a live
--- DvP proposal so you can log into Navigator as Bob and exercise Settle.
+-- initialize — the `daml start` init-script. Allocates parties, publishes the
+-- instruments, seeds holdings, and posts a live DvP proposal so you can log into
+-- Navigator as Alice and Accept, then as Bob and Settle.
 -- ---------------------------------------------------------------------------
 initialize : Script ()
 initialize = do
-  Parties issuer alice bob regulator _agent _eve <- setup
+  Parties{..} <- setup
+  setupInstruments issuer
 
-  -- Alice holds 5 cETH; Bob holds 12,500 USDC (≈ ETH at ~2,500).
-  cethCid <- submit issuer do
-    createCmd Token with issuer; owner = alice; instrument = cETH; amount = 5.0
-  cashCid <- submit issuer do
-    createCmd Token with issuer; owner = bob; instrument = usdc; amount = 12500.0
+  -- Bob (the SELLER) holds 10 AAPL; Alice (the BUYER) holds 2,550 USD.
+  bobAapl   <- mint issuer aapl bob   10.0
+  aliceCash <- mint issuer usd  alice 2550.0
 
-  -- Alice proposes: give 5 cETH, receive 12,500 USDC from Bob. Regulator audits.
-  _ <- submit alice do
-    createCmd SettlementProposal with
-      maker = alice
-      counterparty = bob
-      auditor = regulator
-      cethCid
-      cashCid
-      cethInstrument = cETH
-      cethAmount = 5.0
-      cashInstrument = usdc
-      cashAmount = 12500.0
-
+  -- Bob proposes to sell 10 AAPL for 2,550 USD (255.0 each). Alice is counterparty.
+  _ <- submit bob do
+    createCmd DvPProposal with
+      proposer = bob
+      counterparty = alice
+      auditor
+      assetHoldingCid = bobAapl
+      cashHoldingCid = aliceCash
+      assetInstrument = aapl
+      assetAmount = 10.0
+      cashInstrument = usd
+      cashAmount = 2550.0
   pure ()
 
 -- ---------------------------------------------------------------------------
--- TEST 1 — Issue a cETH holding and transfer it.
--- Demonstrates: create by the issuer signatory, a consuming choice, and that a
--- transfer produces a fresh holding owned by the new owner (old one archived).
+-- TEST 1 — Reference data + holding lifecycle.
 -- ---------------------------------------------------------------------------
-testTokenIssueAndTransfer : Script ()
-testTokenIssueAndTransfer = do
-  Parties issuer alice bob _regulator _agent _eve <- setup
+testInstrumentAndHolding : Script ()
+testInstrumentAndHolding = do
+  Parties{..} <- setup
+  setupInstruments issuer
 
-  -- Issuer mints 3 cETH to Alice. Only the issuer signs, so `submit issuer`
-  -- suffices; Alice is the observer/holder and does not co-authorise.
-  cethCid <- submit issuer do
-    createCmd Token with issuer; owner = alice; instrument = cETH; amount = 3.0
+  -- Mint 3 cETH to Alice; only the issuer signs.
+  cethCid <- mint issuer ceth alice 3.0
 
   -- Alice transfers the cETH to Bob. No consent from Bob needed: the successor
   -- is issuer-signed (delegated) and Bob merely becomes the new observer/holder.
-  cethCid2 <- submit alice do
-    exerciseCmd cethCid Transfer with newOwner = bob
-
+  cethCid2 <- submit alice do exerciseCmd cethCid Transfer with newOwner = bob
   Some now <- queryContractId bob cethCid2
-  now.owner      === bob
-  now.issuer     === issuer
-  now.instrument === cETH
-  now.amount     === 3.0
-
-  -- The original holding was consumed by the transfer: no longer active.
+  now.owner        === bob
+  now.instrumentId === ceth
+  now.amount       === 3.0
   archived <- queryContractId alice cethCid
   assertMsg "original cETH holding must be archived after transfer" (isNone archived)
 
--- ---------------------------------------------------------------------------
--- TEST 2 — Split and Merge holdings (standard token operations).
--- ---------------------------------------------------------------------------
-testTokenSplitAndMerge : Script ()
-testTokenSplitAndMerge = do
-  Parties issuer alice _bob _regulator _agent _eve <- setup
-
-  cethCid <- submit issuer do
-    createCmd Token with issuer; owner = alice; instrument = cETH; amount = 10.0
-
-  -- Split 10 cETH into a 4 delivery part and a 6 change part.
-  (deliverCid, changeCid) <- submit alice do
-    exerciseCmd cethCid Split with splitAmount = 4.0
-  Some deliver <- queryContractId alice deliverCid
-  Some change  <- queryContractId alice changeCid
-  deliver.amount === 4.0
-  change.amount  === 6.0
-
-  -- Merge them back into one 10 cETH holding.
-  mergedCid <- submit alice do
-    exerciseCmd deliverCid Merge with otherCid = changeCid
-  Some merged <- queryContractId alice mergedCid
-  merged.amount === 10.0
-
-  -- Splitting more than you hold must fail (guard).
-  submitMustFail alice do
-    exerciseCmd mergedCid Split with splitAmount = 99.0
+  -- Split and merge (the partial-fill primitive).
+  bigCid <- mint issuer aapl alice 10.0
+  (deliverCid, changeCid) <- submit alice do exerciseCmd bigCid Split with splitAmount = 4.0
+  Some d <- queryContractId alice deliverCid
+  Some c <- queryContractId alice changeCid
+  d.amount === 4.0
+  c.amount === 6.0
+  mergedCid <- submit alice do exerciseCmd deliverCid Merge with otherCid = changeCid
+  Some m <- queryContractId alice mergedCid
+  m.amount === 10.0
+  -- Over-splitting must fail.
+  submitMustFail alice do exerciseCmd mergedCid Split with splitAmount = 99.0
 
 -- ---------------------------------------------------------------------------
--- TEST 3 — Atomic cETH-vs-cash DvP settlement (the headline flow).
--- Alice delivers 5 cETH and receives 12,500 USDC from Bob in a SINGLE atomic
--- transaction, and an immutable audit receipt is written in the same tx.
+-- TEST 2 — Bilateral atomic DvP: Alice buys AAPL from Bob paying USD.
+-- Both legs move in ONE transaction; a bilateral audit receipt is written in the
+-- same tx; the auditor sees the receipt but NOT the underlying holdings.
 -- ---------------------------------------------------------------------------
-testAtomicDvP : Script ()
-testAtomicDvP = do
-  Parties issuer alice bob regulator _agent _eve <- setup
+testBilateralDvP : Script ()
+testBilateralDvP = do
+  Parties{..} <- setup
 
-  cethCid <- submit issuer do
-    createCmd Token with issuer; owner = alice; instrument = cETH; amount = 5.0
-  cashCid <- submit issuer do
-    createCmd Token with issuer; owner = bob; instrument = usdc; amount = 12500.0
+  bobAapl   <- mint issuer aapl bob   10.0    -- Bob (seller) delivers the asset
+  aliceCash <- mint issuer usd  alice 2550.0  -- Alice (buyer) delivers the cash
 
-  -- Alice PROPOSES the swap; Bob and the Regulator are observers.
-  propCid <- submit alice do
-    createCmd SettlementProposal with
-      maker = alice
-      counterparty = bob
-      auditor = regulator
-      cethCid
-      cashCid
-      cethInstrument = cETH
-      cethAmount = 5.0
-      cashInstrument = usdc
-      cashAmount = 12500.0
+  -- Bob proposes; Alice + the auditor are observers.
+  propCid <- submit bob do
+    createCmd DvPProposal with
+      proposer = bob; counterparty = alice; auditor
+      assetHoldingCid = bobAapl; cashHoldingCid = aliceCash
+      assetInstrument = aapl; assetAmount = 10.0
+      cashInstrument = usd;   cashAmount = 2550.0
 
-  -- PRIVACY: Bob sees the proposal (observer); so does the Regulator.
-  bobSees <- queryContractId bob propCid
-  regSees <- queryContractId regulator propCid
-  assertMsg "counterparty must see the proposal he is party to" (isSome bobSees)
-  assertMsg "auditor must see the proposal it audits"           (isSome regSees)
+  -- PRIVACY: Alice sees the proposal (observer); so does the auditor.
+  assertMsg "buyer must see the proposal"  . isSome =<< queryContractId alice propCid
+  assertMsg "auditor must see the proposal" . isSome =<< queryContractId auditor propCid
 
-  -- Bob ACCEPTS -> both legs settle atomically in one transaction.
-  res <- submit bob do
-    exerciseCmd propCid Settle
+  -- Alice ACCEPTS -> a bilaterally-signed agreement; Bob SETTLES -> atomic swap.
+  agreeCid <- submit alice do exerciseCmd propCid Accept
+  res      <- submit bob   do exerciseCmd agreeCid Settle
 
-  -- Post-conditions: ownership has swapped, amounts preserved.
-  Some cethNow <- queryContractId bob res.deliveredCeth
-  cethNow.owner  === bob
-  cethNow.amount === 5.0
+  -- Ownership swapped, amounts preserved.
+  Some aaplNow <- queryContractId alice res.deliveredAsset
+  aaplNow.owner  === alice
+  aaplNow.amount === 10.0
+  Some cashNow <- queryContractId bob res.deliveredCash
+  cashNow.owner  === bob
+  cashNow.amount === 2550.0
 
-  Some cashNow <- queryContractId alice res.deliveredCash
-  cashNow.owner  === alice
-  cashNow.amount === 12500.0
+  -- AUDIT: the auditor sees the receipt (the trade)...
+  Some receipt <- queryContractId auditor res.receipt
+  receipt.assetAmount === 10.0
+  receipt.cashAmount  === 2550.0
+  receipt.unitPrice   === 255.0
 
-  -- AUDIT: the receipt exists and the Regulator can see it...
-  Some receipt <- queryContractId regulator res.receipt
-  receipt.cethAmount === 5.0
-  receipt.cashAmount === 12500.0
+  -- ...but NOT the underlying holdings (issuer + owner only). Need-to-know.
+  assertMsg "auditor must NOT see the delivered asset" . isNone =<< queryContractId auditor res.deliveredAsset
+  assertMsg "auditor must NOT see the delivered cash"  . isNone =<< queryContractId auditor res.deliveredCash
 
-  -- ...but the auditor still CANNOT see the underlying holdings (issuer+owner
-  -- only). The compliance view is need-to-know: the trades, not the whole book.
-  regCethView <- queryContractId regulator res.deliveredCeth
-  regCashView <- queryContractId regulator res.deliveredCash
-  assertMsg "auditor must NOT see the delivered cETH holding" (isNone regCethView)
-  assertMsg "auditor must NOT see the delivered cash holding"  (isNone regCashView)
+  -- OUTSIDER: Eve sees nothing and cannot settle someone else's trade.
+  assertMsg "outsider must not see the asset holding" . isNone =<< queryContractId eve bobAapl
 
 -- ---------------------------------------------------------------------------
--- TEST 4 — PRIVACY & AUTHORISATION: an outsider (Eve) sees nothing and cannot
--- settle someone else's trade.
+-- TEST 3 — Market-on-Close: a sealed-order call auction that settles a BATCH
+-- of crosses atomically at ONE closing price.
 -- ---------------------------------------------------------------------------
-testOutsiderCannotSeeOrSettle : Script ()
-testOutsiderCannotSeeOrSettle = do
-  Parties issuer alice bob regulator _agent eve <- setup
+-- Book (all AAPL, cash in USD; sealed — nobody sees anyone else's order):
+--   SELL  Bob    10 @ 250      BUY  Alice 10 @ 260  (commits 2,600 USD)
+--   SELL  Carol   8 @ 253      BUY  Dave   8 @ 256  (commits 2,040 USD)
+-- Operator sets the close at 255.0. Both pairs cross; the batch prints at 255.
+-- ---------------------------------------------------------------------------
+testMarketOnClose : Script ()
+testMarketOnClose = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  carol <- allocatePartyWithHint "Carol" (PartyIdHint "Carol")
+  dave  <- allocatePartyWithHint "Dave"  (PartyIdHint "Dave")
 
-  cethCid <- submit issuer do
-    createCmd Token with issuer; owner = alice; instrument = cETH; amount = 5.0
-  cashCid <- submit issuer do
-    createCmd Token with issuer; owner = bob; instrument = usdc; amount = 12500.0
-  propCid <- submit alice do
-    createCmd SettlementProposal with
-      maker = alice
-      counterparty = bob
-      auditor = regulator
-      cethCid
-      cashCid
-      cethInstrument = cETH
-      cethAmount = 5.0
-      cashInstrument = usdc
-      cashAmount = 12500.0
+  -- Sellers pre-hold the asset; buyers pre-hold cash to commit.
+  bobAsset   <- mint issuer aapl bob   10.0
+  carolAsset <- mint issuer aapl carol 8.0
+  aliceCash  <- mint issuer usd  alice 2600.0
+  daveCash   <- mint issuer usd  dave  2040.0
 
-  -- PRIVACY: Eve is neither signatory nor observer of ANYTHING here. From her
-  -- participant node these contracts DO NOT EXIST — every query returns None.
-  eveCeth <- queryContractId eve cethCid
-  eveCash <- queryContractId eve cashCid
-  eveProp <- queryContractId eve propCid
-  assertMsg "outsider must not see the cETH"      (isNone eveCeth)
-  assertMsg "outsider must not see the cash"       (isNone eveCash)
-  assertMsg "outsider must not see the proposal"   (isNone eveProp)
+  -- The venue opens the auction for AAPL with four registered participants.
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usd
+      participants = [alice, bob, carol, dave]; isOpen = True
 
-  -- AUTHORISATION: even if Eve somehow learned the contract id, she is not the
-  -- `counterparty` controller of Settle, so the submit MUST fail.
-  submitMustFail eve do
-    exerciseCmd propCid Settle
+  -- Each participant lodges a SEALED order, pre-committing its holding.
+  bobSell <- submit bob do
+    exerciseCmd auctionCid SubmitOrder with
+      trader = bob; side = Sell; quantity = 10.0; limitPrice = 250.0; holdingCid = bobAsset
+  carolSell <- submit carol do
+    exerciseCmd auctionCid SubmitOrder with
+      trader = carol; side = Sell; quantity = 8.0; limitPrice = 253.0; holdingCid = carolAsset
+  aliceBuy <- submit alice do
+    exerciseCmd auctionCid SubmitOrder with
+      trader = alice; side = Buy; quantity = 10.0; limitPrice = 260.0; holdingCid = aliceCash
+  daveBuy <- submit dave do
+    exerciseCmd auctionCid SubmitOrder with
+      trader = dave; side = Buy; quantity = 8.0; limitPrice = 256.0; holdingCid = daveCash
 
-  -- Nor can Eve move Alice's cETH (she is not its owner).
-  submitMustFail eve do
-    exerciseCmd cethCid Transfer with newOwner = eve
+  -- DARK POOL: even a registered participant cannot see a RIVAL's sealed order.
+  assertMsg "Carol must NOT see Alice's sealed order" . isNone =<< queryContractId carol aliceBuy
+  assertMsg "Bob must NOT see Dave's sealed order"     . isNone =<< queryContractId bob daveBuy
+
+  -- The operator seals the window, then runs the close at 255.0, matching the
+  -- two crossing pairs. Both fills settle in ONE atomic transaction.
+  closedCid <- submit venue do exerciseCmd auctionCid CloseBidding
+  batchCid  <- submit venue do
+    exerciseCmd closedCid RunClose with
+      closingPrice = 255.0
+      matches = [ Match with buyOrder = aliceBuy; sellOrder = bobSell
+                , Match with buyOrder = daveBuy;  sellOrder = carolSell ]
+
+  -- The batch record exists and prints two fills at 255.0; the auditor sees it.
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 255.0
+  length batch.fills === 2
+
+  -- Post-close ownership: buyers hold the asset, sellers hold the cash.
+  aliceAapl <- ownedAmount alice aapl
+  daveAapl  <- ownedAmount dave  aapl
+  bobUsd    <- ownedAmount bob   usd
+  carolUsd  <- ownedAmount carol usd
+  aliceAapl === 10.0            -- Alice bought 10 AAPL
+  daveAapl  === 8.0             -- Dave bought 8 AAPL
+  bobUsd    === 2550.0          -- Bob sold 10 @ 255
+  carolUsd  === 2040.0          -- Carol sold 8 @ 255
+  -- Alice committed 2,600 USD but paid 2,550 — 50 USD change returned to her.
+  aliceUsd <- ownedAmount alice usd
+  aliceUsd === 50.0
 
 -- ---------------------------------------------------------------------------
--- TEST 5 — ATOMIC ROLLBACK: if a leg's precondition fails, the WHOLE settlement
--- rolls back. No principal risk — the maker keeps her cETH.
+-- TEST 4 — DARK-POOL PRIVACY: an outsider (Eve) sees no order, no holding, no
+-- batch — and cannot settle anything.
+-- ---------------------------------------------------------------------------
+testDarkPoolPrivacy : Script ()
+testDarkPoolPrivacy = do
+  Parties{..} <- setup
+
+  aliceCash <- mint issuer usd alice 2550.0
+  bobAsset  <- mint issuer aapl bob  10.0
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usd
+      participants = [alice, bob]; isOpen = True
+  aliceBuy <- submit alice do
+    exerciseCmd auctionCid SubmitOrder with
+      trader = alice; side = Buy; quantity = 10.0; limitPrice = 260.0; holdingCid = aliceCash
+
+  -- Eve is party to NOTHING. From her participant these contracts do not exist.
+  eveOrders   <- query @SealedOrder eve
+  eveHoldings <- query @Holding eve
+  eveAuction  <- queryContractId eve auctionCid
+  assertMsg "outsider must see zero sealed orders" (null eveOrders)
+  assertMsg "outsider must see zero holdings"      (null eveHoldings)
+  assertMsg "outsider must not see the auction"    (isNone eveAuction)
+
+  -- Eve cannot move Alice's cash, nor settle into the sealed book.
+  submitMustFail eve do exerciseCmd aliceCash Transfer with newOwner = eve
+  submitMustFail eve do exerciseCmd aliceBuy  Cancel
+
+-- ---------------------------------------------------------------------------
+-- TEST 5 — ATOMIC ROLLBACK: a leg precondition fails, so the WHOLE settlement
+-- rolls back. No principal risk — the seller keeps his asset.
 -- ---------------------------------------------------------------------------
 testAtomicRollback : Script ()
 testAtomicRollback = do
-  Parties issuer alice bob regulator _agent _eve <- setup
+  Parties{..} <- setup
 
-  cethCid <- submit issuer do
-    createCmd Token with issuer; owner = alice; instrument = cETH; amount = 5.0
-  -- Bob's cash is only 12,000 — but the proposal states a price of 12,500.
-  cashCid <- submit issuer do
-    createCmd Token with issuer; owner = bob; instrument = usdc; amount = 12000.0
-  propCid <- submit alice do
-    createCmd SettlementProposal with
-      maker = alice
-      counterparty = bob
-      auditor = regulator
-      cethCid
-      cashCid
-      cethInstrument = cETH
-      cethAmount = 5.0
-      cashInstrument = usdc
-      cashAmount = 12500.0   -- disagrees with the actual 12,000 cash
+  bobAapl   <- mint issuer aapl bob   10.0
+  -- Alice's cash is only 2,500 — but the proposal states a price of 2,550.
+  aliceCash <- mint issuer usd  alice 2500.0
+  propCid <- submit bob do
+    createCmd DvPProposal with
+      proposer = bob; counterparty = alice; auditor
+      assetHoldingCid = bobAapl; cashHoldingCid = aliceCash
+      assetInstrument = aapl; assetAmount = 10.0
+      cashInstrument = usd;   cashAmount = 2550.0   -- disagrees with the actual 2,500
 
-  -- Settle asserts cash.amount == cashAmount (12000 /= 12500) -> whole tx aborts.
-  submitMustFail bob do
-    exerciseCmd propCid Settle
+  agreeCid <- submit alice do exerciseCmd propCid Accept
+  -- Settle asserts cash.amount == cashAmount (2500 /= 2550) -> whole tx aborts.
+  submitMustFail bob do exerciseCmd agreeCid Settle
 
-  -- Because Settle failed ATOMICALLY, the cETH is STILL owned by Alice.
-  Some cethStill <- queryContractId alice cethCid
-  cethStill.owner  === alice
-  cethStill.amount === 5.0
-
-  -- And Bob still holds his cash — nothing moved.
-  Some cashStill <- queryContractId bob cashCid
-  cashStill.owner  === bob
-  cashStill.amount === 12000.0
+  -- Nothing moved: Bob still owns his AAPL, Alice still holds her cash.
+  Some aaplStill <- queryContractId bob bobAapl
+  aaplStill.owner  === bob
+  aaplStill.amount === 10.0
+  Some cashStill <- queryContractId alice aliceCash
+  cashStill.owner  === alice
+  cashStill.amount === 2500.0
 
 -- ---------------------------------------------------------------------------
--- TEST 6 — AGENT-INITIATED settlement within a mandate limit.
--- Alice grants an Agent a mandate to trade up to 3 cETH. An over-limit attempt
+-- TEST 6 — AGENT-INITIATED DvP within a mandate limit (settling cETH).
+-- Alice grants an Agent a mandate to sell up to 3 cETH. An over-limit attempt
 -- fails; a within-limit attempt creates a proposal that then settles atomically.
 -- ---------------------------------------------------------------------------
-testAgentInitiatedSettlement : Script ()
-testAgentInitiatedSettlement = do
-  Parties issuer alice bob regulator agent _eve <- setup
+testAgentInitiatedDvP : Script ()
+testAgentInitiatedDvP = do
+  Parties{..} <- setup
 
-  -- Alice holds 2 cETH; Bob holds 5,000 USDC.
-  cethCid <- submit issuer do
-    createCmd Token with issuer; owner = alice; instrument = cETH; amount = 2.0
-  cashCid <- submit issuer do
-    createCmd Token with issuer; owner = bob; instrument = usdc; amount = 5000.0
+  aliceCeth <- mint issuer ceth alice 2.0     -- Alice's 2 cETH to sell
+  bobCash   <- mint issuer usd  bob   5000.0  -- Bob's cash to pay
 
   -- Alice delegates: the Agent may initiate cETH settlements up to 3 cETH.
   mandateCid <- submit alice do
     createCmd TradingMandate with
-      principal = alice
-      agent
-      instrument = cETH
-      maxAmount = 3.0
+      principal = alice; agent; instrument = ceth; maxAmount = 3.0
 
-  -- OVER-LIMIT: the Agent tries to settle 2 cETH but MIS-STATES it against a
-  -- holding that is only 2 — first prove the amount-mismatch guard. Then prove
-  -- the hard limit: a 4 cETH mandate breach must fail. We do the limit breach by
-  -- attempting to move a holding larger than the cap.
-  bigCethCid <- submit issuer do
-    createCmd Token with issuer; owner = alice; instrument = cETH; amount = 4.0
+  -- OVER-LIMIT: a 4 cETH holding breaches the 3 cETH cap -> must fail.
+  bigCeth <- mint issuer ceth alice 4.0
   submitMustFail agent do
-    exerciseCmd mandateCid InitiateSettlement with
-      counterparty = bob
-      auditor = regulator
-      cethCid = bigCethCid       -- 4 cETH > mandate cap of 3
-      cashCid
-      cethAmount = 4.0
-      cashInstrument = usdc
-      cashAmount = 5000.0
+    exerciseCmd mandateCid InitiateDvP with
+      counterparty = bob; auditor
+      assetHoldingCid = bigCeth; cashHoldingCid = bobCash
+      assetAmount = 4.0; cashInstrument = usd; cashAmount = 5000.0
 
-  -- WITHIN LIMIT: the Agent initiates a valid 2 cETH settlement on Alice's
-  -- behalf. The resulting proposal is signed by Alice (maker = principal).
+  -- WITHIN LIMIT: the Agent initiates a valid 2 cETH settlement on Alice's behalf.
   propCid <- submit agent do
-    exerciseCmd mandateCid InitiateSettlement with
-      counterparty = bob
-      auditor = regulator
-      cethCid                     -- the 2 cETH holding
-      cashCid
-      cethAmount = 2.0
-      cashInstrument = usdc
-      cashAmount = 5000.0
+    exerciseCmd mandateCid InitiateDvP with
+      counterparty = bob; auditor
+      assetHoldingCid = aliceCeth; cashHoldingCid = bobCash
+      assetAmount = 2.0; cashInstrument = usd; cashAmount = 5000.0
 
-  -- The proposal names Alice as maker — the counterparty never sees the agent.
+  -- The proposal names Alice as proposer — Bob never sees the agent.
   Some prop <- queryContractId bob propCid
-  prop.maker        === alice
+  prop.proposer     === alice
   prop.counterparty === bob
 
-  -- Bob settles the agent-initiated trade like any other DvP.
-  res <- submit bob do
-    exerciseCmd propCid Settle
-  Some cethNow <- queryContractId bob res.deliveredCeth
+  -- Bob accepts; Alice (the proposer) settles the agent-initiated trade.
+  agreeCid <- submit bob   do exerciseCmd propCid  Accept
+  res      <- submit alice do exerciseCmd agreeCid Settle
+  Some cethNow <- queryContractId bob res.deliveredAsset
   cethNow.owner  === bob
   cethNow.amount === 2.0
   Some cashNow <- queryContractId alice res.deliveredCash

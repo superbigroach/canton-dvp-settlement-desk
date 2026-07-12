@@ -1,4 +1,4 @@
-# daml.yaml — DAML project manifest for the Private cETH Settlement Desk.
+# daml.yaml — DAML project manifest for the Private Settlement Desk.
 # ---------------------------------------------------------------------------
 # This is what the `daml` assistant reads to build, test, and run the project
 # (the DAML equivalent of package.json / Cargo.toml).
@@ -22,11 +22,22 @@ name: private-ceth-settlement            # package name (appears in the DAR)
 version: 1.0.0                           # package version (semver)
 source: daml                             # directory holding the .daml sources
 
+# All modules under `source: daml` are auto-discovered — no per-file listing:
+#   Instrument.daml     — the tokenised-asset definition layer (InstrumentKey + Instrument).
+#   Holding.daml        — the balance layer (issuer-signed, owner-observer; Transfer/Split/Merge).
+#   Settlement.daml     — atomic DvP (propose -> accept -> Settle) + SettlementBatch + receipts.
+#   MarketOnClose.daml  — the sealed-order Market-on-Close auction (programmable dark pool).
+#   Agent.daml          — delegated / agent-initiated settlement under a mandate limit.
+#   Test.daml           — Daml Script scenarios + the `initialize` init-script below.
+
 # `daml start` auto-runs this script after spinning up the local sandbox: it
-# allocates the parties and seeds a live DvP proposal for the Navigator UI.
+# allocates the parties, publishes the instruments, and seeds a live DvP proposal
+# for the Navigator UI.
 init-script: Test:initialize
 
-# Standard-library + scripting deps. All three ship with the SDK:
+# Standard-library + scripting deps. All three ship with the SDK — NO external
+# daml-finance .dar dependency in the buildable code (that avoids version-pinning
+# breakage; see docs/DAML_FINANCE_INTEGRATION.md for the documented library swap).
 #   daml-prim / daml-stdlib — the DAML standard library.
 #   daml-script             — the Daml.Script module used by Test.daml.
 dependencies:

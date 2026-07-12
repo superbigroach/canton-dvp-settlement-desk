@@ -1,89 +1,86 @@
 -- Agent.daml
 -- ===========================================================================
--- AGENT-INITIATED SETTLEMENT (the "agentic commerce, privately" angle).
+-- DELEGATED / AGENT-INITIATED SETTLEMENT (the "agentic commerce, privately" angle).
 -- ===========================================================================
--- A principal (say a treasury desk, or an individual) grants an AUTHORISED
--- AGENT — a bot, an AI trading assistant, or a delegated fund manager — a
--- MANDATE to initiate cETH settlements ON THE PRINCIPAL'S BEHALF, but only
--- within explicit limits (instrument + per-trade amount cap).
+-- A principal (a treasury desk, a fund, or an individual) grants an AUTHORISED
+-- AGENT — a bot, an AI trading assistant, or a delegated manager — a MANDATE to
+-- initiate DvP settlements ON THE PRINCIPAL'S BEHALF, but only within explicit
+-- limits (instrument + per-trade amount cap). This is the same delegation shape
+-- an institution uses to let a desk act for the firm, and it is enforced by the
+-- LEDGER, not by a UI.
 --
 -- WHY THIS IS THE RIGHT DAML SHAPE
---   The agent must be able to create a SettlementProposal that is SIGNED BY THE
---   PRINCIPAL (maker = principal) — because it commits the principal's cETH. An
---   agent cannot forge the principal's signature. But DAML delegation solves it
---   cleanly: the principal signs the mandate, so exercising a choice on the
---   mandate brings the PRINCIPAL'S AUTHORITY into scope. The agent (as
---   controller) exercises that choice; inside it, the principal's delegated
---   authority creates the proposal. The mandate's `maxAmount` is checked BEFORE
---   the proposal is created — the ledger enforces the limit, not a UI.
+--   The agent must create a DvPProposal SIGNED BY THE PRINCIPAL (proposer =
+--   principal) — because it commits the principal's asset. An agent cannot forge
+--   the principal's signature. Daml delegation solves it: the principal signs the
+--   mandate, so exercising a choice on the mandate brings the PRINCIPAL'S
+--   AUTHORITY into scope. The agent (as controller) exercises that choice; inside
+--   it, the principal's delegated authority creates the proposal. The mandate's
+--   `maxAmount` is checked BEFORE the proposal is created — a ledger-enforced
+--   limit, provable in Test:testAgentInitiatedDvP.
 --
 -- PRIVACY: the mandate is visible only to principal + agent. The wider network,
--- and even the eventual counterparty, never see that an agent (rather than the
--- principal directly) initiated the trade — the resulting proposal names only
--- the principal as maker.
+-- and even the eventual counterparty, never learn an agent (rather than the
+-- principal) initiated the trade — the resulting proposal names only the
+-- principal as proposer.
 -- ===========================================================================
 
 module Agent where
 
-import Token
+import Holding
 import Settlement
 
 template TradingMandate
   with
     principal  : Party    -- the account owner delegating authority
     agent      : Party    -- the authorised agent (bot / AI / delegate)
-    instrument : Text      -- the ONLY instrument the agent may trade, e.g. "cETH"
+    instrument : Text      -- the ONLY asset the agent may sell, e.g. "cETH"
     maxAmount  : Decimal   -- per-settlement cap the agent may not exceed
   where
-    -- The principal signs the mandate: this is the delegation of authority.
-    signatory principal
-    -- The agent observes it (and controls the choice below).
-    observer agent
+    signatory principal   -- the principal signs: this IS the delegation of authority
+    observer agent         -- the agent observes it (and controls the choice below)
 
     ensure maxAmount > 0.0
 
-    -- NONCONSUMING so one mandate can drive many settlements. The agent
-    -- initiates a proposal on the principal's behalf, within the mandate limits.
-    nonconsuming choice InitiateSettlement : ContractId SettlementProposal
+    -- NONCONSUMING so one mandate can drive many settlements. The agent initiates
+    -- a DvPProposal on the principal's behalf, within the mandate limits.
+    nonconsuming choice InitiateDvP : ContractId DvPProposal
       with
-        counterparty   : Party
-        auditor        : Party
-        cethCid        : ContractId Token   -- the principal's cETH holding to deliver
-        cashCid        : ContractId Token   -- the counterparty's cash holding
-        cethAmount     : Decimal
-        cashInstrument : Text
-        cashAmount     : Decimal
+        counterparty    : Party
+        auditor         : Party
+        assetHoldingCid : ContractId Holding  -- the principal's asset holding to deliver
+        cashHoldingCid  : ContractId Holding  -- the counterparty's cash holding
+        assetAmount     : Decimal
+        cashInstrument  : Text
+        cashAmount      : Decimal
       controller agent
       do
-        -- Validate the delegated cETH holding against the mandate + the request.
+        -- Validate the delegated asset holding against the mandate + the request.
         -- Fetch is authorised because the principal (owner/stakeholder of the
-        -- cETH) is in scope via the mandate signatory.
-        ceth <- fetch cethCid
+        -- asset) is in scope via the mandate signatory.
+        asset <- fetch assetHoldingCid
         assertMsg "delegated holding must belong to the principal"
-          (ceth.owner == principal)
+          (asset.owner == principal)
         assertMsg "agent may only trade the mandated instrument"
-          (ceth.instrument == instrument)
-        assertMsg "stated cETH amount must match the actual holding"
-          (ceth.amount == cethAmount)
+          (asset.instrumentId == instrument)
+        assertMsg "stated asset amount must match the actual holding"
+          (asset.amount == assetAmount)
 
-        -- LIMIT ENFORCED BY THE LEDGER: over-cap requests cannot create a
-        -- proposal. `Test:testAgentInitiatedSettlement` proves an over-limit
-        -- attempt fails and a within-limit attempt settles.
+        -- LIMIT ENFORCED BY THE LEDGER: over-cap requests cannot create a proposal.
         assertMsg "settlement amount exceeds the mandate limit"
-          (cethAmount <= maxAmount)
+          (assetAmount <= maxAmount)
 
-        -- Create the proposal SIGNED BY THE PRINCIPAL (maker = principal), using
-        -- the principal's authority delegated through this mandate. The proposal's
-        -- cETH instrument is fixed to the mandated `instrument`. From here the
-        -- normal DvP flow applies: the counterparty exercises Settle.
-        create SettlementProposal with
-          maker = principal
+        -- Create the proposal SIGNED BY THE PRINCIPAL (proposer = principal), using
+        -- the principal's authority delegated through this mandate. From here the
+        -- normal DvP flow applies: the counterparty Accepts, then Settle.
+        create DvPProposal with
+          proposer = principal
           counterparty
           auditor
-          cethCid
-          cashCid
-          cethInstrument = instrument
-          cethAmount
+          assetHoldingCid
+          cashHoldingCid
+          assetInstrument = instrument
+          assetAmount
           cashInstrument
           cashAmount
 

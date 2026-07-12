@@ -1,0 +1,131 @@
+-- Holding.daml
+-- ===========================================================================
+-- A HOLDING — "party `owner` holds `amount` units of instrument `instrumentId`,
+-- backed by `issuer`". This is the on-ledger *balance* layer that sits on top of
+-- the Instrument *definition* layer (Instrument.daml).
+--
+-- MAPPING TO DAML FINANCE (see docs/DAML_FINANCE_INTEGRATION.md)
+--   * `Holding` here == `Daml.Finance.Holding.V4` (Fungible / Transferable).
+--     Real Daml Finance references the instrument by its `InstrumentKey` and
+--     locks/splits via interfaces; we keep `instrumentId : Text` and provide
+--     Transfer/Split/Merge directly so the project compiles on the bare SDK.
+--
+-- THE AUTHORISATION DESIGN (the single most load-bearing decision — read this)
+--   * signatory = issuer  (the obligor who stands behind the balance)
+--   * observer  = owner    (the current holder: can SEE and can move it)
+--
+--   Why issuer-only signatory (and NOT the owner)? Because it is what makes a
+--   transfer COMPOSABLE into a single atomic transaction. Re-issuing a holding
+--   to a new owner needs only the ISSUER's authority, and that authority is
+--   delegated automatically into any choice exercised on the holding (the issuer
+--   signs the contract being exercised). The INCOMING owner does NOT have to
+--   co-sign. That property is precisely what lets Settlement.daml move BOTH legs
+--   of a DvP — and MarketOnClose.daml move EVERY matched leg of an auction — in
+--   ONE transaction. If the owner were a signatory, the incoming owner's
+--   authority would be required inside the nested transfer and would NOT be in
+--   scope, breaking single-transaction atomic settlement. This is the canonical
+--   Digital Asset holding model.
+--
+-- PRIVACY
+--   A Holding is visible ONLY to its issuer and its current owner. No competitor,
+--   no counterparty to a future trade, not even another desk at the same bank
+--   can see it, its amount, or that it exists. Disclosure happens only when the
+--   owner explicitly names a counterparty (a settlement proposal or a sealed
+--   order). This is the ledger-level basis for the "dark pool" property in
+--   MarketOnClose.daml.
+-- ===========================================================================
+
+module Holding where
+
+template Holding
+  with
+    issuer       : Party    -- obligor / registrar backing the balance
+    instrumentId : Text     -- matches Instrument.id: "DEMO:AAPL" | "USD" | "cETH"
+    owner        : Party    -- current holder
+    amount       : Decimal  -- units held (Decimal is exact — no float rounding)
+  where
+    -- Only the issuer signs. See the header: this is what makes transfers
+    -- composable into atomic settlement, and stops anyone forging a balance.
+    signatory issuer
+
+    -- The owner observes: issuer + owner are the ONLY parties who can see this
+    -- holding on the whole network.
+    observer owner
+
+    -- Data invariant: you cannot hold a non-positive balance.
+    ensure amount > 0.0
+
+    -- TRANSFER --------------------------------------------------------------
+    -- The current owner assigns the holding to a new owner.
+    --   * controller owner — the holder moves their own balance. (Per the
+    --     delegation model, the issuer's authority — needed to CREATE the
+    --     successor — is supplied automatically because the issuer signs this
+    --     contract; the incoming owner need not co-sign.)
+    --   * CONSUMING (default): archives this holding and creates a fresh one for
+    --     `newOwner`. All-or-nothing with everything else in the transaction.
+    choice Transfer : ContractId Holding
+      with
+        newOwner : Party
+      controller owner
+      do
+        create this with owner = newOwner
+
+    -- SPLIT -----------------------------------------------------------------
+    -- Split a holding into (deliverPart, changePart) — e.g. to deliver an exact
+    -- settlement amount and keep the change. Both successors are issuer-signed
+    -- via delegated authority. This is what enables PARTIAL FILLS.
+    choice Split : (ContractId Holding, ContractId Holding)
+      with
+        splitAmount : Decimal
+      controller owner
+      do
+        assertMsg "split amount must be > 0 and < the holding"
+          (splitAmount > 0.0 && splitAmount < amount)
+        delivered <- create this with amount = splitAmount
+        change    <- create this with amount = amount - splitAmount
+        pure (delivered, change)
+
+    -- MERGE -----------------------------------------------------------------
+    -- Merge another holding of the SAME issuer/owner/instrument into this one.
+    choice Merge : ContractId Holding
+      with
+        otherCid : ContractId Holding
+      controller owner
+      do
+        other <- fetch otherCid
+        assertMsg "can only merge the same issuer"      (other.issuer       == issuer)
+        assertMsg "can only merge the same owner"       (other.owner        == owner)
+        assertMsg "can only merge the same instrument"  (other.instrumentId == instrumentId)
+        archive otherCid
+        create this with amount = amount + other.amount
+
+    -- REDEEM ----------------------------------------------------------------
+    -- The holder returns the balance to the issuer (burn / off-ramp). This
+    -- discharges the issuer's obligation AND extinguishes the holder's claim, so
+    -- BOTH must authorise — a real settlement handshake.
+    choice Redeem : ()
+      controller issuer, owner
+      do
+        -- In production this is where the issuer releases the underlying (unwrap
+        -- cETH back to ETH, or pay out the deposit). Here the archive is the effect.
+        pure ()
+
+-- ---------------------------------------------------------------------------
+-- deliverExact — deliver EXACTLY `amt` units of `holdingCid` to `newOwner`,
+-- returning the delivered holding. Splits off change if the holding is larger.
+-- ---------------------------------------------------------------------------
+-- This is the reusable primitive behind partial fills. It must be called in a
+-- context where the holding OWNER's authority is in scope (it exercises Transfer
+-- / Split, both controlled by the owner). Settlement.daml and MarketOnClose.daml
+-- both rely on that: they only ever call it inside a choice whose contract has
+-- the relevant owner as a signatory, so the owner's authority is present.
+deliverExact : ContractId Holding -> Decimal -> Party -> Update (ContractId Holding)
+deliverExact holdingCid amt newOwner = do
+  h <- fetch holdingCid
+  if h.amount == amt
+    then exercise holdingCid Transfer with newOwner
+    else do
+      -- Split asserts amt > 0 && amt < h.amount, so an over-draw aborts the
+      -- whole transaction (atomic rollback — no leg moves).
+      (deliverCid, _changeCid) <- exercise holdingCid Split with splitAmount = amt
+      exercise deliverCid Transfer with newOwner

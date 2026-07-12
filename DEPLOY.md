@@ -14,15 +14,17 @@ them for you. Everything else is copy-pasteable.
 
 | Need | How |
 |---|---|
-| DAML SDK | <https://docs.daml.com/getting-started/installation.html> |
-| JDK 17+ | required by the DAML/Canton runtime |
-| **[HUMAN ONLY]** Canton Devnet access | Register through the HackCanton Season 2 onboarding. You receive: a **participant node** endpoint (host:port for the Ledger API / JSON API), an **auth token** (JWT) or admin credentials, and a **synchronizer/domain** connection. |
-| **[HUMAN ONLY]** cETH on Devnet | Request test cETH via the **onRails cETH form** provided in the bounty brief. Note the cETH **issuer party id** and the **instrument identifier** onRails uses — you may need to align the `instrument`/issuer in `daml/Token.daml` and the init script to match the real cETH registry on Devnet. |
+| Daml SDK | `curl -sSL https://get.digitalasset.com/install/install.sh \| sh -s <version>` (or <https://docs.daml.com/getting-started/installation.html>). Then `daml version`. |
+| JDK 17+ | required by the Daml/Canton runtime |
+| **cn-quickstart** | Clone <https://github.com/digital-asset/cn-quickstart> — the official bootstrap that wires a Canton app to Devnet (party allocation, DAR upload, wallet/gas). Fastest path to a deployed submission. |
+| **[HUMAN ONLY]** Canton Devnet access | Register through the HackCanton Season 2 onboarding (the cn-quickstart flow guides this). You receive: a **participant node** endpoint (host:port for the Ledger API / JSON API), an **auth token** (JWT) or admin credentials, and a **synchronizer/domain** connection. |
+| **[HUMAN ONLY]** Canton Coin (gas) | Gas on Devnet is **Canton Coin (CC)** and is **free** — tap it from the Devnet faucet / wallet the cn-quickstart onboarding provisions. No ETH/native token needed to pay fees. |
+| **[HUMAN ONLY]** cETH on Devnet | Request test cETH from **onRails** at <https://ceth.network/contact>. Note the cETH **issuer party id** and the **instrument id/version** onRails uses on Devnet — align the cETH `issuer` / `id` in `daml/Instrument.daml` and the holdings in the init script to match the real cETH registry. |
 
 > **Version note.** Confirm the exact **Splice / Daml SDK version** Devnet expects
-> from the onboarding docs and set it in `daml.yaml → sdk-version` before building
-> the DAR you upload. Build locally with the same version to avoid a DAR/ledger
-> mismatch.
+> from the cn-quickstart / onboarding docs and set it in `daml.yaml → sdk-version`
+> before building the DAR you upload. Build locally with the same version to avoid
+> a DAR/ledger mismatch.
 
 ---
 
@@ -111,17 +113,19 @@ daml script \
 ```
 
 **B. Allocate/adopt parties manually** (for a multi-participant demo): allocate
-`Alice`, `Bob`, `Regulator` on your participant via the console/JSON API, and use
+`Alice`, `Bob`, `Auditor` (and `Venue` for an auction demo) on your participant
+via the console/JSON API, and use
 the **real onRails cETH issuer party** as the `issuer` for the cETH leg. In that
 case seed cETH by requesting it from onRails to your `Alice` party rather than
 minting it yourself.
 
-> **cETH reality check.** In the local sandbox `Test:initialize` mints cETH by
-> `submit issuer (createCmd Token ...)`. On Devnet you generally cannot mint the
+> **cETH reality check.** In the local sandbox `Test:initialize` mints holdings by
+> `submit issuer (createCmd Holding ...)`. On Devnet you generally cannot mint the
 > *real* cETH instrument yourself — onRails is its issuer. For the bounty, obtain
-> real cETH to your maker party via the onRails form, then have your app model
-> the cash leg with an issuer you control. The `Token` template is the shape;
-> point its cETH `issuer`/`instrument` at the onRails registry values.
+> real cETH to your seller party via the onRails form (<https://ceth.network/contact>),
+> then model the cash leg (`USD`) with an issuer you control. The `Instrument` /
+> `Holding` templates are the shape; point cETH's `issuer` / `id` at the onRails
+> registry values.
 
 ---
 
@@ -142,11 +146,12 @@ You can drive the flow three ways — pick one:
 
 Confirm the state actually changed on Devnet (this is the evidence judges want):
 
-- Query the ACS for the **`SettlementReceipt`** — its existence proves the swap
-  committed atomically. Note its `contractId` and `settledAt`.
-- Query as Bob: he now owns the **cETH** `Token`. Query as Alice: she now owns
-  the **cash** `Token`.
-- Query as the Regulator: it sees the **receipt** but **not** the holdings.
+- Query the ACS for the **`SettlementReceipt`** (or `SettlementBatch` for an MOC
+  close) — its existence proves the swap committed atomically. Note its
+  `contractId` and `settledAt`.
+- Query as the buyer: they now own the **asset** `Holding` (e.g. cETH / AAPL).
+  Query as the seller: they now own the **cash** `Holding`.
+- Query as the Auditor: it sees the **receipt** but **not** the holdings.
 - Capture the **transaction id / update id** from the participant's transaction
   stream (Ledger API `GetTransactions`, or the console) — that is your on-ledger
   proof of a cETH state change for the bounty.
@@ -181,6 +186,6 @@ Add these to `JOURNAL.md` as your deployment entry.
 | `sdk-version ... is not installed` | Run `daml install <version>` or set `daml.yaml` to an installed version (`daml version`). |
 | DAR upload rejected / package mismatch | Build with the **Devnet's** Splice/Daml version; rebuild and re-upload. |
 | `PERMISSION_DENIED` on submit | Your `AUTH_TOKEN` lacks `actAs`/`readAs` for that party. Re-issue a token scoped to the acting party. |
-| `Settle` fails: "cETH must be owned by the maker" | The cETH `issuer`/`instrument`/owner in the proposal doesn't match the real onRails cETH holding. Align them (step 4). |
+| `Settle` fails: "asset must be owned by the proposer" | The asset `issuer`/`instrumentId`/owner in the proposal doesn't match the real on-ledger (onRails cETH) holding. Align them (step 4). |
 | Counterparty on another participant can't see the proposal | On real Canton the counterparty's participant must have the contract disclosed (explicit disclosure or shared observer). Ensure both parties' participants are connected to the same synchronizer and the observer is set. |
-| Fetch of the other party's leg fails on-ledger | The settling participant needs the maker's cETH **disclosed** to it. Use explicit disclosure (attach the disclosed contract to the `Settle` command) or host both parties on one participant for the demo. |
+| Fetch of the other party's leg fails on-ledger | The settling participant needs the proposer's holding **disclosed** to it. Use explicit disclosure (attach the disclosed contract to the `Settle` command) or host both parties on one participant for the demo. |

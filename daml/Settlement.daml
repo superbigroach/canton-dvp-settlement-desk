@@ -1,181 +1,247 @@
 -- Settlement.daml
 -- ===========================================================================
--- PRIVATE, ATOMIC DELIVERY-versus-PAYMENT (DvP) SETTLEMENT — the core of the
--- "Private cETH Settlement Desk".
+-- ATOMIC DELIVERY-versus-PAYMENT (DvP) — the core settlement engine of the
+-- Private Settlement Desk.
 -- ===========================================================================
 -- THE PROBLEM
---   Two institutions want to swap tokenised assets. A maker holds cETH (wrapped
---   ETH on Canton) and wants cash; a counterparty holds tokenised cash (USDC-
---   like) and wants the cETH. Neither will move first — moving first is
---   principal (Herstatt) risk: you deliver, they default, you are unsecured.
---   The settlement MUST be:
---
---     ATOMIC   — either BOTH legs move or NEITHER does. No half-settled state.
---     PRIVATE  — only the two principals (and a named compliance observer) see
---                the trade. Competitors, other desks, and the wider network see
---                NOTHING.
+--   Two institutions want to swap tokenised assets. One holds an asset (a
+--   tokenised equity, or cETH); the counterparty holds tokenised cash. Neither
+--   will move first — moving first is principal (Herstatt) risk: you deliver,
+--   they default, you are unsecured. Settlement MUST be:
+--     ATOMIC  — either BOTH legs move or NEITHER does. No half-settled state.
+--     PRIVATE — only the two principals (and a named compliance auditor) see it.
 --
 -- WHY CANTON / DAML SOLVES IT DIRECTLY
---   A DAML transaction commits all-or-nothing. A single `exercise` can move BOTH
+--   A Daml transaction commits all-or-nothing. A single `exercise` moves BOTH
 --   legs inside one transaction, so partial settlement is impossible BY
---   CONSTRUCTION — there is no window where the cETH has moved but the cash has
---   not. And Canton's sub-transaction privacy means only the parties to each
---   sub-view see it. You get principal-risk-free DvP with native privacy and no
---   bridge — the thing a public EVM chain cannot give you natively.
+--   CONSTRUCTION. Canton's sub-transaction privacy means only the parties to a
+--   sub-view see it. Principal-risk-free DvP with native privacy and no bridge —
+--   the thing a transparent public chain cannot give you natively.
 --
--- THE AUTHORISATION PATTERN (why a proposal first)
---   Atomic settlement needs BOTH principals' authority. DAML's rule: a party's
---   authority enters a transaction only if it is (a) a signatory of a contract
---   being exercised, or (b) the controller of a choice being exercised. So we
---   gather both authorities in two steps:
---     1. SettlementProposal — the MAKER creates and SIGNS it (committing her
---        cETH leg). The COUNTERPARTY is an observer, so he can SEE it and act.
---     2. Settle — the COUNTERPARTY is the controller. Exercising Settle
---        contributes his authority; the maker's authority is already present
---        (she signs the proposal being exercised). Inside Settle we move BOTH
---        token legs. Each Transfer is controlled by that leg's current owner,
---        and both owners' authorities are in scope. All-or-nothing.
+-- THE AUTHORISATION PATTERN (propose -> accept -> settle)
+--   Atomic settlement needs BOTH principals' authority in ONE scope. Daml's rule:
+--   a party's authority is in a choice body iff it is a signatory of the
+--   contract being exercised or a controller of the choice. So:
+--     1. DvPProposal — the PROPOSER creates and SIGNS it. The counterparty is an
+--        observer, so it can see and act.
+--     2. Accept      — the COUNTERPARTY accepts, creating a DvPAgreement that is
+--        SIGNED BY BOTH. Now both authorities live on one contract.
+--     3. Settle      — a single consuming choice on the DvPAgreement. Because
+--        both principals are signatories, BOTH authorities are present, so both
+--        Holding.Transfer legs (each controlled by its owner) execute in ONE
+--        atomic transaction, and a bilateral SettlementReceipt is written.
+--
+-- MAPPING TO DAML FINANCE (see docs/DAML_FINANCE_INTEGRATION.md)
+--   * DvPProposal/DvPAgreement/Settle == the allocate/approve/settle lifecycle of
+--     `Daml.Finance.Settlement.V4` Instructions + Batch (RouteProvider + Factory).
+--   * SettlementBatch here == a `Daml.Finance.Settlement.V4.Batch` settling N
+--     instructions atomically (used by MarketOnClose.daml).
+--   * SettlementReceipt == an audit artifact you would model as a Daml Finance
+--     `Effect`/report contract.
 -- ===========================================================================
 
 module Settlement where
 
-import Token
+import Holding
 
 -- ---------------------------------------------------------------------------
--- SettlementProposal — the maker offers an atomic cETH-vs-cash swap.
+-- DvPProposal — the proposer offers an atomic asset-vs-cash swap.
 -- ---------------------------------------------------------------------------
-template SettlementProposal
+-- The PROPOSER delivers the ASSET leg and receives the CASH leg. (So in an
+-- "Alice buys AAPL from Bob" trade, BOB — the seller who delivers the asset — is
+-- the proposer, and Alice is the counterparty paying cash.)
+template DvPProposal
   with
-    -- The two principals.
-    maker         : Party             -- delivers cETH, receives cash (e.g. Alice)
-    counterparty  : Party             -- delivers cash, receives cETH (e.g. Bob)
+    proposer        : Party             -- delivers the asset, receives cash (the SELLER)
+    counterparty    : Party             -- delivers cash, receives the asset (the BUYER)
+    auditor         : Party             -- named compliance observer (need-to-know)
 
-    -- A named compliance / audit observer (e.g. a regulator or the desk's own
-    -- risk node). This is "disclosed by choice": the auditor sees THIS trade on
-    -- a need-to-know basis, but NOT either party's other holdings or trades.
-    auditor       : Party
+    -- The concrete holdings that will move. Binding ContractIds means the
+    -- proposal is for THESE holdings, not merely for amounts.
+    assetHoldingCid : ContractId Holding -- proposer's asset holding to deliver
+    cashHoldingCid  : ContractId Holding -- counterparty's cash holding to deliver
 
-    -- The concrete holdings that will move. Binding specific ContractIds means
-    -- the proposal is for THESE tokens, not merely for amounts.
-    cethCid       : ContractId Token  -- the maker's cETH to deliver
-    cashCid       : ContractId Token  -- the counterparty's cash to deliver
-
-    -- Denormalised trade economics, restated so both sides (and the auditor)
-    -- can verify what was agreed. Settle re-checks these against the real
-    -- holdings before anything moves.
-    cethInstrument : Text             -- expected "cETH"
-    cethAmount     : Decimal          -- units of cETH delivered
-    cashInstrument : Text             -- expected "USDC"
-    cashAmount     : Decimal          -- units of cash paid
+    -- Denormalised economics, restated so both sides (and the auditor) can
+    -- verify what was agreed. Settle re-checks these against the real holdings.
+    assetInstrument : Text              -- e.g. "DEMO:AAPL" or "cETH"
+    assetAmount     : Decimal           -- units of the asset delivered
+    cashInstrument  : Text              -- e.g. "USD"
+    cashAmount      : Decimal           -- units of cash paid
   where
-    -- The MAKER signs: creating the proposal authorises her cETH leg to execute
-    -- when the counterparty accepts.
-    signatory maker
+    -- The proposer signs: creating the proposal authorises its asset leg to move
+    -- once the counterparty accepts.
+    signatory proposer
 
     -- PRIVACY: the counterparty and the auditor are observers — the ONLY reason
-    -- they can see this proposal. They learn the maker wants to swap `cethAmount`
-    -- cETH for `cashAmount` cash — and NOTHING else about the maker's book. No
-    -- third party sees this proposal at all.
+    -- they can see this proposal. No third party sees it at all.
     observer counterparty, auditor
 
-    -- SETTLE — the counterparty accepts; both legs settle atomically in ONE tx,
-    -- and an immutable audit receipt is written in the same transaction.
-    choice Settle : SettleResult
+    -- ACCEPT — the counterparty agrees. Produces a DvPAgreement signed by BOTH,
+    -- which carries both authorities for the atomic Settle.
+    choice Accept : ContractId DvPAgreement
       controller counterparty
       do
-        -- Fetch both legs. Authorised because a stakeholder of each fetched
-        -- holding is in this transaction's authority set:
-        --   * cETH stakeholders {issuer, maker}         — maker signs this proposal
-        --   * cash stakeholders {issuer, counterparty}  — counterparty controls Settle
-        ceth <- fetch cethCid
-        cash <- fetch cashCid
+        create DvPAgreement with
+          proposer; counterparty; auditor
+          assetHoldingCid; cashHoldingCid
+          assetInstrument; assetAmount; cashInstrument; cashAmount
 
-        -- Defensive integrity checks — settle ONLY exactly what was agreed.
-        -- Any mismatch aborts the WHOLE transaction (atomic rollback: no leg
-        -- moves), which is what `Test:testAtomicRollback` proves.
-        assertMsg "cETH must be owned by the maker"          (ceth.owner      == maker)
-        assertMsg "cash must be owned by the counterparty"    (cash.owner      == counterparty)
-        assertMsg "cETH instrument mismatch"                  (ceth.instrument == cethInstrument)
-        assertMsg "cETH amount mismatch"                      (ceth.amount     == cethAmount)
-        assertMsg "cash instrument mismatch"                  (cash.instrument == cashInstrument)
-        assertMsg "cash amount mismatch"                      (cash.amount     == cashAmount)
-
-        -- LEG 1 — deliver cETH to the counterparty.
-        --   Controlled by ceth.owner == maker (authority present: she signed
-        --   this proposal). Re-issues the cETH holding to the counterparty using
-        --   the issuer's delegated authority.
-        newCeth <- exercise cethCid Transfer with newOwner = counterparty
-
-        -- LEG 2 — deliver cash to the maker.
-        --   Controlled by cash.owner == counterparty (authority present: the
-        --   controller of Settle). Re-issues the cash holding to the maker.
-        newCash <- exercise cashCid Transfer with newOwner = maker
-
-        -- AUDIT / EVENT TRAIL — write an immutable settlement receipt in the
-        -- SAME transaction. Signed by BOTH principals (non-repudiable), observed
-        -- by the auditor. If any leg above had failed, this receipt would never
-        -- exist — the receipt's existence PROVES the swap completed atomically.
-        now <- getTime
-        receipt <- create SettlementReceipt with
-          maker
-          counterparty
-          auditor
-          cethInstrument
-          cethAmount
-          cashInstrument
-          cashAmount
-          settledAt = now
-
-        pure SettleResult with
-          deliveredCeth = newCeth
-          deliveredCash = newCash
-          receipt
-
-    -- WITHDRAW — the maker cancels before settlement. Archives the proposal;
-    -- no token moves.
+    -- WITHDRAW — the proposer cancels before acceptance. No holding moves.
     choice Withdraw : ()
-      controller maker
+      controller proposer
       do pure ()
 
-    -- REJECT — the counterparty declines. Archives the proposal; no token moves.
+    -- REJECT — the counterparty declines. No holding moves.
     choice Reject : ()
       controller counterparty
       do pure ()
 
--- Structured result of a successful Settle. A record (rather than a tuple)
--- keeps the two new holdings and the receipt clearly named for callers/tests.
+-- ---------------------------------------------------------------------------
+-- DvPAgreement — a bilaterally-signed trade, ready to settle atomically.
+-- ---------------------------------------------------------------------------
+template DvPAgreement
+  with
+    proposer        : Party
+    counterparty    : Party
+    auditor         : Party
+    assetHoldingCid : ContractId Holding
+    cashHoldingCid  : ContractId Holding
+    assetInstrument : Text
+    assetAmount     : Decimal
+    cashInstrument  : Text
+    cashAmount      : Decimal
+  where
+    -- BOTH principals sign — this is where both authorities co-exist, which is
+    -- exactly what the single-transaction Settle needs.
+    signatory proposer, counterparty
+    observer auditor
+
+    -- SETTLE — one consuming choice moves BOTH legs atomically and writes the
+    -- receipt in the same transaction. Assigned to the proposer as the trigger;
+    -- either signatory could hold it since both authorities are already present.
+    choice Settle : SettleResult
+      controller proposer
+      do
+        -- Fetch both legs. Authorised because a stakeholder of each is a
+        -- signatory of this agreement (proposer for the asset, counterparty for
+        -- the cash — both sign this contract).
+        asset <- fetch assetHoldingCid
+        cash  <- fetch cashHoldingCid
+
+        -- Defensive integrity checks — settle ONLY exactly what was agreed. Any
+        -- mismatch aborts the WHOLE transaction (atomic rollback: no leg moves),
+        -- which Test:testAtomicRollback proves.
+        assertMsg "asset must be owned by the proposer"     (asset.owner        == proposer)
+        assertMsg "cash must be owned by the counterparty"  (cash.owner         == counterparty)
+        assertMsg "asset instrument mismatch"               (asset.instrumentId == assetInstrument)
+        assertMsg "asset amount mismatch"                   (asset.amount       == assetAmount)
+        assertMsg "cash instrument mismatch"                (cash.instrumentId  == cashInstrument)
+        assertMsg "cash amount mismatch"                    (cash.amount        == cashAmount)
+
+        -- LEG 1 — deliver the asset to the counterparty (controller asset.owner
+        -- == proposer; authority present as an agreement signatory).
+        deliveredAsset <- exercise assetHoldingCid Transfer with newOwner = counterparty
+
+        -- LEG 2 — deliver the cash to the proposer (controller cash.owner ==
+        -- counterparty; authority present as an agreement signatory).
+        deliveredCash <- exercise cashHoldingCid Transfer with newOwner = proposer
+
+        -- AUDIT — write an immutable, bilaterally-signed receipt in the SAME
+        -- transaction. If any leg failed, this receipt would never exist — so its
+        -- existence PROVES the swap completed atomically.
+        now <- getTime
+        receipt <- create SettlementReceipt with
+          seller = proposer
+          buyer = counterparty
+          venue = None                    -- bilateral trade: no venue/operator
+          auditor
+          assetInstrument; assetAmount
+          cashInstrument;  cashAmount
+          unitPrice = cashAmount / assetAmount
+          settledAt = now
+
+        pure SettleResult with deliveredAsset; deliveredCash; receipt
+
+-- Structured result of a successful Settle (named fields, not a bare tuple).
 data SettleResult = SettleResult
   with
-    deliveredCeth : ContractId Token             -- cETH now owned by the counterparty
-    deliveredCash : ContractId Token             -- cash now owned by the maker
-    receipt       : ContractId SettlementReceipt -- the immutable audit record
+    deliveredAsset : ContractId Holding           -- asset now owned by the buyer
+    deliveredCash  : ContractId Holding           -- cash now owned by the seller
+    receipt        : ContractId SettlementReceipt -- the immutable audit record
   deriving (Eq, Show)
 
 -- ---------------------------------------------------------------------------
--- SettlementReceipt — the immutable AUDIT / REPORT artifact.
+-- SettlementReceipt — the immutable AUDIT / CONFIRM artifact.
 -- ---------------------------------------------------------------------------
--- Created inside Settle, in the same atomic transaction as the swap. It is the
--- "create -> update status -> transfer/fulfill -> AUDIT" workflow's audit step:
--- a permanent, bilateral, timestamped record of a completed settlement.
---
--- PRIVACY of the audit trail: signed by both principals, observed only by the
--- named `auditor`. The auditor gets a complete, tamper-evident view of every
--- settlement it is attached to — but still cannot see either party's underlying
--- cETH or cash holdings (those name only issuer + owner). This is exactly the
--- "need-to-know compliance view" institutions require: the regulator sees the
--- trades, not the whole book.
+-- Written inside a settlement, in the same atomic transaction as the swap.
+--   * Bilateral trade  (DvP):        signed by seller + buyer  (non-repudiable),
+--                                      venue = None.
+--   * Auction fill (MarketOnClose):  signed by the VENUE/operator (the exchange
+--                                      confirm), venue = Some operator, with the
+--                                      two traders as observers.
+-- Either way the auditor observes the trade but still cannot see the underlying
+-- holdings (those name only issuer + owner). Need-to-know compliance: the
+-- regulator sees the trades, not the whole book.
 template SettlementReceipt
   with
-    maker          : Party
-    counterparty   : Party
-    auditor        : Party
-    cethInstrument : Text
-    cethAmount     : Decimal
-    cashInstrument : Text
-    cashAmount     : Decimal
-    settledAt      : Time
+    seller          : Party           -- delivered the asset
+    buyer           : Party           -- delivered the cash
+    venue           : Optional Party  -- operator for an auction fill; None if bilateral
+    auditor         : Party
+    assetInstrument : Text
+    assetAmount     : Decimal
+    cashInstrument  : Text
+    cashAmount      : Decimal
+    unitPrice       : Decimal
+    settledAt       : Time
   where
-    -- BOTH principals sign the receipt: neither can later deny the settlement.
-    signatory maker, counterparty
-    -- The compliance observer sees the completed settlement.
-    observer auditor
+    -- WHO SIGNS depends on how the trade was settled:
+    --   * bilateral DvP (venue = None): the two principals sign — non-repudiable.
+    --   * auction fill  (venue = Some op): the VENUE/operator signs (the exchange
+    --     confirm), because a single auction scope holds only the operator's
+    --     authority plus one side's — not both traders' at once. The two traders
+    --     observe the confirm instead.
+    signatory (case venue of
+      None    -> [seller, buyer]
+      Some op -> [op])
+    -- The auditor always observes; an auction fill also discloses to both traders.
+    observer (auditor :: (case venue of
+      None   -> []
+      Some _ -> [seller, buyer]))
+
+-- ---------------------------------------------------------------------------
+-- FillRecord — one matched fill inside a batch (an auction cross).
+-- ---------------------------------------------------------------------------
+data FillRecord = FillRecord
+  with
+    seller   : Party
+    buyer    : Party
+    quantity : Decimal
+    price    : Decimal
+    receipt  : ContractId SettlementReceipt
+  deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- SettlementBatch — proof of an atomic BATCH settlement of N fills.
+-- ---------------------------------------------------------------------------
+-- Emitted by MarketOnClose.RunClose after it settles every matched cross inside
+-- ONE transaction. Because all fills commit in the same transaction, the batch
+-- is atomic: either every cross settles at the closing price, or none does.
+--
+-- (This is the self-contained analogue of a `Daml.Finance.Settlement.V4.Batch`.
+-- The real library's Batch actively executes a list of Instructions once every
+-- party has allocated/approved; here the per-leg moves happen inside the sealed
+-- orders — where each trader's authority lives — and this contract is the venue's
+-- signed, immutable record of the whole batch.)
+template SettlementBatch
+  with
+    operator     : Party      -- the auction venue that ran the close
+    auditor      : Party
+    instrumentId : Text       -- the instrument auctioned, e.g. "DEMO:AAPL"
+    closingPrice : Decimal    -- the single price all crosses printed at
+    fills        : [FillRecord]
+    traders      : [Party]    -- the participants whose orders were considered
+    settledAt    : Time
+  where
+    signatory operator
+    observer auditor :: traders

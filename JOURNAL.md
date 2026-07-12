@@ -75,3 +75,62 @@ learned, what's next, and (once deploying) paste on-ledger evidence
 - Request Canton Devnet access + test cETH via the onRails form.
 - Deploy the DAR to Devnet and settle a real cETH trade; paste the update id +
   receipt cid into the next entry.
+
+---
+
+## 2026-07-11 — Instrument/Holding split, Market-on-Close, batch settlement
+
+**Did:**
+- Restructured the core into the Daml-Finance-shaped **three-layer** model and
+  added the showcase auction module (all in the portable subset, SDK-only deps):
+  - `Instrument.daml` — NEW. `InstrumentKey {issuer, depository, id, version}` +
+    an `Instrument` template (kind / description / optional referencePrice, with a
+    contract key). Instantiated as `DEMO:AAPL` (Equity, ref 255.0), `USD` (Cash),
+    `cETH` (CryptoWrapped).
+  - `Holding.daml` — NEW (replaces `Token.daml`). Issuer-signatory / owner-observer
+    balance with `Transfer` / `Split` / `Merge` / `Redeem`, plus a reusable
+    `deliverExact` primitive (split-off-change) that powers **partial fills**.
+  - `Settlement.daml` — reworked to **propose → accept → settle**: `DvPProposal`
+    (proposer signs) → `Accept` → `DvPAgreement` (BOTH sign) → a single consuming
+    `Settle` moves both legs atomically. Added `SettlementBatch` (N-fill atomic
+    record) + a flexible `SettlementReceipt` (bilateral-signed for DvP,
+    venue-signed for auction fills) and a `FillRecord`.
+  - `MarketOnClose.daml` — NEW showcase. `ClosingAuction` + **sealed** `SealedOrder`
+    (signed by operator + one trader, observed by NOBODY else = dark pool) +
+    `RunClose` that matches crossing pairs and batch-settles them at ONE closing
+    price in a single transaction. Documented the authority mechanics: each leg
+    moves inside a choice on the order the relevant trader signs
+    (`CrossBuy` → buyer's cash; `DeliverAsset` → seller's asset).
+  - `Agent.daml` — adapted `TradingMandate.InitiateDvP` to the new Holding/DvP
+    shape (ledger-enforced per-trade cap).
+  - `Test.daml` — rewrote into six scenarios: instrument+holding lifecycle,
+    bilateral atomic DvP, the MOC sealed auction with a 2-cross batch (balances
+    verified), dark-pool privacy (outsider AND rival participant see nothing),
+    atomic rollback, and agent-initiated cETH DvP. Kept `initialize` for
+    `daml start`.
+- Docs: added `docs/DAML_FINANCE_INTEGRATION.md` (template-by-template mapping to
+  Daml Finance V4 + the `data-dependencies` you'd add + the low-risk migration
+  runbook — with an honest "pin versions to the Devnet release" caveat). Rewrote
+  `README.md` (problem → solution → owner's MOC angle → three-layer architecture →
+  two Mermaid diagrams → JPM/Kinexys mapping → quickstart → cETH bounty). Updated
+  `DEPLOY.md` (curl SDK install, cn-quickstart, Canton Coin gas is free, cETH from
+  onRails at ceth.network/contact) and `daml.yaml` (module inventory).
+
+**Learned / decided:**
+- Daml authority does NOT flow down into a nested exercise automatically — a
+  choice body has exactly `signatories(contract) ∪ controllers(choice)`. So in the
+  auction, the buyer's cash MUST move inside a choice on the buy order and the
+  seller's asset inside a choice on the sell order; both land in one `RunClose`
+  transaction, which is what makes the batch atomic.
+- Kept the core **library-free on purpose**: SDK-only deps always build, and
+  `DAML_FINANCE_INTEGRATION.md` makes the swap a documented, mechanical upgrade
+  rather than a version-pin gamble the night before submission.
+
+**Honest status:**
+- Written but **NOT compiled in this environment** (no Daml toolchain here). The
+  first `daml build` / `daml test` on an SDK machine is what confirms it; expect to
+  fix at most minor syntax nits. The design and authority model are the substance.
+
+**Next:**
+- `daml test` on an SDK machine; then Devnet deploy per DEPLOY.md and paste the
+  `SettlementBatch` / `SettlementReceipt` update ids as on-ledger evidence.
