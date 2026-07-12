@@ -46,7 +46,7 @@ export default function App() {
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [receipts, setReceipts] = useState<Receipt[]>([]);
 
-  const [mode, setMode] = useState<Mode>('DvP');
+  const [mode] = useState<Mode>('Auction'); // auction-only desk (DvP engine still powers the cross)
   const [asset, setAsset] = useState<string>('');
   const [side, setSide] = useState<Side>('Buy');
   const [quantity, setQuantity] = useState<string>('1');
@@ -464,14 +464,6 @@ export default function App() {
             </label>
           </div>
 
-          <div className="mode-toggle">
-            <button className={mode === 'DvP' ? 'on' : ''} onClick={() => setMode('DvP')}>
-              Settle now · DvP
-            </button>
-            <button className={mode === 'Auction' ? 'on' : ''} onClick={() => setMode('Auction')}>
-              Send to Auction
-            </button>
-          </div>
 
           {mode === 'DvP' ? (
             <>
