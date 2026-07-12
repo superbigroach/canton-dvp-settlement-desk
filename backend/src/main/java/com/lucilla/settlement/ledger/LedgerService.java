@@ -113,25 +113,126 @@ public class LedgerService {
     // -----------------------------------------------------------------------
 
     /**
+     * All parties the ledger knows about, via the party-management admin service.
+     *
+     * <p>Party ids on Canton carry a namespace suffix ({@code Alice::1220ab…}) that
+     * changes every allocation, so the desk NEVER hardcodes them — it resolves them
+     * live here for the UI's party picker. A friendly {@code label} is derived from
+     * the display name when present, else the hint prefix before {@code "::"}.
+     */
+    public List<PartyView> listParties() {
+        return withRetry("list parties", () -> {
+            var stub = connection.partyManagement();
+            var req = com.daml.ledger.api.v1.admin.PartyManagementServiceOuterClass
+                    .ListKnownPartiesRequest.getDefaultInstance();
+            var resp = stub
+                    .withDeadlineAfter(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .listKnownParties(req);
+            List<PartyView> out = new ArrayList<>();
+            for (var pd : resp.getPartyDetailsList()) {
+                String party = pd.getParty();
+                String display = pd.getDisplayName();
+                String label = (display != null && !display.isBlank())
+                        ? display
+                        : (party.contains("::") ? party.substring(0, party.indexOf("::")) : party);
+                out.add(new PartyView(party, display == null ? "" : display, label, pd.getIsLocal()));
+            }
+            return out;
+        });
+    }
+
+    /**
+     * Resolve a caller-supplied party reference (a hint/label like {@code "Alice"},
+     * or an already-qualified {@code "Alice::1220…"}) to the FULL on-ledger party id.
+     * If an exact match exists it wins; otherwise a unique prefix match on the label
+     * is used. Throws when nothing (or more than one thing) matches — never guesses.
+     */
+    public String resolveParty(String reference) {
+        if (reference == null || reference.isBlank()) {
+            throw new LedgerException("party is required");
+        }
+        String ref = reference.trim();
+        List<PartyView> parties = listParties();
+        for (PartyView p : parties) {
+            if (p.party().equals(ref)) {
+                return p.party();
+            }
+        }
+        List<PartyView> byLabel = parties.stream()
+                .filter(p -> p.label().equalsIgnoreCase(ref) || p.party().startsWith(ref + "::"))
+                .toList();
+        if (byLabel.size() == 1) {
+            return byLabel.get(0).party();
+        }
+        if (byLabel.isEmpty()) {
+            throw new LedgerException("no known party matches '" + reference + "'");
+        }
+        throw new LedgerException("party reference '" + reference + "' is ambiguous ("
+                + byLabel.size() + " matches)");
+    }
+
+    /**
      * Active {@link Holding} contracts visible to {@code party}. On Canton a
      * holding is visible only to its issuer and owner (plus explicit disclosures),
      * so this returns exactly what {@code party} is entitled to see.
      */
     public List<HoldingView> holdingsVisibleTo(String party) {
-        DamlLedgerClient client = connection.get();
-        ContractFilter<Holding.Contract> filter = ContractFilter.of(Holding.COMPANION);
-        List<HoldingView> out = new ArrayList<>();
-        client.getActiveContractSetClient()
-                .getActiveContracts(filter, Set.of(party), false)
-                .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
-                .blockingForEach(active -> {
-                    for (Holding.Contract c : active.activeContracts) {
-                        Holding h = c.data;
-                        out.add(new HoldingView(
-                                c.id.contractId, h.issuer, h.instrumentId, h.owner, h.amount, h.disclosedTo));
+        return withRetry("holdings for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<Holding.Contract> filter = ContractFilter.of(Holding.COMPANION);
+            List<HoldingView> out = new ArrayList<>();
+            client.getActiveContractSetClient()
+                    .getActiveContracts(filter, Set.of(party), false)
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (Holding.Contract c : active.activeContracts) {
+                            Holding h = c.data;
+                            out.add(new HoldingView(
+                                    c.id.contractId, h.issuer, h.instrumentId, h.owner, h.amount, h.disclosedTo));
+                        }
+                    });
+            return out;
+        });
+    }
+
+    /**
+     * Retry an idempotent read a few times on transient gRPC stream failures.
+     *
+     * <p>On a loaded host (many JVMs sharing the box) the ACS snapshot stream
+     * occasionally drops mid-frame ({@code INTERNAL: Encountered end-of-stream
+     * mid-frame} / {@code RESOURCE_EXHAUSTED}). The snapshot is a pure read, so a
+     * bounded retry makes the endpoint reliable without changing any ledger state.
+     */
+    private <T> T withRetry(String what, java.util.concurrent.Callable<T> op) {
+        int attempts = 4;
+        RuntimeException last = null;
+        for (int i = 1; i <= attempts; i++) {
+            try {
+                return op.call();
+            } catch (Exception e) {
+                RuntimeException re = (e instanceof RuntimeException r) ? r : new RuntimeException(e);
+                String msg = rootMessage(re);
+                boolean transientErr = msg != null && (msg.contains("end-of-stream")
+                        || msg.contains("RESOURCE_EXHAUSTED") || msg.contains("UNAVAILABLE")
+                        || msg.contains("INTERNAL"));
+                if (!transientErr || i == attempts) {
+                    if (transientErr) {
+                        throw new LedgerException("ledger read failed after " + attempts
+                                + " attempts (" + what + "): " + msg, re);
                     }
-                });
-        return out;
+                    throw re;
+                }
+                last = re;
+                log.warn("Transient ledger read failure ({}), retry {}/{}: {}", what, i, attempts, msg);
+                try {
+                    Thread.sleep(150L * i);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new LedgerException("interrupted while retrying " + what, ie);
+                }
+            }
+        }
+        throw last != null ? last : new LedgerException("read failed: " + what);
     }
 
     private static String rootMessage(Throwable t) {
@@ -140,6 +241,10 @@ public class LedgerService {
             c = c.getCause();
         }
         return c.getMessage() != null ? c.getMessage() : t.toString();
+    }
+
+    /** Flat, JSON-friendly view of a known party. */
+    public record PartyView(String party, String displayName, String label, boolean isLocal) {
     }
 
     /** Flat, JSON-friendly view of a Holding. */

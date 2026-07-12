@@ -21,6 +21,12 @@ public final class Dtos {
     private Dtos() {
     }
 
+    // ---- Parties ----------------------------------------------------------
+
+    public record PartyResponse(
+            String party, String displayName, String label, boolean isLocal) {
+    }
+
     // ---- Instruments & Holdings ------------------------------------------
 
     public record IssueInstrumentRequest(

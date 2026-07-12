@@ -1,7 +1,19 @@
 package com.lucilla.settlement.config;
 
+import com.daml.ledger.api.v1.admin.PartyManagementServiceGrpc;
+import com.daml.ledger.api.v1.admin.PartyManagementServiceGrpc.PartyManagementServiceBlockingStub;
 import com.daml.ledger.rxjava.DamlLedgerClient;
+import io.grpc.CallOptions;
+import io.grpc.Channel;
+import io.grpc.ClientCall;
+import io.grpc.ClientInterceptor;
+import io.grpc.ClientInterceptors;
+import io.grpc.ManagedChannel;
+import io.grpc.Metadata;
+import io.grpc.MethodDescriptor;
+import io.grpc.ForwardingClientCall;
 import io.grpc.netty.GrpcSslContexts;
+import io.grpc.netty.NettyChannelBuilder;
 import io.netty.handler.ssl.SslContext;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -28,8 +40,12 @@ public class LedgerConnection {
 
     private static final Logger log = LoggerFactory.getLogger(LedgerConnection.class);
 
+    /** 64 MiB — gRPC max inbound message size (default 10 MiB is too small for big ACS snapshots). */
+    private static final int MAX_INBOUND_BYTES = 64 * 1024 * 1024;
+
     private final LedgerProperties props;
     private volatile DamlLedgerClient client;
+    private volatile ManagedChannel adminChannel;
 
     public LedgerConnection(LedgerProperties props) {
         this.props = props;
@@ -56,12 +72,77 @@ public class LedgerConnection {
         return props;
     }
 
+    /**
+     * A blocking stub for the ledger's <b>party-management</b> admin service.
+     *
+     * <p>The high-level rxjava {@link DamlLedgerClient} in bindings 2.9.4 does not
+     * expose the admin services, so we open our OWN gRPC channel to the same
+     * Ledger API host:port and drive the generated {@link PartyManagementServiceGrpc}
+     * stub directly. Same plaintext-vs-TLS + optional JWT bearer story as the main
+     * client, driven entirely from {@link LedgerProperties}. Lazily built.
+     */
+    public PartyManagementServiceBlockingStub partyManagement() {
+        return PartyManagementServiceGrpc.newBlockingStub(authed(adminChannel()));
+    }
+
+    private ManagedChannel adminChannel() {
+        ManagedChannel c = adminChannel;
+        if (c != null) {
+            return c;
+        }
+        synchronized (this) {
+            if (adminChannel == null) {
+                log.info("Opening admin gRPC channel to {}:{} (tls={})",
+                        props.getHost(), props.getPort(), props.isTls());
+                NettyChannelBuilder b = NettyChannelBuilder
+                        .forAddress(props.getHost(), props.getPort())
+                        .maxInboundMessageSize(MAX_INBOUND_BYTES);
+                if (props.isTls()) {
+                    b = b.sslContext(clientTls());
+                } else {
+                    b = b.usePlaintext();
+                }
+                adminChannel = b.build();
+            }
+            return adminChannel;
+        }
+    }
+
+    /** Attaches an {@code Authorization: Bearer <jwt>} header when a JWT is set. */
+    private Channel authed(ManagedChannel base) {
+        if (!props.hasJwt()) {
+            return base;
+        }
+        final String token = props.getJwt();
+        ClientInterceptor bearer = new ClientInterceptor() {
+            @Override
+            public <ReqT, RespT> ClientCall<ReqT, RespT> interceptCall(
+                    MethodDescriptor<ReqT, RespT> method, CallOptions callOptions, Channel next) {
+                return new ForwardingClientCall.SimpleForwardingClientCall<>(
+                        next.newCall(method, callOptions)) {
+                    @Override
+                    public void start(Listener<RespT> responseListener, Metadata headers) {
+                        Metadata.Key<String> auth =
+                                Metadata.Key.of("Authorization", Metadata.ASCII_STRING_MARSHALLER);
+                        headers.put(auth, "Bearer " + token);
+                        super.start(responseListener, headers);
+                    }
+                };
+            }
+        };
+        return ClientInterceptors.intercept(base, bearer);
+    }
+
     private DamlLedgerClient connect() {
         log.info("Connecting to Ledger API at {}:{} (tls={}, jwt={})",
                 props.getHost(), props.getPort(), props.isTls(), props.hasJwt() ? "yes" : "no");
 
         DamlLedgerClient.Builder builder =
-                DamlLedgerClient.newBuilder(props.getHost(), props.getPort());
+                DamlLedgerClient.newBuilder(props.getHost(), props.getPort())
+                        // The active-contract-set snapshot for a busy party can exceed
+                        // the 10 MiB gRPC default (observed a 47 MiB snapshot on a
+                        // freshly-seeded ledger). Give the client generous headroom.
+                        .withMaxInboundMessageSize(MAX_INBOUND_BYTES);
 
         if (props.isTls()) {
             builder = builder.withSslContext(clientTls());
@@ -95,6 +176,15 @@ public class LedgerConnection {
                 log.warn("Error closing ledger client", e);
             } finally {
                 client = null;
+            }
+        }
+        if (adminChannel != null) {
+            try {
+                adminChannel.shutdownNow();
+            } catch (Exception e) {
+                log.warn("Error closing admin channel", e);
+            } finally {
+                adminChannel = null;
             }
         }
     }

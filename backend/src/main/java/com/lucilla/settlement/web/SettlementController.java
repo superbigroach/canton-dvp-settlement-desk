@@ -47,6 +47,20 @@ public class SettlementController {
         this.ledger = ledger;
     }
 
+    // ---- Parties ----------------------------------------------------------
+
+    /**
+     * The parties this ledger knows about, for the UI's party picker. Party ids
+     * carry a per-run Canton namespace suffix, so they are resolved live — never
+     * hardcoded.
+     */
+    @GetMapping("/parties")
+    public List<Dtos.PartyResponse> parties() {
+        return ledger.listParties().stream()
+                .map(p -> new Dtos.PartyResponse(p.party(), p.displayName(), p.label(), p.isLocal()))
+                .toList();
+    }
+
     // ---- Instruments ------------------------------------------------------
 
     @PostMapping("/instruments")
@@ -75,7 +89,9 @@ public class SettlementController {
 
     @GetMapping("/holdings")
     public List<Dtos.HoldingResponse> holdings(@RequestParam String party) {
-        return ledger.holdingsVisibleTo(party).stream()
+        // Accept either a full party id (from the picker) or a friendly label.
+        String resolved = ledger.resolveParty(party);
+        return ledger.holdingsVisibleTo(resolved).stream()
                 .map(h -> new Dtos.HoldingResponse(
                         h.contractId(), h.issuer(), h.instrumentId(), h.owner(),
                         h.amount(), h.disclosedTo()))
