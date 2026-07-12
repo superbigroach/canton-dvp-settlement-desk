@@ -1,24 +1,22 @@
-# daml.yaml — DAML project manifest for the Private Settlement Desk.
+# daml.yaml — DAML project manifest for the Canton DvP Settlement Desk.
 # ---------------------------------------------------------------------------
 # This is what the `daml` assistant reads to build, test, and run the project
 # (the DAML equivalent of package.json / Cargo.toml).
 #
-# >>> sdk-version IS A PLACEHOLDER <<<
-#   After installing the DAML SDK, run:
+# sdk-version — set to your installed SDK. After installing the DAML SDK, run:
 #       daml version
-#   and set `sdk-version` below to the exact version it prints (e.g. 2.9.4).
+#   and confirm `sdk-version` below matches it (this project is built on 2.9.4).
 #   The build refuses to run if the pinned SDK is not installed.
 #
-#   For CANTON NETWORK DEVNET deployment (the hackathon qualifying target) the
-#   ledger runs a specific Splice / Daml release — see DEPLOY.md. Build the DAR
-#   with the SDK line the Devnet onboarding specifies; the DAML source here is
-#   written in the portable subset that compiles on both the current 2.x LTS and
-#   the 3.x line.
+#   For CANTON NETWORK DEVNET deployment the ledger runs a specific Splice / Daml
+#   release — see DEPLOY.md. Build the DAR with the SDK line the Devnet onboarding
+#   specifies; the DAML source here is written in the portable subset that compiles
+#   on both the current 2.x LTS and the 3.x line.
 # ---------------------------------------------------------------------------
 
-sdk-version: 2.9.4                       # <-- REPLACE with your `daml version` output
+sdk-version: 2.9.4                       # installed DAML SDK (from `daml version`)
 
-name: private-ceth-settlement            # package name (appears in the DAR)
+name: canton-dvp-settlement-desk         # package name (appears in the DAR)
 version: 1.0.0                           # package version (semver)
 source: daml                             # directory holding the .daml sources
 
@@ -47,4 +45,4 @@ dependencies:
 
 # Compiled DAR output location.
 build-options:
-  - --output=.daml/dist/private-ceth-settlement-1.0.0.dar
+  - --output=.daml/dist/canton-dvp-settlement-desk-1.0.0.dar

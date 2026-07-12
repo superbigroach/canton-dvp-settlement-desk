@@ -43,14 +43,19 @@ template Holding
     instrumentId : Text     -- matches Instrument.id: "DEMO:AAPL" | "USD" | "cETH"
     owner        : Party    -- current holder
     amount       : Decimal  -- units held (Decimal is exact — no float rounding)
+    disclosedTo  : [Party]  -- extra parties the owner has explicitly allocated this
+                            -- holding to (see Disclose). Default []: a fresh holding
+                            -- is private to issuer + owner only.
   where
     -- Only the issuer signs. See the header: this is what makes transfers
     -- composable into atomic settlement, and stops anyone forging a balance.
     signatory issuer
 
-    -- The owner observes: issuer + owner are the ONLY parties who can see this
-    -- holding on the whole network.
-    observer owner
+    -- The owner observes, plus any parties the owner has DISCLOSED the holding to
+    -- (an explicit allocation — see the Disclose choice). Absent any disclosure,
+    -- issuer + owner are the ONLY parties who can see this holding on the whole
+    -- network.
+    observer owner :: disclosedTo
 
     -- Data invariant: you cannot hold a non-positive balance.
     ensure amount > 0.0
@@ -68,7 +73,30 @@ template Holding
         newOwner : Party
       controller owner
       do
-        create this with owner = newOwner
+        -- The successor starts private to its new owner: any prior disclosures
+        -- (allocations to a counterparty or a settlement venue) are dropped, so a
+        -- delivered holding does not silently leak to a party from the last trade.
+        create this with owner = newOwner, disclosedTo = []
+
+    -- DISCLOSE --------------------------------------------------------------
+    -- The owner ALLOCATES this holding to `newObserver` — adding it as an observer
+    -- so that party (a DvP counterparty about to run Settle, or an auction
+    -- operator about to run the close) can legitimately reference the holding.
+    --   * This is the honest, pruning-safe alternative to relying on DIVULGENCE:
+    --     without it, a party that can only "see" the holding because it was
+    --     divulged inside another transaction hits the deprecated-divulged-contract
+    --     path (and, for a fetch outside that tx, "not visible to the reading
+    --     parties"). Adding the party as an observer makes the visibility explicit.
+    --   * controller owner — only the holder decides who its balance is shown to.
+    --   * CONSUMING: observers are fixed at creation, so we archive and re-create
+    --     with the extra observer. Idempotent (no duplicate observers).
+    choice Disclose : ContractId Holding
+      with
+        newObserver : Party
+      controller owner
+      do
+        create this with
+          disclosedTo = newObserver :: filter (/= newObserver) disclosedTo
 
     -- SPLIT -----------------------------------------------------------------
     -- Split a holding into (deliverPart, changePart) — e.g. to deliver an exact
@@ -81,8 +109,12 @@ template Holding
       do
         assertMsg "split amount must be > 0 and < the holding"
           (splitAmount > 0.0 && splitAmount < amount)
-        delivered <- create this with amount = splitAmount
-        change    <- create this with amount = amount - splitAmount
+        -- Both successors start private (disclosedTo = []): a split is a balance
+        -- operation, not a disclosure, so change returned to the owner never
+        -- carries a stale allocation, and the delivered part is re-disclosed only
+        -- if the caller explicitly does so.
+        delivered <- create this with amount = splitAmount,          disclosedTo = []
+        change    <- create this with amount = amount - splitAmount, disclosedTo = []
         pure (delivered, change)
 
     -- MERGE -----------------------------------------------------------------
@@ -97,7 +129,8 @@ template Holding
         assertMsg "can only merge the same owner"       (other.owner        == owner)
         assertMsg "can only merge the same instrument"  (other.instrumentId == instrumentId)
         archive otherCid
-        create this with amount = amount + other.amount
+        -- Merged balance starts private; re-disclose explicitly if needed.
+        create this with amount = amount + other.amount, disclosedTo = []
 
     -- REDEEM ----------------------------------------------------------------
     -- The holder returns the balance to the issuer (burn / off-ramp). This

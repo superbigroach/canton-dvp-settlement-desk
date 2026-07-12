@@ -1,7 +1,7 @@
-# Pilot Plan — Private cETH Settlement Desk
+# Pilot Plan — Canton DvP Settlement Desk
 
-A short, concrete path from this hackathon prototype to a live pilot with one or
-two institutional counterparties on Canton.
+A short, concrete path from this prototype to a live pilot with one or two
+institutional counterparties on Canton.
 
 ---
 

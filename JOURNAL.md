@@ -1,8 +1,8 @@
-# Build Journal — Private cETH Settlement Desk
+# Build Journal — Canton DvP Settlement Desk
 
-*HackCanton Season 2. Daily incremental entries — the hackathon rewards steady,
-visible progress ("mana") and gives judges a trust trail. Keep entries short,
-honest, and dated. Newest at the bottom.*
+*A personal learning/demo project on Canton. Daily incremental entries — a short,
+honest, dated trust trail of what was built and why. Keep entries short and dated.
+Newest at the bottom.*
 
 **How to use:** add one entry per working session. Note what you built, what you
 learned, what's next, and (once deploying) paste on-ledger evidence
@@ -34,9 +34,9 @@ learned, what's next, and (once deploying) paste on-ledger evidence
 ## 2026-07-11 — Project bootstrap: atomic private DvP core
 
 **Did:**
-- Scoped the project: a **Private cETH Settlement Desk** — confidential, atomic
-  DvP swapping **cETH** (onRails) against tokenised cash on Canton. Targets the
-  **RWA & Business Workflows** track + the **cETH bounty**.
+- Scoped the project: a **Canton DvP Settlement Desk** — confidential, atomic
+  DvP swapping **cETH** (onRails) against tokenised cash on Canton. A hands-on
+  model of the RWA / business-workflow settlement problem.
 - Built the DAML core (heavily commented, `daml test`-ready):
   - `Token.daml` — generic Canton content-token template (issuer-signatory /
     owner-observer; `Transfer` / `Split` / `Merge` / `Redeem`), instantiated as
@@ -112,7 +112,7 @@ learned, what's next, and (once deploying) paste on-ledger evidence
   Daml Finance V4 + the `data-dependencies` you'd add + the low-risk migration
   runbook — with an honest "pin versions to the Devnet release" caveat). Rewrote
   `README.md` (problem → solution → owner's MOC angle → three-layer architecture →
-  two Mermaid diagrams → JPM/Kinexys mapping → quickstart → cETH bounty). Updated
+  two Mermaid diagrams → JPM/Kinexys mapping → quickstart → cETH via onRails). Updated
   `DEPLOY.md` (curl SDK install, cn-quickstart, Canton Coin gas is free, cETH from
   onRails at ceth.network/contact) and `daml.yaml` (module inventory).
 
@@ -124,7 +124,7 @@ learned, what's next, and (once deploying) paste on-ledger evidence
   transaction, which is what makes the batch atomic.
 - Kept the core **library-free on purpose**: SDK-only deps always build, and
   `DAML_FINANCE_INTEGRATION.md` makes the swap a documented, mechanical upgrade
-  rather than a version-pin gamble the night before submission.
+  rather than a version-pin gamble.
 
 **Honest status:**
 - Written but **NOT compiled in this environment** (no Daml toolchain here). The
@@ -134,3 +134,55 @@ learned, what's next, and (once deploying) paste on-ledger evidence
 **Next:**
 - `daml test` on an SDK machine; then Devnet deploy per DEPLOY.md and paste the
   `SettlementBatch` / `SettlementReceipt` update ids as on-ledger evidence.
+
+---
+
+## 2026-07-11 — Compiled green on SDK 2.9.4; fixed DvP visibility, reworked MOC economics
+
+**Did:**
+- Installed the Daml SDK (2.9.4) and actually **built + tested**. First run: 6/8
+  scripts passed; the two DvP scripts failed and MOC printed divulgence warnings.
+- **Fixed atomic DvP visibility (the "allocate" step).** `DvPAgreement.Settle` is
+  triggered by the proposer, who could not *see* the counterparty's cash holding
+  (a `Holding` is visible to issuer + owner only), so `fetch` aborted with "not
+  visible to the reading parties." Added a `Disclose` choice on `Holding` (owner
+  adds an observer, pruning-safe) and made `DvPProposal.Accept` **allocate** the
+  cash leg by disclosing it to the proposer — captured as the agreement's cash cid.
+  Both DvP scripts now settle. Same mechanism fixed `testAgentInitiatedDvP` (the
+  principal discloses the asset to the agent so the agent can validate it).
+- **Reworked Market-on-Close economics to be correct.** MOC is now a genuine
+  uniform-price call auction: the operator can no longer pick a price per fill —
+  every fill prints at the auction's published `referencePrice` (the official
+  close). `RunClose` crosses `min(totalBuy, totalSell)`, **rations the heavy side
+  pro-rata** (`quantity * matched / heavyTotal`), fills the light side fully, and
+  leaves the residual unsettled. It clears through the venue as a momentary CCP in
+  one atomic tx: **pledge** each pro-rated leg (inside the trader's own order, so
+  authority is present) → **pool** (merge) → **deliver** to the other side.
+- **Removed all divulgence.** `SubmitOrder` now discloses each committed holding to
+  the operator, so the close reads/moves holdings through real visibility, not the
+  deprecated divulged-contract path. `daml test` is now warning-free.
+- **Tests:** added `testMarketOnCloseImbalance` (sell-heavy 30 vs 20 → seller
+  filled 20, keeps 10; buyers full; all @ 255) asserting pro-rata + uniform price;
+  updated `testMarketOnClose` (balanced) + `testAtomicRollback` / `testDarkPoolPrivacy`
+  to the allocation model. **All scripts pass, no warnings.**
+- **Renamed off hackathon framing.** Package `private-ceth-settlement` →
+  `canton-dvp-settlement-desk` (DAR output too); retitled README / JOURNAL / doc
+  headers to "Canton DvP Settlement Desk" and reframed as a personal learning/demo
+  build (kept cETH + onRails/Devnet notes). Added README **Run it locally** and
+  **Share it / deploy to Devnet** sections.
+
+**Learned / decided:**
+- AUTHORITY ≠ VISIBILITY. Both DvP principals sign the agreement (authority to move
+  both legs), but the single submitter still needs *visibility* of each contract it
+  touches — hence the explicit `Disclose`/allocate step, which is also the honest,
+  pruning-safe replacement for divulgence.
+- Pooling through the venue-as-CCP (all within one transaction) is what makes a
+  many-to-many pro-rata cross expressible while keeping each leg's move inside the
+  choice where that trader's authority lives — and keeps the whole close atomic.
+
+**Status:** `daml build` ✅ · `daml test` ✅ (all scripts `ok`, zero divulgence
+warnings) on SDK 2.9.4.
+
+**Next:**
+- Devnet deploy per DEPLOY.md; paste the `SettlementBatch` / `SettlementReceipt`
+  update ids as on-ledger evidence.

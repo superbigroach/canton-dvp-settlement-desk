@@ -11,7 +11,7 @@ Curated catalog of the official Digital Asset / Canton ecosystem repos — **ref
 ## The ones that matter (ranked)
 | Repo | What it is | How to use it |
 |---|---|---|
-| **cn-quickstart** ⭐⭐⭐ | Official "start quick" bootstrap for a Canton app + Devnet deploy | **Fastest path to a deployed submission** — bootstrap your app on top of it. |
+| **cn-quickstart** ⭐⭐⭐ | Official "start quick" bootstrap for a Canton app + Devnet deploy | **Fastest path to a deployed app** — bootstrap your app on top of it. |
 | **daml-finance** ⭐⭐⭐ | Official Daml **Finance** library: instruments, holdings, settlement, DvP | **Use as a dependency** — build the settlement desk on its primitives instead of hand-rolling. Institutional-grade. |
 | **daml-finance-app** ⭐⭐ | Reference app on daml-finance | Study settlement/holdings/DvP patterns. |
 | **xreserve-deposits** ⭐ | USDC deposits to Canton via Ethereum (xReserve) | Reference for the cETH/deposit/bridging angle. |
@@ -34,6 +34,6 @@ git clone https://github.com/digital-asset/xreserve-deposits.git    # USDC->Cant
 ## The strategic path (given a tight timeline)
 1. **Bootstrap from `cn-quickstart`** — get a deployable Canton app skeleton + Devnet wiring out of the box.
 2. **Build the settlement desk using `daml-finance`** holdings/settlement/DvP primitives — faster and more professional than hand-rolling, and it reads as institutional-grade to judges *and* to a JPMorgan audience.
-3. The hand-rolled DAML in `daml/` here is your **learning foundation** (shows you understand the primitives); the *submission* can bootstrap from the official quickstart + library.
+3. The hand-rolled DAML in `daml/` here is the **learning foundation** (shows the primitives are understood); a deployed build can bootstrap from the official quickstart + library.
 
-> **Verify the Daml SDK / Splice version** Devnet expects (from `cn-quickstart` / HackCanton onboarding) and set it in `daml.yaml`. Real **cETH is issued by onRails** — you can't self-mint it on Devnet; request it via their form and align `Token.daml`'s `issuer`/`instrument` to onRails' registry values.
+> **Verify the Daml SDK / Splice version** Devnet expects (from `cn-quickstart` / Devnet onboarding) and set it in `daml.yaml`. Real **cETH is issued by onRails** — you can't self-mint it on Devnet; request it via their form and align `Instrument.daml`'s `issuer`/`id` to onRails' registry values.

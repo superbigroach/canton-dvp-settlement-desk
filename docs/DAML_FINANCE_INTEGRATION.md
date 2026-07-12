@@ -13,7 +13,7 @@ institutional-grade primitives.
 > **Honesty note.** The mapping below reflects the Daml Finance V4 package layout
 > and the standard instrument/holding/settlement lifecycle. The precise package
 > **versions** must be pinned to whatever the Canton **Devnet / Splice** release
-> you deploy against ships — confirm them from the cn-quickstart / HackCanton
+> you deploy against ships — confirm them from the cn-quickstart / Devnet
 > onboarding before adding the dependencies. Treat the version strings here as
 > placeholders to be replaced, not as verified pins.
 
@@ -23,8 +23,8 @@ institutional-grade primitives.
 
 1. **Version-pin safety.** Daml Finance packages must match the ledger's SDK /
    Splice release exactly. Pinning the wrong version is the single most common
-   way a hackathon build stops compiling the day before submission. A core built
-   on only the standard library **always builds** with whatever SDK you install.
+   way a build stops compiling. A core built on only the standard library
+   **always builds** with whatever SDK you install.
 2. **It demonstrates that we understand the primitives.** The hand-rolled
    `Instrument` / `Holding` / `Settlement` templates are modelled on the exact
    Daml Finance shapes (see the table). Reviewers — and a JPMorgan Digital Assets

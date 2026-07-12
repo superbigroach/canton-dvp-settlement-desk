@@ -1,7 +1,7 @@
 -- Settlement.daml
 -- ===========================================================================
 -- ATOMIC DELIVERY-versus-PAYMENT (DvP) — the core settlement engine of the
--- Private Settlement Desk.
+-- Canton DvP Settlement Desk.
 -- ===========================================================================
 -- THE PROBLEM
 --   Two institutions want to swap tokenised assets. One holds an asset (a
@@ -81,9 +81,20 @@ template DvPProposal
     choice Accept : ContractId DvPAgreement
       controller counterparty
       do
+        -- ALLOCATE THE CASH LEG (the "allocate" step of daml-finance's
+        -- allocate → approve → settle lifecycle). The single party that triggers
+        -- Settle is the PROPOSER, and the proposer owns/sees only the ASSET leg —
+        -- not the counterparty's cash holding (a Holding is visible to issuer +
+        -- owner only). So the counterparty, who DOES own and see the cash here,
+        -- discloses it to the proposer. Now the proposer-submitted Settle can
+        -- legitimately fetch BOTH legs (no "contract not visible to the reading
+        -- parties" error, and no reliance on deprecated divulgence). The asset leg
+        -- needs no disclosure — the proposer already owns it.
+        allocatedCash <- exercise cashHoldingCid Disclose with newObserver = proposer
         create DvPAgreement with
           proposer; counterparty; auditor
-          assetHoldingCid; cashHoldingCid
+          assetHoldingCid
+          cashHoldingCid = allocatedCash
           assetInstrument; assetAmount; cashInstrument; cashAmount
 
     -- WITHDRAW — the proposer cancels before acceptance. No holding moves.
@@ -122,9 +133,11 @@ template DvPAgreement
     choice Settle : SettleResult
       controller proposer
       do
-        -- Fetch both legs. Authorised because a stakeholder of each is a
+        -- Fetch both legs. VISIBILITY: the proposer sees the asset (it owns it)
+        -- and now sees the cash too, because Accept allocated (disclosed) the cash
+        -- holding to the proposer. AUTHORITY: a stakeholder of each leg is a
         -- signatory of this agreement (proposer for the asset, counterparty for
-        -- the cash — both sign this contract).
+        -- the cash — both sign this contract), so both Transfer legs are permitted.
         asset <- fetch assetHoldingCid
         cash  <- fetch cashHoldingCid
 
@@ -230,9 +243,10 @@ data FillRecord = FillRecord
 --
 -- (This is the self-contained analogue of a `Daml.Finance.Settlement.V4.Batch`.
 -- The real library's Batch actively executes a list of Instructions once every
--- party has allocated/approved; here the per-leg moves happen inside the sealed
--- orders — where each trader's authority lives — and this contract is the venue's
--- signed, immutable record of the whole batch.)
+-- party has allocated/approved; here each trader allocates its leg by pledging it
+-- (inside a choice on its own sealed order — where its authority lives) to the
+-- venue, which pools and redistributes at the uniform close, and this contract is
+-- the venue's signed, immutable record of the whole batch.)
 template SettlementBatch
   with
     operator     : Party      -- the auction venue that ran the close

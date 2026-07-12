@@ -1,6 +1,6 @@
-# Business Brief — Private cETH Settlement Desk
+# Business Brief — Canton DvP Settlement Desk
 
-*One-page brief for the HackCanton Season 2 **RWA & Business Workflows** track.*
+*One-page brief on the RWA & business-workflow settlement problem this desk models.*
 
 ---
 

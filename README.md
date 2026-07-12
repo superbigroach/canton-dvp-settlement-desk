@@ -1,24 +1,23 @@
-# Private Settlement Desk on Canton
+# Canton DvP Settlement Desk
 
 **Atomic Delivery-versus-Payment (DvP) and a sealed-order Market-on-Close auction
-between tokenised assets — private by construction.** Institutions swap a
+between tokenised assets — private by construction.** Two institutions swap a
 tokenised equity (`DEMO:AAPL`), tokenised cash (`USD`), and wrapped Ethereum
 (`cETH`, by [onRails](https://onrails.io)) with **zero principal risk**
 (all-or-nothing settlement) and **zero information leakage** (each party sees only
 its own side).
 
-> Built for **HackCanton Season 2** — RWA & Business Workflows track + the **cETH
-> bounty**. It doubles as a working reference for the exact problem institutional
-> digital-asset desks (JPMorgan's Kinexys / JPMD, the Canton Network) exist to
-> solve: privacy-preserving, atomic settlement of tokenised assets between known
-> counterparties.
+> A Canton settlement desk I built to learn and demo the platform — a working
+> reference for the exact problem institutional digital-asset desks (JPMorgan's
+> Kinexys / JPMD, the Canton Network) exist to solve: privacy-preserving, atomic
+> settlement of tokenised assets between known counterparties. It is not a
+> submission to anything; it's a hands-on model of the real workflow.
 
-> **Build status — honest.** The Daml is written in the portable 2.x/3.x subset
-> and compiles with only the SDK's standard library (`daml-prim` / `daml-stdlib`
-> / `daml-script`) — **no external `.dar` version pins**. It was **not compiled in
-> the authoring environment** (no Daml toolchain there); the first `daml build` /
-> `daml test` on a machine with the SDK is what confirms it. See
-> [Build & test](#build--test).
+> **Build status.** The Daml is written in the portable 2.x/3.x subset and
+> compiles with only the SDK's standard library (`daml-prim` / `daml-stdlib` /
+> `daml-script`) — **no external `.dar` version pins**. `daml build` succeeds and
+> `daml test` runs green (every `Script` in `daml/Test.daml` passes, with no
+> divulgence warnings) on Daml SDK **2.9.4**. See [Run it locally](#run-it-locally).
 
 ---
 
@@ -104,7 +103,7 @@ header explains the *why*, not just the *what*.
 |---|---|---|---|
 | `DEMO:AAPL` | `Equity` | `referencePrice = 255.0` | the auctioned asset in the MOC demo |
 | `USD` | `Cash` | — | the cash leg |
-| `cETH` | `CryptoWrapped` | onRails | the crypto delivery leg (the bounty) |
+| `cETH` | `CryptoWrapped` | onRails | the crypto delivery leg (wrapped ETH, no bridge) |
 
 ---
 
@@ -141,34 +140,35 @@ sequenceDiagram
     L-->>Aud: sees the receipt (the trade) — NOT the holdings
 ```
 
-## Flow 2 — Market-on-Close (sealed auction, batch settle)
+## Flow 2 — Market-on-Close (sealed auction, uniform-price cross)
 
-Four traders lodge **sealed** orders — no one sees a rival's order. The operator
-seals the window and runs the close at one price (255.0); every crossing pair
-settles atomically in a single `SettlementBatch`.
+Traders lodge **sealed** orders — no one sees a rival's order. The operator seals
+the window and runs the close: the auction crosses `min(totalBuy, totalSell)` at
+**one uniform price** — the published closing/reference price (255.0) — never a
+price the operator picks per fill. If the two sides are unequal, the **heavy side
+is rationed pro-rata** and the light side fills in full; the unmatched residual
+does not settle. Every fill lands atomically in a single `SettlementBatch`.
 
 ```mermaid
 flowchart TD
     subgraph Sealed["Sealed order window — each order private to venue + its trader"]
-        BO1["Alice BUY 10 @ 260<br/>(commits 2,600 USD)"]
-        SO1["Bob SELL 10 @ 250<br/>(commits 10 AAPL)"]
-        BO2["Dave BUY 8 @ 256<br/>(commits 2,040 USD)"]
-        SO2["Carol SELL 8 @ 253<br/>(commits 8 AAPL)"]
+        BO1["Alice BUY 10 @ 260<br/>(commits 2,550 USD)"]
+        BO2["Bank  BUY 10 @ 258<br/>(commits 2,550 USD)"]
+        SO1["Bob  SELL 30 @ 250<br/>(commits 30 AAPL)"]
     end
-    Op["Venue / Operator<br/>CloseBidding → RunClose @ 255.0"]
+    Op["Venue / Operator<br/>CloseBidding → RunClose @ 255.0<br/>totalBuy 20 vs totalSell 30 → matched 20"]
     BO1 --> Op
-    SO1 --> Op
     BO2 --> Op
-    SO2 --> Op
-    Op --> X1["Cross A: Alice ⇄ Bob<br/>10 @ 255 = 2,550 USD"]
-    Op --> X2["Cross B: Dave ⇄ Carol<br/>8 @ 255 = 2,040 USD"]
-    X1 --> B["SettlementBatch (one atomic tx)<br/>+ 2 SettlementReceipts"]
-    X2 --> B
-    B --> R["Alice +10 AAPL, Bob +2,550 USD<br/>Dave +8 AAPL, Carol +2,040 USD<br/>Alice +50 USD change"]
+    SO1 --> Op
+    Op --> P["Pledge → pool → deliver (one atomic tx)<br/>buyers fill FULL; Bob rationed 30·20/30 = 20"]
+    P --> B["SettlementBatch @ 255.0<br/>+ SettlementReceipts (venue-signed)"]
+    B --> R["Alice +10 AAPL, Bank +10 AAPL<br/>Bob +5,100 USD, KEEPS 10 unfilled AAPL"]
 ```
 
-No participant saw another's order; there was no market impact and no
-front-running; the batch is all-or-nothing.
+No participant saw another's order; every fill printed at the same price with no
+market impact and no front-running; the over-subscribed side was rationed fairly;
+the batch is all-or-nothing. (`testMarketOnClose` shows a balanced cross;
+`testMarketOnCloseImbalance` shows exactly the pro-rata rationing above.)
 
 ---
 
@@ -187,46 +187,47 @@ This is a scale model of institutional tokenised settlement:
 
 ---
 
-## The cETH bounty (onRails)
+## cETH as a delivery leg (onRails)
 
 `cETH` is a first-class delivery leg. `testAgentInitiatedDvP` settles a real cETH
 DvP, and cETH can equally be the asset leg of a Market-on-Close cross. Running the
 demo on Devnet with **onRails cETH** drives genuine on-ledger cETH state changes —
-mint → transfer → settle — which is exactly what the bounty rewards. Devnet cETH is
-requested from onRails (see [DEPLOY.md](./DEPLOY.md)); gas on Devnet is Canton Coin
-(free from the tap).
+mint → transfer → settle — with no bridge. Devnet cETH is requested from onRails
+(see [DEPLOY.md](./DEPLOY.md)); gas on Devnet is Canton Coin (free from the tap).
 
 ---
 
-## Build & test
+## Run it locally
+
+Everything below runs **offline** on a local sandbox with self-issued tokens — no
+Devnet access, no credentials, and no coins required.
 
 ### 1. Install the Daml SDK
 
 ```bash
-curl -sSL https://get.digitalasset.com/install/install.sh | sh -s <version>
-daml version          # copy the printed version into daml.yaml → sdk-version
+curl -sSL https://get.daml.com/ | sh -s 2.9.4
+daml version          # should list 2.9.4 (matches daml.yaml → sdk-version)
 ```
-
-`daml.yaml` ships `sdk-version` as a **placeholder** — set it to your installed
-version (and, for Devnet, to the Splice/Daml release the onboarding specifies).
 
 ### 2. Run the scenarios
 
 ```bash
-cd hackcanton-ceth-settlement
+cd hackcanton-ceth-settlement    # the folder name is cosmetic — see the note below
 daml test
 ```
 
-`daml test` compiles the project and runs every `Script` in `daml/Test.daml`:
+`daml test` compiles the project and runs every `Script` in `daml/Test.daml`
+(all pass, no divulgence warnings):
 
 - `testInstrumentAndHolding` — publish instruments; mint/transfer/split/merge.
 - `testBilateralDvP` — the headline atomic DvP + audit receipt + auditor-can't-see-holdings.
-- `testMarketOnClose` — a 4-order sealed auction → one close price → atomic batch settlement, with balances checked.
+- `testMarketOnClose` — a 4-order sealed auction → one uniform close price → atomic batch, balances checked.
+- `testMarketOnCloseImbalance` — an over-subscribed side is rationed **pro-rata** at the one close price; the residual doesn't settle.
 - `testDarkPoolPrivacy` — an outsider sees nothing; a rival participant can't see another's sealed order.
 - `testAtomicRollback` — a bad leg rolls the **whole** settlement back.
 - `testAgentInitiatedDvP` — an agent settles cETH within a ledger-enforced mandate.
 
-### 3. Explore interactively
+### 3. Explore interactively (Navigator UI)
 
 ```bash
 daml start
@@ -236,15 +237,30 @@ Builds the DAR, starts a local Canton sandbox, runs `Test:initialize` (allocates
 Issuer / Venue / Alice / Bob / Bank / Auditor / Agent / Eve, publishes the
 instruments, and seeds a live DvP proposal), and opens **Navigator** at
 <http://localhost:7500>. Log in as each party to *see for yourself* what each can
-and cannot see — then Accept as Alice and Settle as Bob.
+and cannot see — then Accept as Alice and Settle as Bob. All still offline, on
+self-issued tokens.
+
+> **Folder name.** This directory is named `hackcanton-ceth-settlement` for
+> historical reasons; nothing depends on it, so you can rename it freely. The Daml
+> **package** is `canton-dvp-settlement-desk` (see `daml.yaml`).
 
 ---
 
-## Deploy to Canton Devnet
+## Share it / deploy to Devnet
 
-Deploying the DAR and executing a real settlement is the hackathon's qualifying
-requirement. Full step-by-step — including the human-only steps (Devnet
-credentials, cETH from the onRails form) — is in **[DEPLOY.md](./DEPLOY.md)**.
+**Share the code.** Push this repo to GitHub; anyone can then clone it and run
+`daml test` / `daml start` locally with just the SDK — no accounts or coins:
+
+```bash
+git clone <your-repo-url> && cd <repo> && daml test
+```
+
+**Deploy to Canton Devnet.** To execute a real, networked settlement (and drive
+genuine on-ledger cETH), deploy the DAR to Devnet via the
+[cn-quickstart](https://github.com/digital-asset/cn-quickstart) path. The
+human-only steps — Devnet credentials, and requesting test **cETH** through the
+onRails form — are written up step-by-step in **[DEPLOY.md](./DEPLOY.md)**. Gas on
+Devnet is Canton Coin, free from the tap.
 
 ---
 
@@ -269,5 +285,6 @@ credentials, cETH from the onRails form) — is in **[DEPLOY.md](./DEPLOY.md)**.
 
 ---
 
-*Licensed for hackathon and evaluation use. cETH is a product of onRails; Canton
-and Daml are products of Digital Asset. This is an independent submission.*
+*A personal learning/demo project, for evaluation use. cETH is a product of
+onRails; Canton and Daml are products of Digital Asset. Independent and
+unaffiliated.*
