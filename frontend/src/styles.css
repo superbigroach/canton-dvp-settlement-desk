@@ -417,3 +417,59 @@ button.primary.lp:hover:not(:disabled) {
   filter: brightness(1.06);
   box-shadow: 0 8px 24px rgba(230, 180, 80, 0.34);
 }
+
+/* =========================================================================
+   Decentralised operator (committee-attested NAV) + Fund/ETF builder panels
+   ========================================================================= */
+
+.row.tight { gap: 10px; align-items: flex-end; }
+
+/* ---- Committee (decentralised operator) ---- */
+.committee-step { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
+.committee-step:first-of-type { border-top: none; }
+.step-label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+
+.member-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.chip {
+  font: 500 12.5px/1 var(--ui); color: var(--muted); background: var(--surface);
+  border: 1px solid var(--border-2, var(--border)); border-radius: 999px; padding: 6px 12px; cursor: pointer;
+}
+.chip:hover:not(:disabled) { color: var(--text); }
+.chip.on { color: #cdd8ee; background: rgba(76,130,247,0.16); border-color: var(--accent-dk); }
+.chip.confirm { color: #a7e3c6; background: rgba(62,155,114,0.14); border-color: var(--buy-dk); }
+.chip:disabled { opacity: 0.5; cursor: default; }
+
+.attest-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.attest {
+  font: 500 12px/1 var(--mono); color: var(--faint); background: var(--surface);
+  border: 1px dashed var(--border-2, var(--border)); border-radius: var(--radius-sm); padding: 6px 10px;
+}
+.attest.signed { color: #a7e3c6; border-style: solid; border-color: var(--buy-dk); background: rgba(62,155,114,0.12); }
+
+.committee-result { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; text-align: center; }
+.fix-badge {
+  display: inline-block; font: 700 11px/1 var(--ui); letter-spacing: 0.1em; text-transform: uppercase;
+  color: #1a1400; background: var(--gold); padding: 6px 12px; border-radius: 999px; margin-bottom: 10px;
+}
+.fix-line { font-size: 16px; color: var(--text); margin-bottom: 8px; }
+.fix-line strong { color: var(--gold); }
+
+/* ---- Fund / ETF builder ---- */
+.basket-card { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; margin: 12px 0; background: var(--bg); }
+.basket-components { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.component-chip {
+  font: 500 12.5px/1 var(--ui); color: var(--text); background: var(--surface);
+  border: 1px solid var(--border-2, var(--border)); border-radius: var(--radius-sm); padding: 7px 11px;
+}
+.component-chip .mono { color: var(--gold); }
+.per-share { font-size: 12px; color: var(--muted); }
+
+.nav-line { display: flex; align-items: baseline; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--border); }
+.nav-label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.nav-line .nav { font-size: 20px; color: var(--gold); }
+.nav-breakdown { margin-top: 8px; }
+.nav-breakdown td { padding: 4px 6px; }
+
+.define-toggle { margin-top: 8px; }
+.define-basket { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
+.ghost.small { padding: 5px 10px; font-size: 12px; }

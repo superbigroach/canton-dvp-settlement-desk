@@ -22,7 +22,7 @@ import java.util.List;
 import java.util.Objects;
 
 public class Revoke extends DamlRecord<Revoke> {
-  public static final String _packageId = "12f056257e4f6e96f8abcaafbc3d7261e58f3fcddcba133f3033b91190110371";
+  public static final String _packageId = "f10d37a10d40ff7923e1d7476f49347809a28a7803b3be0c4252b2417f921d12";
 
   public Revoke() {
   }

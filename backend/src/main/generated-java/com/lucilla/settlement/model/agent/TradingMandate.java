@@ -45,11 +45,11 @@ import java.util.Optional;
 import java.util.Set;
 
 public final class TradingMandate extends Template {
-  public static final Identifier TEMPLATE_ID = new Identifier("12f056257e4f6e96f8abcaafbc3d7261e58f3fcddcba133f3033b91190110371", "Agent", "TradingMandate");
+  public static final Identifier TEMPLATE_ID = new Identifier("f10d37a10d40ff7923e1d7476f49347809a28a7803b3be0c4252b2417f921d12", "Agent", "TradingMandate");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("12f056257e4f6e96f8abcaafbc3d7261e58f3fcddcba133f3033b91190110371", "Agent", "TradingMandate");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("f10d37a10d40ff7923e1d7476f49347809a28a7803b3be0c4252b2417f921d12", "Agent", "TradingMandate");
 
-  public static final String PACKAGE_ID = "12f056257e4f6e96f8abcaafbc3d7261e58f3fcddcba133f3033b91190110371";
+  public static final String PACKAGE_ID = "f10d37a10d40ff7923e1d7476f49347809a28a7803b3be0c4252b2417f921d12";
 
   public static final Choice<TradingMandate, InitiateDvP, DvPProposal.ContractId> CHOICE_InitiateDvP = 
       Choice.create("InitiateDvP", value$ -> value$.toValue(), value$ -> InitiateDvP.valueDecoder()

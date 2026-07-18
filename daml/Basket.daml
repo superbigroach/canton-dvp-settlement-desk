@@ -1,0 +1,357 @@
+-- Basket.daml
+-- ===========================================================================
+-- THE ETF / TOKENISED-FUND BUILDER — in-kind CREATION & REDEMPTION with atomic
+-- settlement, on top of the same Holding + DvP engine as the rest of the desk.
+-- ===========================================================================
+-- WHAT THIS IS
+--   A basket token (an on-chain ETF / index unit) is defined by a CREATION UNIT:
+--   a fixed quantity of each underlying instrument PER share. Here a basket like
+--   "LX1 = 0.01 CBTC + 0.10 cETH per share" is a `BasketDefinition`; a share of it
+--   is an ordinary `Holding` of the basket instrument, issued by the fund
+--   administrator, and it settles, transfers, and prices exactly like cETH or USDC.
+--
+-- WHY IN-KIND CREATION/REDEMPTION (the mechanism that makes an ETF an ETF)
+--   Real ETFs are not "buy the underlyings and wrap them." An AUTHORISED
+--   PARTICIPANT (AP) delivers the exact basket of underlyings and receives newly
+--   MINTED shares (creation), or returns shares and receives the underlyings back
+--   (redemption). This in-kind mechanism is what keeps the share price glued to NAV
+--   (arbitrage) and what makes ETFs tax-efficient — no cash sale of the underlyings.
+--   The whole point is that creation and redemption are ATOMIC and principal-risk-
+--   free: the AP must not deliver the underlyings and then fail to receive shares,
+--   or vice-versa. That is precisely the DvP property this project already provides.
+--
+-- HOW IT MAPS ONTO THE EXISTING ENGINE
+--   * A share == `Holding{issuer = administrator, instrumentId = basketId}`.
+--   * Creation == a multilateral atomic swap: N underlying legs move AP -> custody
+--     AND the basket-share leg is minted to the AP, all in ONE transaction. It
+--     reuses the DvP authorisation shape (propose -> approve -> process, both sign)
+--     and the `deliverExact` primitive from Holding.daml.
+--   * Redemption == the reverse: the AP's shares are burned and the custody
+--     underlyings are delivered back, atomically.
+--
+-- NAV (net asset value)
+--   NAV per share = Σ (unitsPerShare_i × price_i). The component prices are the
+--   instruments' reference/close marks — which, in this desk, are struck by the
+--   K-of-N OperatorCommittee and printed by the sealed auction (Governance.daml +
+--   MarketOnClose.daml). So a basket built here inherits a CREDIBLY-NEUTRAL NAV:
+--   its mark is not one venue's number but a committee-attested fix. `navPerShare`
+--   computes it from a price lookup; it is reporting only — in-kind creation and
+--   redemption move exact unit ratios and never need a price to be correct.
+--
+-- PRIVACY (unchanged Canton property)
+--   Underlyings are `Holding`s (issuer + owner only); a creation is visible to the
+--   AP, the administrator, and the named auditor — not to other APs or the market.
+--   Two competing APs never see each other's creations or inventories.
+-- ===========================================================================
+
+module Basket where
+
+import Holding
+import DA.List (dedup)
+
+-- ---------------------------------------------------------------------------
+-- Component — one leg of the creation unit: `unitsPerShare` units of an instrument
+-- per basket share. E.g. Component "cETH" 0.10 means each share holds 0.10 cETH.
+-- ---------------------------------------------------------------------------
+data Component = Component
+  with
+    instrumentId  : Text
+    unitsPerShare : Decimal
+  deriving (Eq, Show, Ord)
+
+-- ---------------------------------------------------------------------------
+-- BasketDefinition — the fund: what the basket token is made of and who may
+-- create/redeem it. The administrator issues the basket token and custodies the
+-- underlyings (kept as one party here; a distinct custodian drops in the same way
+-- Instrument keeps issuer vs depository distinct).
+-- ---------------------------------------------------------------------------
+template BasketDefinition
+  with
+    administrator  : Party        -- issues the basket token & custodies the underlyings
+    auditor        : Party        -- compliance observer (need-to-know)
+    basketId       : Text         -- the basket token symbol, e.g. "LX1"
+    description    : Text
+    cashInstrument : Text         -- unit the NAV is quoted in, e.g. "USDC"
+    components     : [Component]  -- the creation unit: units of each underlying per share
+    participants   : [Party]      -- authorised participants (APs) who may create/redeem
+  where
+    signatory administrator
+    observer (auditor :: participants)
+
+    ensure not (null components)
+        && all (\c -> c.unitsPerShare > 0.0) components
+        -- an instrument appears at most once in the creation unit
+        && length (dedup (map (.instrumentId) components)) == length components
+
+    -- REQUEST CREATION — an AP asks to create `shares` new units. It pre-commits the
+    -- underlying basket (unitsPerShare × shares of EACH component) by disclosing the
+    -- delivering holdings to the administrator, so the atomic ProcessCreation can
+    -- move them. `componentHoldingCids` MUST be aligned to `components` by index.
+    -- Nonconsuming: one definition backs unlimited creations/redemptions.
+    nonconsuming choice RequestCreation : ContractId CreationOrder
+      with
+        ap                   : Party
+        shares               : Decimal
+        componentHoldingCids : [ContractId Holding]
+      controller ap
+      do
+        assertMsg "AP must be an authorised participant" (ap `elem` participants)
+        assertMsg "shares must be positive" (shares > 0.0)
+        assertMsg "must supply exactly one delivering holding per component"
+          (length componentHoldingCids == length components)
+        -- Validate every delivered underlying against its component, and DISCLOSE it
+        -- to the administrator (honest visibility, never divulgence) so processing
+        -- can read/move it. Returns the disclosed cids, aligned to components.
+        disclosed <- forA (zip components componentHoldingCids) (\(c, hCid) -> do
+          h <- fetch hCid
+          assertMsg "delivered holding must belong to the AP"        (h.owner == ap)
+          assertMsg "delivered holding is the wrong instrument"      (h.instrumentId == c.instrumentId)
+          assertMsg "delivered holding is too small for the creation unit"
+            (h.amount >= c.unitsPerShare * shares)
+          exercise hCid Disclose with newObserver = administrator)
+        create CreationOrder with
+          administrator; ap; auditor; basketId; cashInstrument
+          components; shares; componentHoldingCids = disclosed
+
+    -- REQUEST REDEMPTION — an AP returns `shares` of the basket token to get the
+    -- underlying basket back. It pre-commits (discloses) its basket-share holding.
+    nonconsuming choice RequestRedemption : ContractId RedemptionOrder
+      with
+        ap               : Party
+        shares           : Decimal
+        basketHoldingCid : ContractId Holding
+      controller ap
+      do
+        assertMsg "AP must be an authorised participant" (ap `elem` participants)
+        assertMsg "shares must be positive" (shares > 0.0)
+        h <- fetch basketHoldingCid
+        assertMsg "returned holding must belong to the AP"          (h.owner == ap)
+        assertMsg "returned holding must be the basket token"       (h.instrumentId == basketId)
+        assertMsg "returned holding is smaller than the redemption" (h.amount >= shares)
+        disclosed <- exercise basketHoldingCid Disclose with newObserver = administrator
+        create RedemptionOrder with
+          administrator; ap; auditor; basketId; cashInstrument
+          components; shares; basketHoldingCid = disclosed
+
+-- ---------------------------------------------------------------------------
+-- CreationOrder — an AP's committed request, awaiting the administrator's approval.
+-- Signed by the AP; the administrator (and auditor) observe. Approval produces a
+-- bilaterally-signed agreement, exactly like a DvPProposal -> DvPAgreement.
+-- ---------------------------------------------------------------------------
+template CreationOrder
+  with
+    administrator        : Party
+    ap                   : Party
+    auditor              : Party
+    basketId             : Text
+    cashInstrument       : Text
+    components           : [Component]
+    shares               : Decimal
+    componentHoldingCids : [ContractId Holding]   -- disclosed underlyings, aligned to components
+  where
+    signatory ap
+    observer administrator, auditor
+
+    -- APPROVE — the administrator accepts. Both authorities now co-exist on the
+    -- agreement, which the atomic ProcessCreation needs (move underlyings with the
+    -- AP's authority; mint shares with the administrator's).
+    choice ApproveCreation : ContractId CreationAgreement
+      controller administrator
+      do
+        create CreationAgreement with
+          administrator; ap; auditor; basketId; cashInstrument
+          components; shares; componentHoldingCids
+
+    -- REJECT — the administrator declines (e.g. the AP is no longer eligible).
+    choice RejectCreation : ()
+      controller administrator
+      do pure ()
+
+    -- CANCEL — the AP withdraws its request before approval. Its underlyings never
+    -- moved; the disclosure is harmless (the administrator could already see them).
+    choice CancelCreation : ()
+      controller ap
+      do pure ()
+
+-- ---------------------------------------------------------------------------
+-- CreationAgreement — bilaterally signed; ProcessCreation executes atomically.
+-- ---------------------------------------------------------------------------
+template CreationAgreement
+  with
+    administrator        : Party
+    ap                   : Party
+    auditor              : Party
+    basketId             : Text
+    cashInstrument       : Text
+    components           : [Component]
+    shares               : Decimal
+    componentHoldingCids : [ContractId Holding]
+  where
+    signatory administrator, ap
+    observer auditor
+
+    -- PROCESS CREATION — the headline. In ONE transaction: (1) pull each component's
+    -- exact underlying from the AP into custody, (2) MINT the basket shares to the
+    -- AP, (3) write the receipt. All-or-nothing: if any component holding is short,
+    -- the whole creation rolls back and nothing moves (no principal risk).
+    choice ProcessCreation : CreationResult
+      controller administrator
+      do
+        -- 1) Pull each component into custody at the AP's authority (present as an
+        --    agreement signatory). deliverExact moves EXACTLY unitsPerShare×shares and
+        --    returns any change to the AP as a fresh private holding.
+        _ <- forA (zip components componentHoldingCids) (\(c, hCid) ->
+          deliverExact hCid (c.unitsPerShare * shares) administrator)
+
+        -- 2) MINT the basket shares to the AP. The administrator is the issuer of the
+        --    basket token; its authority is present as an agreement signatory, so the
+        --    freshly-issued Holding is valid — the same delegated-issuance model the
+        --    whole desk uses. The shares are the AP's, private to it.
+        mintedCid <- create Holding with
+          issuer = administrator; instrumentId = basketId
+          owner = ap; amount = shares; disclosedTo = []
+
+        -- 3) Immutable audit receipt of the creation.
+        now <- getTime
+        r <- create BasketReceipt with
+          administrator; ap; auditor; basketId
+          action = "Creation"; shares; components; cashInstrument
+          settledAt = now
+        pure CreationResult with mintedShares = mintedCid; receipt = r
+
+-- Result of a successful creation (named fields, not a bare tuple).
+data CreationResult = CreationResult
+  with
+    mintedShares : ContractId Holding        -- the newly-minted basket shares, held by the AP
+    receipt      : ContractId BasketReceipt  -- the immutable audit record
+  deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- RedemptionOrder — an AP's committed return, awaiting approval. The administrator
+-- supplies (at approval) the custody holdings that will be delivered back — one per
+-- component, that it owns — and countersigns.
+-- ---------------------------------------------------------------------------
+template RedemptionOrder
+  with
+    administrator    : Party
+    ap               : Party
+    auditor          : Party
+    basketId         : Text
+    cashInstrument   : Text
+    components        : [Component]
+    shares           : Decimal
+    basketHoldingCid : ContractId Holding    -- the AP's disclosed basket-share holding
+  where
+    signatory ap
+    observer administrator, auditor
+
+    -- APPROVE — the administrator provides the custody underlyings (aligned to
+    -- components, owned by it) and accepts. Produces the bilaterally-signed agreement.
+    choice ApproveRedemption : ContractId RedemptionAgreement
+      with
+        custodyHoldingCids : [ContractId Holding]
+      controller administrator
+      do
+        assertMsg "must supply exactly one custody holding per component"
+          (length custodyHoldingCids == length components)
+        create RedemptionAgreement with
+          administrator; ap; auditor; basketId; cashInstrument
+          components; shares; basketHoldingCid; custodyHoldingCids
+
+    choice RejectRedemption : ()
+      controller administrator
+      do pure ()
+
+    choice CancelRedemption : ()
+      controller ap
+      do pure ()
+
+-- ---------------------------------------------------------------------------
+-- RedemptionAgreement — bilaterally signed; ProcessRedemption executes atomically.
+-- ---------------------------------------------------------------------------
+template RedemptionAgreement
+  with
+    administrator      : Party
+    ap                 : Party
+    auditor            : Party
+    basketId           : Text
+    cashInstrument     : Text
+    components         : [Component]
+    shares             : Decimal
+    basketHoldingCid   : ContractId Holding
+    custodyHoldingCids : [ContractId Holding]
+  where
+    signatory administrator, ap
+    observer auditor
+
+    -- PROCESS REDEMPTION — in ONE transaction: (1) burn the AP's shares, (2) deliver
+    -- each component's exact underlying from custody back to the AP, (3) receipt.
+    -- All-or-nothing.
+    choice ProcessRedemption : RedemptionResult
+      controller administrator
+      do
+        -- 1) BURN the returned shares. Deliver exactly `shares` of the basket token
+        --    from the AP to the administrator (the issuer) — AP authority present as
+        --    an agreement signatory — then Redeem to extinguish them (issuer == owner
+        --    == administrator, so its single authority suffices).
+        returnedCid <- deliverExact basketHoldingCid shares administrator
+        exercise returnedCid Redeem
+
+        -- 2) Deliver each component's underlying from custody back to the AP (exact
+        --    units), at the administrator's authority (present as a signatory).
+        returned <- forA (zip components custodyHoldingCids) (\(c, hCid) -> do
+          h <- fetch hCid
+          assertMsg "custody holding must belong to the administrator" (h.owner == administrator)
+          assertMsg "custody holding is the wrong instrument"          (h.instrumentId == c.instrumentId)
+          assertMsg "custody holding is too small to redeem the basket"
+            (h.amount >= c.unitsPerShare * shares)
+          deliverExact hCid (c.unitsPerShare * shares) ap)
+
+        -- 3) Immutable audit receipt of the redemption.
+        now <- getTime
+        r <- create BasketReceipt with
+          administrator; ap; auditor; basketId
+          action = "Redemption"; shares; components; cashInstrument
+          settledAt = now
+        pure RedemptionResult with returnedUnderlyings = returned; receipt = r
+
+-- Result of a successful redemption.
+data RedemptionResult = RedemptionResult
+  with
+    returnedUnderlyings : [ContractId Holding]   -- the underlyings delivered back to the AP
+    receipt             : ContractId BasketReceipt
+  deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- BasketReceipt — the immutable audit/confirm artifact of a create or redeem.
+-- ---------------------------------------------------------------------------
+template BasketReceipt
+  with
+    administrator  : Party
+    ap             : Party
+    auditor        : Party
+    basketId       : Text
+    action         : Text        -- "Creation" | "Redemption"
+    shares         : Decimal
+    components     : [Component]
+    cashInstrument : Text
+    settledAt      : Time
+  where
+    signatory administrator
+    observer ap, auditor
+    ensure action == "Creation" || action == "Redemption"
+
+-- ---------------------------------------------------------------------------
+-- navPerShare — NAV of ONE basket share = Σ (unitsPerShare_i × price_i), given a
+-- price lookup for each component instrument. Returns None if any component has no
+-- price (an incomplete mark). The prices are the instruments' reference/close marks
+-- — struck by the committee-attested auction — so this NAV is credibly neutral.
+-- Reporting only: in-kind creation/redemption is exact-ratio and needs no price.
+-- ---------------------------------------------------------------------------
+navPerShare : [Component] -> (Text -> Optional Decimal) -> Optional Decimal
+navPerShare comps priceOf = foldl step (Some 0.0) comps
+  where
+    step acc c = do
+      running <- acc
+      p       <- priceOf c.instrumentId
+      pure (running + c.unitsPerShare * p)

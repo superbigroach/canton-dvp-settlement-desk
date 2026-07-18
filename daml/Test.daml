@@ -45,6 +45,8 @@ import Holding
 import Settlement
 import MarketOnClose
 import Agent
+import Governance
+import Basket
 
 -- Instrument ids — keep string literals consistent across scenarios.
 aapl : Text
@@ -286,7 +288,7 @@ testMarketOnClose = do
       operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
       session = "Close"
       referencePrice = 255.0
-      participants = [alice, bob, carol, dave]; liquidityProvider = None; isOpen = True
+      participants = [alice, bob, carol, dave]; liquidityProvider = None; fixingRef = None; isOpen = True
 
   -- Each participant lodges a SEALED order, pre-committing its holding.
   bobSell <- submit bob do
@@ -357,7 +359,7 @@ testOpeningCross = do
       operator = venue; auditor; instrumentId = ceth; cashInstrument = usdc
       session = "Open"
       referencePrice = 2400.0
-      participants = [alice, bob]; liquidityProvider = None; isOpen = True
+      participants = [alice, bob]; liquidityProvider = None; fixingRef = None; isOpen = True
 
   bobSell <- submit bob do
     exerciseCmd auctionCid SubmitOrder with
@@ -410,7 +412,7 @@ testMarketOnCloseImbalance = do
       operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
       session = "Close"
       referencePrice = 255.0
-      participants = [alice, bank, bob]; liquidityProvider = None; isOpen = True
+      participants = [alice, bank, bob]; liquidityProvider = None; fixingRef = None; isOpen = True
 
   bobSell <- submit bob do
     exerciseCmd auctionCid SubmitOrder with
@@ -475,7 +477,7 @@ testReservedBackingSurvivesResubmit = do
     createCmd ClosingAuction with
       operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
       session = "Close"; referencePrice = 255.0
-      participants = [alice, bob]; liquidityProvider = None; isOpen = True
+      participants = [alice, bob]; liquidityProvider = None; fixingRef = None; isOpen = True
 
   -- First buy reserves 2,550 out of Alice's single holding into a dedicated slice
   -- (disclosed to the venue); the 2,550 change stays FREE and private to Alice.
@@ -526,7 +528,7 @@ testWithdrawAndVenueClear = do
     createCmd ClosingAuction with
       operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
       session = "Close"; referencePrice = 255.0
-      participants = [alice, bob]; liquidityProvider = None; isOpen = True
+      participants = [alice, bob]; liquidityProvider = None; fixingRef = None; isOpen = True
 
   aliceBuy <- submit alice do
     exerciseCmd auctionCid SubmitOrder with
@@ -578,7 +580,7 @@ testDarkPoolPrivacy = do
       operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
       session = "Close"
       referencePrice = 255.0
-      participants = [alice, bob]; liquidityProvider = None; isOpen = True
+      participants = [alice, bob]; liquidityProvider = None; fixingRef = None; isOpen = True
   aliceBuy <- submit alice do
     exerciseCmd auctionCid SubmitOrder with
       trader = alice; side = Buy; quantity = 10.0; limitPrice = 260.0; holdingCid = aliceCash
@@ -721,6 +723,7 @@ testDesignatedLiquidityProvider = do
       session = "Close"; referencePrice = 255.0
       participants = [alice, bank, carol]
       liquidityProvider = Some bank
+      fixingRef = None
       isOpen = True
 
   -- Alice lodges a sealed BUY of 2. The book is now net BUY 2.
@@ -787,3 +790,237 @@ testDesignatedLiquidityProvider = do
   -- PRIVACY GUARD: an outsider cannot ask the venue to disclose the imbalance to
   -- itself — PublishImbalance is operator-controlled, and only the DLP observes it.
   pure ()
+
+-- ---------------------------------------------------------------------------
+-- TEST 8 — DECENTRALISED OPERATOR: a K-of-N committee-attested NAV fixing.
+-- ---------------------------------------------------------------------------
+-- The official price must not be any single party's number. A 2-of-3 committee
+-- proves it: the proposer ALONE cannot finalise; a non-member cannot confirm; only
+-- once a SECOND distinct member attests does an official NavFixing exist — and its
+-- signatory set IS the attestors, so K-of-N is provable from the contract itself.
+-- ---------------------------------------------------------------------------
+testThresholdAttestation : Script ()
+testThresholdAttestation = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  -- A 3-member committee (venue, bank, agent), threshold 2; issuer administers it.
+  let members = [venue, bank, agent]
+  committeeCid <- submit issuer do
+    createCmd OperatorCommittee with
+      admin = issuer; members; threshold = 2; auditor
+      label = "Lucilla NAV Committee"
+
+  -- A member (venue) proposes the cETH close fix @ 2,400. It is the first attestor.
+  propCid <- submit venue do
+    exerciseCmd committeeCid ProposeFixing with
+      proposer = venue; instrumentId = ceth; cashInstrument = usdc
+      session = "Close"; price = 2400.0; rationale = "uniform sealed-cross VWAP"
+
+  -- A NON-member (Eve) cannot confirm; the proposer cannot confirm itself twice.
+  submitMustFail eve   do exerciseCmd propCid Confirm with member = eve
+  submitMustFail venue do exerciseCmd propCid Confirm with member = venue
+  -- ONE attestation (the proposer's) is below the 2-of-3 threshold — cannot finalise.
+  submitMustFail venue do exerciseCmd propCid FinalizeFixing with publishTo = [venue]
+
+  -- A SECOND member (bank) confirms → two distinct attestors. Now it can finalise.
+  propCid2 <- submit bank do exerciseCmd propCid Confirm with member = bank
+  fixCid   <- submit venue do exerciseCmd propCid2 FinalizeFixing with publishTo = [venue]
+
+  -- The official fix carries >= threshold attestors, at the attested price.
+  Some fix <- queryContractId venue fixCid
+  fix.price === 2400.0
+  fix.instrumentId === ceth
+  assertMsg "official fix must carry at least the threshold of attestors"
+    (length fix.attestors >= 2)
+  -- The auditor and the published-to venue see it; an outsider does NOT.
+  assertMsg "auditor must see the official fix"  . isSome =<< queryContractId auditor fixCid
+  assertMsg "outsider must NOT see the fix (governance without leakage)"
+    . isNone =<< queryContractId eve fixCid
+
+-- ---------------------------------------------------------------------------
+-- TEST 9 — COMMITTEE-ATTESTED CLOSE: an auction BOUND to a NavFixing prints only
+-- at the attested price. A close whose price disagrees with the fix cannot run.
+-- ---------------------------------------------------------------------------
+testCommitteeAttestedClose : Script ()
+testCommitteeAttestedClose = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  -- 2-of-3 committee attests cETH close @ 2,400 and publishes the fix to the venue.
+  let members = [venue, bank, agent]
+  committeeCid <- submit issuer do
+    createCmd OperatorCommittee with
+      admin = issuer; members; threshold = 2; auditor; label = "NAV Committee"
+  propCid  <- submit venue do
+    exerciseCmd committeeCid ProposeFixing with
+      proposer = venue; instrumentId = ceth; cashInstrument = usdc
+      session = "Close"; price = 2400.0; rationale = "cross VWAP"
+  propCid2 <- submit bank do exerciseCmd propCid Confirm with member = bank
+  fixCid   <- submit venue do exerciseCmd propCid2 FinalizeFixing with publishTo = [venue]
+
+  -- The venue opens a close BOUND to the committee fix (fixingRef = Some fix).
+  bobCeth   <- mint issuer ceth bob   3.0
+  aliceCash <- mint issuer usdc alice 7200.0
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = ceth; cashInstrument = usdc
+      session = "Close"; referencePrice = 2400.0
+      participants = [alice, bob]; liquidityProvider = None
+      fixingRef = Some fixCid; isOpen = True
+  bobSell <- submit bob do
+    exerciseCmd auctionCid SubmitOrder with
+      trader = bob; side = Sell; quantity = 3.0; limitPrice = 2350.0; holdingCid = bobCeth
+  aliceBuy <- submit alice do
+    exerciseCmd auctionCid SubmitOrder with
+      trader = alice; side = Buy; quantity = 3.0; limitPrice = 2500.0; holdingCid = aliceCash
+
+  closedCid <- submit venue do exerciseCmd auctionCid CloseBidding
+  batchCid  <- submit venue do
+    exerciseCmd closedCid RunClose with buyOrders = [aliceBuy]; sellOrders = [bobSell]
+
+  -- The close printed at the attested 2,400 and settled the cross.
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 2400.0
+  aliceCeth <- ownedAmount alice ceth
+  bobUsd    <- ownedAmount bob   usdc
+  aliceCeth === 3.0
+  bobUsd    === 7200.0
+
+  -- TAMPER GUARD: an auction that binds to the SAME fix but prints a DIFFERENT price
+  -- (2,450) cannot run its close — the attestation is for 2,400, so RunClose aborts.
+  bobCeth2   <- mint issuer ceth bob   1.0
+  aliceCash2 <- mint issuer usdc alice 2450.0
+  badAuction <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = ceth; cashInstrument = usdc
+      session = "Close"; referencePrice = 2450.0
+      participants = [alice, bob]; liquidityProvider = None
+      fixingRef = Some fixCid; isOpen = True
+  badSell <- submit bob do
+    exerciseCmd badAuction SubmitOrder with
+      trader = bob; side = Sell; quantity = 1.0; limitPrice = 2400.0; holdingCid = bobCeth2
+  badBuy <- submit alice do
+    exerciseCmd badAuction SubmitOrder with
+      trader = alice; side = Buy; quantity = 1.0; limitPrice = 2500.0; holdingCid = aliceCash2
+  badClosed <- submit venue do exerciseCmd badAuction CloseBidding
+  submitMustFail venue do
+    exerciseCmd badClosed RunClose with buyOrders = [badBuy]; sellOrders = [badSell]
+
+-- ---------------------------------------------------------------------------
+-- TEST 10 — IN-KIND CREATION + REDEMPTION of an ETF basket (LX1 = 0.10 cETH +
+-- 0.01 CBTC per share). Creation atomically pulls the underlyings into custody and
+-- MINTS shares; redemption burns shares and returns the underlyings — both DvP-atomic.
+-- ---------------------------------------------------------------------------
+testCreateThenRedeem : Script ()
+testCreateThenRedeem = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  -- The fund administrator/custodian is `bank`; the AP is Alice. The underlying
+  -- instruments are still issued by `issuer` (onRails-style), kept distinct.
+  let comps = [Component ceth 0.10, Component cbtc 0.01]
+  basketCid <- submit bank do
+    createCmd BasketDefinition with
+      administrator = bank; auditor; basketId = "LX1"
+      description = "Lucilla Crypto Index (cETH + CBTC)"; cashInstrument = usdc
+      components = comps; participants = [alice, bob]
+
+  -- Alice holds the exact creation basket for 10 shares: 1.0 cETH + 0.1 CBTC.
+  aliceCeth <- mint issuer ceth alice 1.0
+  aliceCbtc <- mint issuer cbtc alice 0.1
+
+  -- CREATE 10 shares: request → approve → process (atomic).
+  orderCid <- submit alice do
+    exerciseCmd basketCid RequestCreation with
+      ap = alice; shares = 10.0; componentHoldingCids = [aliceCeth, aliceCbtc]
+  agreeCid <- submit bank do exerciseCmd orderCid ApproveCreation
+  cRes     <- submit bank do exerciseCmd agreeCid ProcessCreation
+
+  -- Alice received 10 LX1 shares; her underlyings moved into the administrator's custody.
+  Some sh <- queryContractId alice cRes.mintedShares
+  sh.owner        === alice
+  sh.instrumentId === "LX1"
+  sh.amount       === 10.0
+  aliceCethBal <- ownedAmount alice ceth
+  aliceCbtcBal <- ownedAmount alice cbtc
+  aliceCethBal === 0.0
+  aliceCbtcBal === 0.0
+  bankCeth0 <- ownedAmount bank ceth
+  bankCbtc0 <- ownedAmount bank cbtc
+  bankCeth0 === 1.0
+  bankCbtc0 === 0.1
+  -- The auditor sees the creation receipt; an outsider sees nothing.
+  assertMsg "auditor must see the creation receipt" . isSome =<< queryContractId auditor cRes.receipt
+  assertMsg "outsider must NOT see the minted shares" . isNone =<< queryContractId eve cRes.mintedShares
+
+  -- REDEEM 4 shares: Alice returns 4 LX1 and gets back 0.4 cETH + 0.04 CBTC. The
+  -- administrator supplies the custody holdings it will deliver back.
+  bankCethCid <- head . map fst
+    . filter (\(_, h) -> h.owner == bank && h.instrumentId == ceth) <$> query @Holding bank
+  bankCbtcCid <- head . map fst
+    . filter (\(_, h) -> h.owner == bank && h.instrumentId == cbtc) <$> query @Holding bank
+  redOrder <- submit alice do
+    exerciseCmd basketCid RequestRedemption with
+      ap = alice; shares = 4.0; basketHoldingCid = cRes.mintedShares
+  redAgree <- submit bank do
+    exerciseCmd redOrder ApproveRedemption with custodyHoldingCids = [bankCethCid, bankCbtcCid]
+  _redRes  <- submit bank do exerciseCmd redAgree ProcessRedemption
+
+  -- Alice now holds 6 LX1 and got 0.4 cETH + 0.04 CBTC back; custody holds the rest.
+  aliceLx    <- ownedAmount alice "LX1"
+  aliceCeth2 <- ownedAmount alice ceth
+  aliceCbtc2 <- ownedAmount alice cbtc
+  aliceLx    === 6.0
+  aliceCeth2 === 0.4
+  aliceCbtc2 === 0.04
+  bankCeth1  <- ownedAmount bank ceth
+  bankCbtc1  <- ownedAmount bank cbtc
+  bankCeth1  === 0.6
+  bankCbtc1  === 0.06
+
+-- ---------------------------------------------------------------------------
+-- TEST 11 — CREATION ATOMIC ROLLBACK: an AP short on ONE component cannot create.
+-- The request validates every leg up front, so nothing moves and nothing is minted.
+-- ---------------------------------------------------------------------------
+testCreationAtomicRollback : Script ()
+testCreationAtomicRollback = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  let comps = [Component ceth 0.10, Component cbtc 0.01]
+  basketCid <- submit bank do
+    createCmd BasketDefinition with
+      administrator = bank; auditor; basketId = "LX1"
+      description = "idx"; cashInstrument = usdc
+      components = comps; participants = [alice]
+
+  -- Enough cETH (needs 1.0) but SHORT CBTC (needs 0.1, has 0.05) for 10 shares.
+  aliceCeth <- mint issuer ceth alice 1.0
+  aliceCbtc <- mint issuer cbtc alice 0.05
+  submitMustFail alice do
+    exerciseCmd basketCid RequestCreation with
+      ap = alice; shares = 10.0; componentHoldingCids = [aliceCeth, aliceCbtc]
+
+  -- Alice keeps everything; no shares exist.
+  aliceCethBal <- ownedAmount alice ceth
+  aliceCbtcBal <- ownedAmount alice cbtc
+  aliceLx      <- ownedAmount alice "LX1"
+  aliceCethBal === 1.0
+  aliceCbtcBal === 0.05
+  aliceLx      === 0.0
+
+-- ---------------------------------------------------------------------------
+-- TEST 12 — NAV per share = Σ (unitsPerShare × price). With cETH @ 2,400 and CBTC
+-- @ 65,000: 0.10×2,400 + 0.01×65,000 = 240 + 650 = 890. A missing mark = no NAV.
+-- ---------------------------------------------------------------------------
+testNavPerShare : Script ()
+testNavPerShare = do
+  let comps = [Component ceth 0.10, Component cbtc 0.01]
+  let priceOf t
+        | t == ceth = Some 2400.0
+        | t == cbtc = Some 65000.0
+        | otherwise = None
+  navPerShare comps priceOf === Some 890.0
+  navPerShare comps (const None) === None
+

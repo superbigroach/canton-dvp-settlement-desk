@@ -26,6 +26,11 @@ source: daml                             # directory holding the .daml sources
 #   Settlement.daml     — atomic DvP (propose -> accept -> Settle) + SettlementBatch + receipts.
 #   MarketOnClose.daml  — the sealed-order Market-on-Close auction (programmable dark pool).
 #   Agent.daml          — delegated / agent-initiated settlement under a mandate limit.
+#   Governance.daml     — the decentralised operator: a K-of-N committee (OperatorCommittee)
+#                         that strikes a threshold-attested NavFixing (the official price no
+#                         single party can print). MarketOnClose can bind a close to it.
+#   Basket.daml         — the ETF / tokenised-fund builder: in-kind CREATION & REDEMPTION
+#                         (deliver underlyings ↔ mint/burn shares, atomically) + NAV per share.
 #   Test.daml           — Daml Script scenarios + the `initialize` init-script below.
 
 # `daml start` auto-runs this script after spinning up the local sandbox: it

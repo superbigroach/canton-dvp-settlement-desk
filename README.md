@@ -240,6 +240,86 @@ panel, and a normal trader still cannot see the book at all.
 
 ---
 
+## Flow 3 — The decentralised operator (K-of-N committee-attested NAV)
+
+An official price is only trustworthy if the party who strikes it *cannot* strike it
+alone. `Governance.daml` models the auction operator as a **decentralised party**: a
+standing `OperatorCommittee` of N members with a threshold **K**, and a `NavFixing`
+that only exists once **K distinct members have attested** to it. This is the
+self-contained analogue of BitSafe / DLC.Link's *Decentralized Party Manager*
+(Apache-2.0), whose attestor nodes act as Canton "signing parties" under threshold
+governance — reimplemented here at the contract level so it compiles on the bare SDK.
+
+The attestation is built the canonical Daml way — an **accumulating multisignature**:
+
+1. `ProposeFixing` — a member proposes a price; the proposal is signed by that one member.
+2. `Confirm` — each further member confirms; the choice archives and re-creates the
+   proposal with the confirming member added to **both** the approver list and the
+   **signatory set**. The signature set grows one member per transaction.
+3. `FinalizeFixing` — once ≥ K members have signed, it mints a `NavFixing` whose
+   **signatory set *is* the attestors**. The fix therefore cannot exist without K
+   genuine member signatures — provable from the contract itself.
+
+A `ClosingAuction` can be **bound** to a fix (`fixingRef`): `RunClose` then fetches
+the `NavFixing` and asserts the printed price equals the attested price and that it
+carries ≥ threshold signatures — so the close is provably a committee fix, not one
+venue's number. `testThresholdAttestation` proves a single member cannot finalise a
+2-of-3; `testCommitteeAttestedClose` proves a bound close prints only at the attested
+NAV (and a tampered price aborts the whole cross).
+
+## Flow 4 — The ETF / tokenised-fund builder (in-kind creation & redemption)
+
+`Basket.daml` builds a **tokenised ETF** on the same engine. A basket (e.g.
+`LX1 = 0.10 cETH + 0.01 CBTC` per share) is defined by a **creation unit**; a share
+is an ordinary `Holding` of the basket instrument, issued by the fund administrator,
+and it transfers/prices/settles like any other token.
+
+Creation and redemption are **in-kind and atomic** — the mechanism that keeps an ETF
+glued to NAV:
+
+- **Create** — an authorised participant (AP) delivers the exact underlyings and
+  receives freshly-minted shares, in **one transaction** (`RequestCreation` →
+  `ApproveCreation` → `ProcessCreation`, both parties signing — the same
+  propose→approve→settle shape as the DvP engine, reusing `deliverExact`).
+- **Redeem** — the reverse: the AP's shares are **burned** and the custody underlyings
+  are delivered back, atomically.
+
+NAV per share = Σ (unitsPerShare × close mark); the marks are the committee-attested
+prices from Flow 3, so the basket inherits a **credibly-neutral NAV**. `cETH` and
+`CBTC` drive the state changes (HackCanton bounty assets). `testCreateThenRedeem`,
+`testCreationAtomicRollback`, and `testNavPerShare` prove it end-to-end.
+
+**Try it (with the stack running — see "Run it locally"):**
+```bash
+# Decentralised operator: a 2-of-3 committee strikes the official cETH close.
+COMM=$(curl -s -X POST :8080/api/committee -H 'Content-Type: application/json' \
+  -d '{"admin":"Issuer","members":["Venue","Bank","Agent"],"threshold":2}' | jq -r .contractId)
+P=$(curl -s -X POST ":8080/api/committee/$COMM/propose" -H 'Content-Type: application/json' \
+  -d '{"proposer":"Venue","instrumentId":"cETH","price":2400,"session":"Close"}' | jq -r .contractId)
+curl -s -o /dev/null -w '1-of-2 finalize (must fail): HTTP %{http_code}\n' \
+  -X POST ":8080/api/fixing/$P/finalize" -H 'Content-Type: application/json' \
+  -d '{"proposer":"Venue","publishTo":["Venue"]}'                       # -> 422
+P2=$(curl -s -X POST ":8080/api/fixing/$P/confirm" -H 'Content-Type: application/json' \
+  -d '{"member":"Bank"}' | jq -r .contractId)
+curl -s -X POST ":8080/api/fixing/$P2/finalize" -H 'Content-Type: application/json' \
+  -d '{"proposer":"Venue","publishTo":["Venue"]}'                       # -> NavFixing (K-of-N attested)
+
+# ETF builder: define, then create + redeem in-kind.
+curl -s -X POST :8080/api/basket -H 'Content-Type: application/json' \
+  -d '{"administrator":"Bank","basketId":"LX1","components":[{"instrumentId":"cETH","unitsPerShare":0.1},{"instrumentId":"CBTC","unitsPerShare":0.01}],"participants":["Alice","Bob"]}'
+curl -s -X POST :8080/api/basket/create -H 'Content-Type: application/json' \
+  -d '{"basketId":"LX1","ap":"Alice","shares":10}'   # Alice: -1.0 cETH -0.1 CBTC, +10 LX1
+curl -s ":8080/api/basket/nav?basketId=LX1"          # navPerShare 890 USDC (0.1*2400 + 0.01*65000)
+curl -s -X POST :8080/api/basket/redeem -H 'Content-Type: application/json' \
+  -d '{"basketId":"LX1","ap":"Alice","shares":4}'    # Alice: +0.4 cETH +0.04 CBTC, LX1 -> 6
+```
+
+In the web app, a **Decentralised Operator** card walks the propose → confirm →
+finalise attestation (you watch the signatures accumulate), and a **Fund / ETF
+Builder** card defines baskets and creates/redeems them in-kind with a live NAV.
+
+---
+
 ## How it maps to JPMorgan's stack
 
 This is a scale model of institutional tokenised settlement:
@@ -253,6 +333,8 @@ This is a scale model of institutional tokenised settlement:
 | `ImbalanceDisclosure` → one DLP only | **selective disclosure** — reveal net flow to a committed market-maker without leaking the book |
 | Canton synchronizer + participant privacy | Kinexys' privacy-preserving shared ledger |
 | `SettlementReceipt` / `SettlementBatch` | the immutable settlement + audit record |
+| `OperatorCommittee` → K-of-N `NavFixing` | a **decentralised price administrator** — the official fix no single party can strike (à la a reference-rate panel) |
+| `BasketDefinition` in-kind create/redeem | **tokenised fund / ETF** primary market — Authorized-Participant creation & redemption units |
 
 ---
 

@@ -9,6 +9,8 @@ import {
   type Party,
   type Session,
 } from './api';
+import CommitteePanel from './CommitteePanel';
+import FundPanel from './FundPanel';
 
 const CASH = 'USDC';
 
@@ -708,6 +710,18 @@ export default function App() {
             Refresh
           </button>
         </section>
+
+        {/* -------- Decentralised operator · committee-attested NAV -------- */}
+        <CommitteePanel parties={parties} instruments={instruments} flash={flash} />
+
+        {/* -------- Fund / ETF builder · in-kind create & redeem -------- */}
+        <FundPanel
+          parties={parties}
+          instruments={instruments}
+          acting={acting}
+          onChanged={() => void loadHoldings(acting)}
+          flash={flash}
+        />
 
         {/* -------- Receipts -------- */}
         <section className="card receipts">

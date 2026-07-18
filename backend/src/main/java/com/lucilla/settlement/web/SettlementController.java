@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -236,7 +237,7 @@ public class SettlementController {
             Optional<String> dlp = defaultLiquidityProvider();
             auctionCid = ledger.submitForCreated(venue,
                     LedgerCommands.createAuction(venue, auditor, req.instrumentId(),
-                            cashInstrument, session, closingPrice, participants, dlp),
+                            cashInstrument, session, closingPrice, participants, dlp, Optional.empty()),
                     LedgerCommands.closingAuctionTemplateId());
             opened = true;
         }
@@ -519,9 +520,13 @@ public class SettlementController {
         Optional<String> dlp = (req.liquidityProvider() == null || req.liquidityProvider().isBlank())
                 ? Optional.empty()
                 : Optional.of(ledger.resolveParty(req.liquidityProvider()));
+        // Optionally bind the auction to a committee-attested NavFixing (its contract id).
+        Optional<String> fixingRef = (req.fixingRef() == null || req.fixingRef().isBlank())
+                ? Optional.empty()
+                : Optional.of(req.fixingRef());
         var cmd = LedgerCommands.createAuction(
                 req.operator(), req.auditor(), req.instrumentId(), req.cashInstrument(),
-                LedgerCommands.session(req.session()), req.referencePrice(), req.participants(), dlp);
+                LedgerCommands.session(req.session()), req.referencePrice(), req.participants(), dlp, fixingRef);
         String cid = ledger.submitForCreated(req.operator(), cmd, LedgerCommands.closingAuctionTemplateId());
         return created(new Dtos.CidResponse(cid));
     }
@@ -554,6 +559,226 @@ public class SettlementController {
                 LedgerCommands.runClose(sealedCid, req.buyOrderCids(), req.sellOrderCids()),
                 LedgerCommands.settlementBatchTemplateId());
         return new Dtos.CloseResponse(batchCid, sealedCid);
+    }
+
+    // ---- Decentralised operator: committee-attested NAV -------------------
+
+    /** Stand up a K-of-N NAV committee (the decentralised operator). */
+    @PostMapping("/committee")
+    public ResponseEntity<Dtos.CidResponse> createCommittee(
+            @Valid @RequestBody Dtos.CreateCommitteeRequest req) {
+        String admin = ledger.resolveParty(req.admin());
+        String auditor = ledger.resolveParty(blankTo(req.auditor(), "Auditor"));
+        List<String> members = req.members().stream().map(ledger::resolveParty).toList();
+        var cmd = LedgerCommands.createCommittee(admin, members, req.threshold(), auditor,
+                blankTo(req.label(), "NAV Committee"));
+        String cid = ledger.submitForCreated(admin, cmd, LedgerCommands.operatorCommitteeTemplateId());
+        return created(new Dtos.CidResponse(cid));
+    }
+
+    /** A member proposes an official price fix (it becomes the first attestor). */
+    @PostMapping("/committee/{cid}/propose")
+    public ResponseEntity<Dtos.CidResponse> proposeFixing(
+            @PathVariable String cid, @Valid @RequestBody Dtos.ProposeFixingRequest req) {
+        String proposer = ledger.resolveParty(req.proposer());
+        var cmd = LedgerCommands.proposeFixing(cid, proposer, req.instrumentId(),
+                blankTo(req.cashInstrument(), "USDC"), LedgerCommands.session(req.session()),
+                req.price(), blankTo(req.rationale(), ""));
+        String propCid = ledger.submitForCreated(proposer, cmd, LedgerCommands.fixingProposalTemplateId());
+        return created(new Dtos.CidResponse(propCid));
+    }
+
+    /**
+     * Another member confirms — the accumulating-multisig step. Returns the NEW
+     * proposal contract id (each confirmation archives and re-creates the proposal
+     * with one more signature). Repeat until the threshold is reached.
+     */
+    @PostMapping("/fixing/{cid}/confirm")
+    public ResponseEntity<Dtos.CidResponse> confirmFixing(
+            @PathVariable String cid, @Valid @RequestBody Dtos.ConfirmFixingRequest req) {
+        String member = ledger.resolveParty(req.member());
+        String next = ledger.submitForCreated(member,
+                LedgerCommands.confirmFixing(cid, member), LedgerCommands.fixingProposalTemplateId());
+        return created(new Dtos.CidResponse(next));
+    }
+
+    /**
+     * Finalise a threshold-attested proposal into an official NavFixing (fails with a
+     * clear error if fewer than the committee threshold have attested). The fix is
+     * disclosed to {@code publishTo} (e.g. the auction venue that will print at it).
+     */
+    @PostMapping("/fixing/{cid}/finalize")
+    public ResponseEntity<Dtos.CidResponse> finalizeFixing(
+            @PathVariable String cid, @Valid @RequestBody Dtos.FinalizeFixingRequest req) {
+        String proposer = ledger.resolveParty(req.proposer());
+        List<String> publishTo = (req.publishTo() == null ? List.<String>of() : req.publishTo())
+                .stream().map(ledger::resolveParty).toList();
+        String fixCid = ledger.submitForCreated(proposer,
+                LedgerCommands.finalizeFixing(cid, publishTo), LedgerCommands.navFixingTemplateId());
+        return created(new Dtos.CidResponse(fixCid));
+    }
+
+    // ---- Basket / ETF builder ---------------------------------------------
+
+    /** Define a basket (ETF): its creation unit and authorised participants. */
+    @PostMapping("/basket")
+    public ResponseEntity<Dtos.BasketResponse> defineBasket(
+            @Valid @RequestBody Dtos.DefineBasketRequest req) {
+        String admin = ledger.resolveParty(req.administrator());
+        String auditor = ledger.resolveParty(blankTo(req.auditor(), "Auditor"));
+        String cash = blankTo(req.cashInstrument(), "USDC");
+        var comps = req.components().stream()
+                .map(c -> LedgerCommands.basketComponent(c.instrumentId(), c.unitsPerShare()))
+                .toList();
+        List<String> parts = req.participants().stream().map(ledger::resolveParty).toList();
+        var cmd = LedgerCommands.createBasket(admin, auditor, req.basketId(),
+                blankTo(req.description(), req.basketId()), cash, comps, parts);
+        String cid = ledger.submitForCreated(admin, cmd, LedgerCommands.basketDefinitionTemplateId());
+        return created(new Dtos.BasketResponse(cid, req.basketId(), req.administrator(), cash,
+                req.components(), req.participants()));
+    }
+
+    /** The baskets visible to the acting party (defaults to the auditor's full view). */
+    @GetMapping("/baskets")
+    public List<Dtos.BasketResponse> baskets(@RequestParam(required = false) String actingAs) {
+        String acting = (actingAs == null || actingAs.isBlank())
+                ? ledger.resolveParty("Auditor") : ledger.resolveParty(actingAs);
+        return ledger.basketsVisibleTo(acting).stream()
+                .map(b -> new Dtos.BasketResponse(b.contractId(), b.basketId(),
+                        LedgerService.labelOf(b.administrator()), b.cashInstrument(),
+                        b.components().stream()
+                                .map(c -> new Dtos.ComponentDto(c.instrumentId(), c.unitsPerShare()))
+                                .toList(),
+                        b.participants().stream().map(LedgerService::labelOf).toList()))
+                .toList();
+    }
+
+    /**
+     * IN-KIND CREATION — one call. The desk resolves the exact underlying basket
+     * (unitsPerShare × shares of each component) from the AP's holdings, then runs
+     * request (AP) → approve (administrator) → process (administrator). The underlyings
+     * move into custody and the shares are minted to the AP, atomically. Returns the
+     * minted-shares handle, the receipt, and the current NAV per share.
+     */
+    @PostMapping("/basket/create")
+    public Dtos.BasketCreateResponse createBasketUnits(
+            @Valid @RequestBody Dtos.BasketCreateRequest req) {
+        String ap = ledger.resolveParty(req.ap());
+        var basket = basketByIdVisibleTo(ap, req.basketId());
+        String admin = basket.administrator();
+        BigDecimal shares = req.shares();
+
+        // Provision each underlying leg to the exact creation-unit amount, in order.
+        List<String> componentCids = new ArrayList<>();
+        for (var c : basket.components()) {
+            componentCids.add(ledger.provisionExactHolding(
+                    ap, c.instrumentId(), c.unitsPerShare().multiply(shares)));
+        }
+
+        String orderCid = ledger.submitForCreated(ap,
+                LedgerCommands.requestCreation(basket.contractId(), ap, shares, componentCids),
+                LedgerCommands.creationOrderTemplateId());
+        String agreementCid = ledger.submitForCreated(admin,
+                LedgerCommands.approveCreation(orderCid),
+                LedgerCommands.creationAgreementTemplateId());
+        TransactionTree tree = ledger.submit(admin, LedgerCommands.processCreation(agreementCid));
+
+        List<String> receipts = ledger.createdOf(tree, LedgerCommands.basketReceiptTemplateId());
+        String mintedCid = ledger.createdHoldingsOf(tree).stream()
+                .filter(h -> h.instrumentId().equals(req.basketId()) && h.owner().equals(ap))
+                .map(LedgerService.HoldingView::contractId).findFirst().orElse(null);
+        BigDecimal nav = navPerShareOf(basket).orElse(null);
+        return new Dtos.BasketCreateResponse(
+                receipts.isEmpty() ? null : receipts.get(0), mintedCid, shares, nav);
+    }
+
+    /**
+     * IN-KIND REDEMPTION — one call. The AP commits {@code shares} of the basket
+     * token; the administrator supplies the exact custody underlyings; then
+     * request (AP) → approve (administrator) → process (administrator) burns the shares
+     * and returns the underlyings, atomically. Returns the receipt and the returned
+     * underlying holdings.
+     */
+    @PostMapping("/basket/redeem")
+    public Dtos.BasketRedeemResponse redeemBasketUnits(
+            @Valid @RequestBody Dtos.BasketRedeemRequest req) {
+        String ap = ledger.resolveParty(req.ap());
+        var basket = basketByIdVisibleTo(ap, req.basketId());
+        String admin = basket.administrator();
+        BigDecimal shares = req.shares();
+
+        String basketHoldingCid = ledger.provisionAtLeastHolding(ap, req.basketId(), shares);
+        String orderCid = ledger.submitForCreated(ap,
+                LedgerCommands.requestRedemption(basket.contractId(), ap, shares, basketHoldingCid),
+                LedgerCommands.redemptionOrderTemplateId());
+
+        // The administrator provides the exact custody underlyings to return.
+        List<String> custodyCids = new ArrayList<>();
+        for (var c : basket.components()) {
+            custodyCids.add(ledger.provisionExactHolding(
+                    admin, c.instrumentId(), c.unitsPerShare().multiply(shares)));
+        }
+        String agreementCid = ledger.submitForCreated(admin,
+                LedgerCommands.approveRedemption(orderCid, custodyCids),
+                LedgerCommands.redemptionAgreementTemplateId());
+        TransactionTree tree = ledger.submit(admin, LedgerCommands.processRedemption(agreementCid));
+
+        List<String> receipts = ledger.createdOf(tree, LedgerCommands.basketReceiptTemplateId());
+        List<String> returned = ledger.createdHoldingsOf(tree).stream()
+                .filter(h -> h.owner().equals(ap) && !h.instrumentId().equals(req.basketId()))
+                .map(LedgerService.HoldingView::contractId).toList();
+        return new Dtos.BasketRedeemResponse(
+                receipts.isEmpty() ? null : receipts.get(0), shares, returned);
+    }
+
+    /**
+     * NAV per share = Σ (unitsPerShare × close price), with the per-component
+     * breakdown. Marks are the instruments' published reference/close prices — in
+     * this desk, struck by the K-of-N committee — so the NAV is credibly neutral.
+     */
+    @GetMapping("/basket/nav")
+    public Dtos.NavResponse basketNav(
+            @RequestParam String basketId, @RequestParam(required = false) String actingAs) {
+        String acting = (actingAs == null || actingAs.isBlank())
+                ? ledger.resolveParty("Auditor") : ledger.resolveParty(actingAs);
+        var basket = basketByIdVisibleTo(acting, basketId);
+        List<Dtos.NavLeg> legs = new ArrayList<>();
+        BigDecimal total = BigDecimal.ZERO;
+        boolean complete = true;
+        for (var c : basket.components()) {
+            BigDecimal price = ledger.referencePriceOf("Issuer", c.instrumentId()).orElse(null);
+            BigDecimal value = price == null ? null : c.unitsPerShare().multiply(price);
+            if (price == null) {
+                complete = false;
+            } else {
+                total = total.add(value);
+            }
+            legs.add(new Dtos.NavLeg(c.instrumentId(), c.unitsPerShare(), price, value));
+        }
+        return new Dtos.NavResponse(basketId, complete ? total : null,
+                basket.cashInstrument(), legs, complete);
+    }
+
+    /** Find a basket by id among those visible to a party, else a clear 400. */
+    private LedgerService.BasketView basketByIdVisibleTo(String party, String basketId) {
+        return ledger.basketsVisibleTo(party).stream()
+                .filter(b -> b.basketId().equals(basketId))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "no basket '" + basketId + "' is visible to " + LedgerService.labelOf(party)));
+    }
+
+    /** NAV per share from the components' published close prices, or empty if any mark is missing. */
+    private Optional<BigDecimal> navPerShareOf(LedgerService.BasketView basket) {
+        BigDecimal total = BigDecimal.ZERO;
+        for (var c : basket.components()) {
+            Optional<BigDecimal> p = ledger.referencePriceOf("Issuer", c.instrumentId());
+            if (p.isEmpty()) {
+                return Optional.empty();
+            }
+            total = total.add(c.unitsPerShare().multiply(p.get()));
+        }
+        return Optional.of(total);
     }
 
     // ---- helpers ----------------------------------------------------------

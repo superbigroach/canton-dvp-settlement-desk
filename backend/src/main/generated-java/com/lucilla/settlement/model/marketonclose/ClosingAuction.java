@@ -32,6 +32,7 @@ import com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders;
 import com.daml.ledger.javaapi.data.codegen.json.JsonLfEncoder;
 import com.daml.ledger.javaapi.data.codegen.json.JsonLfEncoders;
 import com.daml.ledger.javaapi.data.codegen.json.JsonLfReader;
+import com.lucilla.settlement.model.governance.NavFixing;
 import com.lucilla.settlement.model.holding.Holding;
 import com.lucilla.settlement.model.settlement.SettlementBatch;
 import java.lang.Boolean;
@@ -49,11 +50,11 @@ import java.util.Optional;
 import java.util.Set;
 
 public final class ClosingAuction extends Template {
-  public static final Identifier TEMPLATE_ID = new Identifier("12f056257e4f6e96f8abcaafbc3d7261e58f3fcddcba133f3033b91190110371", "MarketOnClose", "ClosingAuction");
+  public static final Identifier TEMPLATE_ID = new Identifier("f10d37a10d40ff7923e1d7476f49347809a28a7803b3be0c4252b2417f921d12", "MarketOnClose", "ClosingAuction");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("12f056257e4f6e96f8abcaafbc3d7261e58f3fcddcba133f3033b91190110371", "MarketOnClose", "ClosingAuction");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("f10d37a10d40ff7923e1d7476f49347809a28a7803b3be0c4252b2417f921d12", "MarketOnClose", "ClosingAuction");
 
-  public static final String PACKAGE_ID = "12f056257e4f6e96f8abcaafbc3d7261e58f3fcddcba133f3033b91190110371";
+  public static final String PACKAGE_ID = "f10d37a10d40ff7923e1d7476f49347809a28a7803b3be0c4252b2417f921d12";
 
   public static final Choice<ClosingAuction, PublishImbalance, ImbalanceDisclosure.ContractId> CHOICE_PublishImbalance = 
       Choice.create("PublishImbalance", value$ -> value$.toValue(), value$ ->
@@ -108,11 +109,14 @@ public final class ClosingAuction extends Template {
 
   public final Optional<String> liquidityProvider;
 
+  public final Optional<NavFixing.ContractId> fixingRef;
+
   public final Boolean isOpen;
 
   public ClosingAuction(String operator, String auditor, String instrumentId, String cashInstrument,
       String session, BigDecimal referencePrice, List<String> participants,
-      Optional<String> liquidityProvider, Boolean isOpen) {
+      Optional<String> liquidityProvider, Optional<NavFixing.ContractId> fixingRef,
+      Boolean isOpen) {
     this.operator = operator;
     this.auditor = auditor;
     this.instrumentId = instrumentId;
@@ -121,6 +125,7 @@ public final class ClosingAuction extends Template {
     this.referencePrice = referencePrice;
     this.participants = participants;
     this.liquidityProvider = liquidityProvider;
+    this.fixingRef = fixingRef;
     this.isOpen = isOpen;
   }
 
@@ -217,9 +222,10 @@ public final class ClosingAuction extends Template {
 
   public static Update<Created<ContractId>> create(String operator, String auditor,
       String instrumentId, String cashInstrument, String session, BigDecimal referencePrice,
-      List<String> participants, Optional<String> liquidityProvider, Boolean isOpen) {
+      List<String> participants, Optional<String> liquidityProvider,
+      Optional<NavFixing.ContractId> fixingRef, Boolean isOpen) {
     return new ClosingAuction(operator, auditor, instrumentId, cashInstrument, session,
-        referencePrice, participants, liquidityProvider, isOpen).create();
+        referencePrice, participants, liquidityProvider, fixingRef, isOpen).create();
   }
 
   @Override
@@ -245,7 +251,7 @@ public final class ClosingAuction extends Template {
   }
 
   public DamlRecord toValue() {
-    ArrayList<DamlRecord.Field> fields = new ArrayList<DamlRecord.Field>(9);
+    ArrayList<DamlRecord.Field> fields = new ArrayList<DamlRecord.Field>(10);
     fields.add(new DamlRecord.Field("operator", new Party(this.operator)));
     fields.add(new DamlRecord.Field("auditor", new Party(this.auditor)));
     fields.add(new DamlRecord.Field("instrumentId", new Text(this.instrumentId)));
@@ -254,6 +260,7 @@ public final class ClosingAuction extends Template {
     fields.add(new DamlRecord.Field("referencePrice", new Numeric(this.referencePrice)));
     fields.add(new DamlRecord.Field("participants", this.participants.stream().collect(DamlCollectors.toDamlList(v$0 -> new Party(v$0)))));
     fields.add(new DamlRecord.Field("liquidityProvider", DamlOptional.of(this.liquidityProvider.map(v$0 -> new Party(v$0)))));
+    fields.add(new DamlRecord.Field("fixingRef", DamlOptional.of(this.fixingRef.map(v$0 -> v$0.toValue()))));
     fields.add(new DamlRecord.Field("isOpen", Bool.of(this.isOpen)));
     return new DamlRecord(fields);
   }
@@ -262,7 +269,7 @@ public final class ClosingAuction extends Template {
       IllegalArgumentException {
     return value$ -> {
       Value recordValue$ = value$;
-      List<DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(9,0, recordValue$);
+      List<DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(10,0, recordValue$);
       String operator = PrimitiveValueDecoders.fromParty.decode(fields$.get(0).getValue());
       String auditor = PrimitiveValueDecoders.fromParty.decode(fields$.get(1).getValue());
       String instrumentId = PrimitiveValueDecoders.fromText.decode(fields$.get(2).getValue());
@@ -274,14 +281,17 @@ public final class ClosingAuction extends Template {
           .decode(fields$.get(6).getValue());
       Optional<String> liquidityProvider = PrimitiveValueDecoders.fromOptional(
             PrimitiveValueDecoders.fromParty).decode(fields$.get(7).getValue());
-      Boolean isOpen = PrimitiveValueDecoders.fromBool.decode(fields$.get(8).getValue());
+      Optional<NavFixing.ContractId> fixingRef = PrimitiveValueDecoders.fromOptional(v$0 ->
+              new NavFixing.ContractId(v$0.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected fixingRef to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()))
+          .decode(fields$.get(8).getValue());
+      Boolean isOpen = PrimitiveValueDecoders.fromBool.decode(fields$.get(9).getValue());
       return new ClosingAuction(operator, auditor, instrumentId, cashInstrument, session,
-          referencePrice, participants, liquidityProvider, isOpen);
+          referencePrice, participants, liquidityProvider, fixingRef, isOpen);
     } ;
   }
 
   public static JsonLfDecoder<ClosingAuction> jsonDecoder() {
-    return JsonLfDecoders.record(Arrays.asList("operator", "auditor", "instrumentId", "cashInstrument", "session", "referencePrice", "participants", "liquidityProvider", "isOpen"), name -> {
+    return JsonLfDecoders.record(Arrays.asList("operator", "auditor", "instrumentId", "cashInstrument", "session", "referencePrice", "participants", "liquidityProvider", "fixingRef", "isOpen"), name -> {
           switch (name) {
             case "operator": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
             case "auditor": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(1, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
@@ -291,11 +301,12 @@ public final class ClosingAuction extends Template {
             case "referencePrice": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(5, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10));
             case "participants": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(6, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.list(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party));
             case "liquidityProvider": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(7, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party));
-            case "isOpen": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(8, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.bool);
+            case "fixingRef": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(8, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.contractId(com.lucilla.settlement.model.governance.NavFixing.ContractId::new)));
+            case "isOpen": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(9, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.bool);
             default: return null;
           }
         }
-        , (Object[] args) -> new ClosingAuction(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6]), JsonLfDecoders.cast(args[7]), JsonLfDecoders.cast(args[8])));
+        , (Object[] args) -> new ClosingAuction(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6]), JsonLfDecoders.cast(args[7]), JsonLfDecoders.cast(args[8]), JsonLfDecoders.cast(args[9])));
   }
 
   public static ClosingAuction fromJson(String json) throws JsonLfDecoder.Error {
@@ -312,6 +323,7 @@ public final class ClosingAuction extends Template {
         JsonLfEncoders.Field.of("referencePrice", apply(JsonLfEncoders::numeric, referencePrice)),
         JsonLfEncoders.Field.of("participants", apply(JsonLfEncoders.list(JsonLfEncoders::party), participants)),
         JsonLfEncoders.Field.of("liquidityProvider", apply(JsonLfEncoders.optional(JsonLfEncoders::party), liquidityProvider)),
+        JsonLfEncoders.Field.of("fixingRef", apply(JsonLfEncoders.optional(JsonLfEncoders::contractId), fixingRef)),
         JsonLfEncoders.Field.of("isOpen", apply(JsonLfEncoders::bool, isOpen)));
   }
 
@@ -339,20 +351,23 @@ public final class ClosingAuction extends Template {
         Objects.equals(this.referencePrice, other.referencePrice) &&
         Objects.equals(this.participants, other.participants) &&
         Objects.equals(this.liquidityProvider, other.liquidityProvider) &&
+        Objects.equals(this.fixingRef, other.fixingRef) &&
         Objects.equals(this.isOpen, other.isOpen);
   }
 
   @Override
   public int hashCode() {
     return Objects.hash(this.operator, this.auditor, this.instrumentId, this.cashInstrument,
-        this.session, this.referencePrice, this.participants, this.liquidityProvider, this.isOpen);
+        this.session, this.referencePrice, this.participants, this.liquidityProvider,
+        this.fixingRef, this.isOpen);
   }
 
   @Override
   public String toString() {
-    return String.format("com.lucilla.settlement.model.marketonclose.ClosingAuction(%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+    return String.format("com.lucilla.settlement.model.marketonclose.ClosingAuction(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         this.operator, this.auditor, this.instrumentId, this.cashInstrument, this.session,
-        this.referencePrice, this.participants, this.liquidityProvider, this.isOpen);
+        this.referencePrice, this.participants, this.liquidityProvider, this.fixingRef,
+        this.isOpen);
   }
 
   public static final class ContractId extends com.daml.ledger.javaapi.data.codegen.ContractId<ClosingAuction> implements Exercises<ExerciseCommand> {

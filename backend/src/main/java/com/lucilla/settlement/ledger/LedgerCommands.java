@@ -10,6 +10,16 @@ import com.lucilla.settlement.model.marketonclose.Side;
 import com.lucilla.settlement.model.settlement.DvPAgreement;
 import com.lucilla.settlement.model.settlement.DvPProposal;
 import com.lucilla.settlement.model.settlement.SettlementBatch;
+import com.lucilla.settlement.model.governance.OperatorCommittee;
+import com.lucilla.settlement.model.governance.FixingProposal;
+import com.lucilla.settlement.model.governance.NavFixing;
+import com.lucilla.settlement.model.basket.BasketDefinition;
+import com.lucilla.settlement.model.basket.Component;
+import com.lucilla.settlement.model.basket.CreationOrder;
+import com.lucilla.settlement.model.basket.CreationAgreement;
+import com.lucilla.settlement.model.basket.RedemptionOrder;
+import com.lucilla.settlement.model.basket.RedemptionAgreement;
+import com.lucilla.settlement.model.basket.BasketReceipt;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -98,10 +108,14 @@ public final class LedgerCommands {
     public static Update<?> createAuction(
             String operator, String auditor, String instrumentId, String cashInstrument,
             String session, BigDecimal referencePrice, List<String> participants,
-            Optional<String> liquidityProvider) {
+            Optional<String> liquidityProvider, Optional<String> fixingRefCid) {
         return new ClosingAuction(
                 operator, auditor, instrumentId, cashInstrument,
                 session, referencePrice, participants, liquidityProvider,
+                // COMMITTEE-ATTESTED CLOSE: bind the auction to a K-of-N NavFixing so
+                // RunClose proves the price is a committee attestation, not the venue's
+                // unilateral number. Empty = a plain venue-priced close (unchanged).
+                fixingRefCid.map(NavFixing.ContractId::new),
                 /* isOpen = */ Boolean.TRUE)
                 .create();
     }
@@ -207,6 +221,120 @@ public final class LedgerCommands {
 
     public static com.daml.ledger.javaapi.data.Identifier settlementReceiptTemplateId() {
         return com.lucilla.settlement.model.settlement.SettlementReceipt.TEMPLATE_ID;
+    }
+
+    // ---- Governance: the decentralised-operator NAV committee (K-of-N) ------
+
+    /** Stand up a K-of-N OperatorCommittee (the decentralised operator). */
+    public static Update<?> createCommittee(
+            String admin, List<String> members, int threshold, String auditor, String label) {
+        return new OperatorCommittee(admin, members, (long) threshold, auditor, label).create();
+    }
+
+    /** A member proposes an official price fix (it becomes the first attestor). */
+    public static Update<?> proposeFixing(
+            String committeeCid, String proposer, String instrumentId, String cashInstrument,
+            String session, BigDecimal price, String rationale) {
+        return new OperatorCommittee.ContractId(committeeCid)
+                .exerciseProposeFixing(proposer, instrumentId, cashInstrument, session, price, rationale);
+    }
+
+    /** Another member adds its attestation (accumulating multisig). */
+    public static Update<?> confirmFixing(String proposalCid, String member) {
+        return new FixingProposal.ContractId(proposalCid).exerciseConfirm(member);
+    }
+
+    /** Promote a threshold-attested proposal to an official NavFixing. */
+    public static Update<?> finalizeFixing(String proposalCid, List<String> publishTo) {
+        return new FixingProposal.ContractId(proposalCid).exerciseFinalizeFixing(publishTo);
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier operatorCommitteeTemplateId() {
+        return OperatorCommittee.TEMPLATE_ID;
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier fixingProposalTemplateId() {
+        return FixingProposal.TEMPLATE_ID;
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier navFixingTemplateId() {
+        return NavFixing.TEMPLATE_ID;
+    }
+
+    // ---- Basket / ETF builder: in-kind creation & redemption ---------------
+
+    /** A component leg of the creation unit: {@code unitsPerShare} of an instrument. */
+    public static Component basketComponent(String instrumentId, BigDecimal unitsPerShare) {
+        return new Component(instrumentId, unitsPerShare);
+    }
+
+    /** Define a basket (ETF): its creation unit and authorised participants. */
+    public static Update<?> createBasket(
+            String administrator, String auditor, String basketId, String description,
+            String cashInstrument, List<Component> components, List<String> participants) {
+        return new BasketDefinition(administrator, auditor, basketId, description,
+                cashInstrument, components, participants).create();
+    }
+
+    /** AP requests to create {@code shares} units, delivering the underlyings. */
+    public static Update<?> requestCreation(
+            String basketCid, String ap, BigDecimal shares, List<String> componentHoldingCids) {
+        List<Holding.ContractId> cids = componentHoldingCids.stream()
+                .map(Holding.ContractId::new).toList();
+        return new BasketDefinition.ContractId(basketCid).exerciseRequestCreation(ap, shares, cids);
+    }
+
+    /** Administrator approves a creation request → a bilaterally-signed agreement. */
+    public static Update<?> approveCreation(String orderCid) {
+        return new CreationOrder.ContractId(orderCid).exerciseApproveCreation();
+    }
+
+    /** Administrator processes a creation: pull underlyings + mint shares, atomically. */
+    public static Update<?> processCreation(String agreementCid) {
+        return new CreationAgreement.ContractId(agreementCid).exerciseProcessCreation();
+    }
+
+    /** AP requests to redeem {@code shares}, returning its basket-token holding. */
+    public static Update<?> requestRedemption(
+            String basketCid, String ap, BigDecimal shares, String basketHoldingCid) {
+        return new BasketDefinition.ContractId(basketCid)
+                .exerciseRequestRedemption(ap, shares, new Holding.ContractId(basketHoldingCid));
+    }
+
+    /** Administrator approves a redemption, supplying the custody underlyings to return. */
+    public static Update<?> approveRedemption(String orderCid, List<String> custodyHoldingCids) {
+        List<Holding.ContractId> cids = custodyHoldingCids.stream()
+                .map(Holding.ContractId::new).toList();
+        return new RedemptionOrder.ContractId(orderCid).exerciseApproveRedemption(cids);
+    }
+
+    /** Administrator processes a redemption: burn shares + return underlyings, atomically. */
+    public static Update<?> processRedemption(String agreementCid) {
+        return new RedemptionAgreement.ContractId(agreementCid).exerciseProcessRedemption();
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier basketDefinitionTemplateId() {
+        return BasketDefinition.TEMPLATE_ID;
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier creationOrderTemplateId() {
+        return CreationOrder.TEMPLATE_ID;
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier creationAgreementTemplateId() {
+        return CreationAgreement.TEMPLATE_ID;
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier redemptionOrderTemplateId() {
+        return RedemptionOrder.TEMPLATE_ID;
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier redemptionAgreementTemplateId() {
+        return RedemptionAgreement.TEMPLATE_ID;
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier basketReceiptTemplateId() {
+        return BasketReceipt.TEMPLATE_ID;
     }
 
     public static Side side(String raw) {

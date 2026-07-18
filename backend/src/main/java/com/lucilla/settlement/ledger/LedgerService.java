@@ -10,6 +10,8 @@ import com.daml.ledger.javaapi.data.codegen.HasCommands;
 import com.daml.ledger.rxjava.DamlLedgerClient;
 import com.lucilla.settlement.config.LedgerConnection;
 import com.lucilla.settlement.ledger.LedgerCommands;
+import com.lucilla.settlement.model.basket.BasketDefinition;
+import com.lucilla.settlement.model.basket.Component;
 import com.lucilla.settlement.model.holding.Holding;
 import com.lucilla.settlement.model.instrument.Instrument;
 import com.lucilla.settlement.model.marketonclose.ClosingAuction;
@@ -338,6 +340,30 @@ public class LedgerService {
         });
     }
 
+    /** Active BasketDefinitions visible to {@code party} (administrator + participants + auditor). */
+    public List<BasketView> basketsVisibleTo(String party) {
+        return withRetry("baskets for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<BasketDefinition.Contract> filter = ContractFilter.of(BasketDefinition.COMPANION);
+            List<BasketView> out = new ArrayList<>();
+            client.getActiveContractSetClient()
+                    .getActiveContracts(filter, Set.of(party), false)
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (BasketDefinition.Contract c : active.activeContracts) {
+                            BasketDefinition b = c.data;
+                            List<ComponentView> comps = new ArrayList<>();
+                            for (Component comp : b.components) {
+                                comps.add(new ComponentView(comp.instrumentId, comp.unitsPerShare));
+                            }
+                            out.add(new BasketView(c.id.contractId, b.administrator, b.basketId,
+                                    b.description, b.cashInstrument, comps, b.participants));
+                        }
+                    });
+            return out;
+        });
+    }
+
     /** The published reference (close) price for an instrument id, or empty. */
     public Optional<BigDecimal> referencePriceOf(String issuerRef, String instrumentId) {
         return instrumentsVisibleTo(resolveParty(issuerRef)).stream()
@@ -528,6 +554,16 @@ public class LedgerService {
     /** Flat, JSON-friendly view of a published Instrument. */
     public record InstrumentView(
             String id, String kind, String description, java.math.BigDecimal referencePrice) {
+    }
+
+    /** One component leg of a basket's creation unit. */
+    public record ComponentView(String instrumentId, java.math.BigDecimal unitsPerShare) {
+    }
+
+    /** Flat, JSON-friendly view of a BasketDefinition (an ETF/fund). */
+    public record BasketView(
+            String contractId, String administrator, String basketId, String description,
+            String cashInstrument, List<ComponentView> components, List<String> participants) {
     }
 
     /** Flat, JSON-friendly view of a ClosingAuction. */

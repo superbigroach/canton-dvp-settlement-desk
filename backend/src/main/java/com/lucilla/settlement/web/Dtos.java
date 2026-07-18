@@ -83,7 +83,8 @@ public final class Dtos {
             String session,                  // Open | Close (defaults to Close when blank)
             @NotNull @Positive BigDecimal referencePrice,
             @NotNull List<@NotBlank String> participants,
-            String liquidityProvider) {      // optional: the designated DLP (null/blank = none)
+            String liquidityProvider,        // optional: the designated DLP (null/blank = none)
+            String fixingRef) {              // optional: a committee NavFixing cid to bind the close to
     }
 
     public record SubmitOrderRequest(
@@ -214,6 +215,94 @@ public final class Dtos {
             BigDecimal referencePrice,       // the uniform price the cross will print at
             String liquidityProvider,        // the DLP's friendly label (who may offset)
             String note) {                   // human-readable context for the UI
+    }
+
+    // ---- Decentralised operator: committee-attested NAV -------------------
+
+    /** Stand up a K-of-N NAV committee (the decentralised operator). */
+    public record CreateCommitteeRequest(
+            @NotBlank String admin,
+            @NotNull List<@NotBlank String> members,
+            @Positive int threshold,
+            String auditor,                  // defaults to "Auditor"
+            String label) {                  // defaults to "NAV Committee"
+    }
+
+    /** A member proposes an official price fix (becomes the first attestor). */
+    public record ProposeFixingRequest(
+            @NotBlank String proposer,
+            @NotBlank String instrumentId,
+            String cashInstrument,           // defaults to "USDC"
+            String session,                  // Open | Close (defaults to Close)
+            @NotNull @Positive BigDecimal price,
+            String rationale) {              // why (source / method)
+    }
+
+    /** Another member adds its attestation. */
+    public record ConfirmFixingRequest(
+            @NotBlank String member) {
+    }
+
+    /** Promote a threshold-attested proposal to an official NavFixing. */
+    public record FinalizeFixingRequest(
+            @NotBlank String proposer,
+            List<@NotBlank String> publishTo) {   // venues to disclose the fix to (e.g. the auction operator)
+    }
+
+    // ---- Basket / ETF builder --------------------------------------------
+
+    /** One component leg of a basket's creation unit. */
+    public record ComponentDto(
+            @NotBlank String instrumentId,
+            @NotNull @Positive BigDecimal unitsPerShare) {
+    }
+
+    /** Define a basket (ETF): its creation unit and authorised participants. */
+    public record DefineBasketRequest(
+            @NotBlank String administrator,
+            String auditor,                  // defaults to "Auditor"
+            @NotBlank String basketId,
+            String description,
+            String cashInstrument,           // defaults to "USDC"
+            @NotNull List<ComponentDto> components,
+            @NotNull List<@NotBlank String> participants) {
+    }
+
+    public record BasketResponse(
+            String basketCid, String basketId, String administrator, String cashInstrument,
+            List<ComponentDto> components, List<String> participants) {
+    }
+
+    /** In-kind creation: an AP creates {@code shares} units, delivering the underlyings. */
+    public record BasketCreateRequest(
+            @NotBlank String basketId,
+            @NotBlank String ap,
+            @NotNull @Positive BigDecimal shares) {
+    }
+
+    public record BasketCreateResponse(
+            String receiptCid, String mintedSharesCid, BigDecimal shares, BigDecimal navPerShare) {
+    }
+
+    /** In-kind redemption: an AP returns {@code shares}, receiving the underlyings back. */
+    public record BasketRedeemRequest(
+            @NotBlank String basketId,
+            @NotBlank String ap,
+            @NotNull @Positive BigDecimal shares) {
+    }
+
+    public record BasketRedeemResponse(
+            String receiptCid, BigDecimal shares, List<String> returnedHoldingCids) {
+    }
+
+    /** NAV per share and its component breakdown (marks from the instruments' close prices). */
+    public record NavLeg(
+            String instrumentId, BigDecimal unitsPerShare, BigDecimal price, BigDecimal value) {
+    }
+
+    public record NavResponse(
+            String basketId, BigDecimal navPerShare, String cashInstrument,
+            List<NavLeg> legs, boolean complete) {
     }
 
     // ---- Generic responses ------------------------------------------------

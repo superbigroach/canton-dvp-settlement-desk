@@ -77,6 +77,7 @@ module MarketOnClose where
 
 import Holding
 import Settlement
+import Governance (NavFixing)
 import DA.Optional (optionalToList)
 
 -- Order side. Deriving Eq/Show so choices can compare and reports can print it.
@@ -107,6 +108,14 @@ template ClosingAuction
     -- dark pool leaks nothing but risks no-fill. Canton lets the venue do BOTH:
     -- reveal the aggregate to the one committed provider, and to nobody else.
     liquidityProvider : Optional Party
+    -- COMMITTEE-ATTESTED CLOSE (the decentralised-operator binding, see Governance.daml).
+    -- Optionally, the auction's official price is not the venue's unilateral number
+    -- but a K-of-N `NavFixing` struck by the OperatorCommittee. When set, RunClose
+    -- fetches the fixing and asserts it matches this auction's price/instrument/session
+    -- AND carries >= threshold attestations — so the printed close is provably a
+    -- committee fix, not one venue's opinion. `None` = a venue-set price (unchanged
+    -- behaviour); the crossing/settlement logic is IDENTICAL either way.
+    fixingRef      : Optional (ContractId NavFixing)
     isOpen         : Bool     -- True while the sealed-order window accepts orders
   where
     signatory operator
@@ -224,6 +233,24 @@ template ClosingAuction
         assertMsg "close only runs on a sealed window" (not isOpen)
         -- ONE uniform clearing price for the entire cross: the published close.
         let closingPrice = referencePrice
+
+        -- COMMITTEE-ATTESTED CLOSE. If this auction is bound to a governance fixing,
+        -- prove the price is a genuine K-of-N attestation for THIS book before any
+        -- leg moves: the fix must be for the same instrument/cash/session, its price
+        -- must equal the price we are about to print, and it must carry at least its
+        -- own threshold of distinct member signatures. A mismatch aborts the WHOLE
+        -- close (atomic: nothing settles). A plain venue-priced auction (None) skips
+        -- this and behaves exactly as before.
+        case fixingRef of
+          None -> pure ()
+          Some fCid -> do
+            f <- fetch fCid
+            assertMsg "attested fix is for a different instrument" (f.instrumentId == instrumentId)
+            assertMsg "attested fix uses a different cash unit"     (f.cashInstrument == cashInstrument)
+            assertMsg "attested fix is for a different session"     (f.session == session)
+            assertMsg "close price does not match the attested NAV" (f.price == closingPrice)
+            assertMsg "fix does not carry enough member attestations"
+              (length f.attestors >= f.threshold)
 
         -- Fetch AND validate every order (side, instrument, venue, cash unit, and
         -- price eligibility). An ineligible order aborts the whole close.

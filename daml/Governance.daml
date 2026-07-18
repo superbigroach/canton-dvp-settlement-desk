@@ -1,0 +1,223 @@
+-- Governance.daml
+-- ===========================================================================
+-- THE DECENTRALISED OPERATOR — a K-of-N committee that strikes the official
+-- price (the NAV / closing fix) so NO SINGLE party can print it alone.
+-- ===========================================================================
+-- WHY THIS EXISTS
+--   A closing/opening auction (MarketOnClose.daml) prints ONE official price and
+--   every fill settles at it. That price is only worth trusting if the party who
+--   sets it CANNOT set it unilaterally — otherwise the "official fix" is just one
+--   venue's opinion and can be manipulated. Real reference-rate administrators
+--   (ICE, CME CF, the equity closing auctions) derive their legitimacy from a
+--   PROCESS no single participant controls.
+--
+--   This module models that process natively on Canton as a DECENTRALISED PARTY:
+--   a standing `OperatorCommittee` of N member parties with a threshold K, and a
+--   fixing that only becomes official once K DISTINCT members have attested to it.
+--   It is the self-contained analogue of BitSafe / DLC.Link's "Decentralized Party
+--   Manager" (Apache-2.0), whose attestor nodes act as Canton "signing parties"
+--   under threshold governance — reimplemented here at the CONTRACT level so it
+--   compiles on the bare SDK (no external governance .dar), exactly as this project
+--   reimplements Daml Finance's holding/settlement shapes.
+--
+-- THE AUTHORISATION PATTERN (accumulating multi-signature)
+--   Daml gives a party's authority to a choice body iff the party signs the
+--   contract being exercised or controls the choice. Authority does NOT persist
+--   across transactions. So a K-of-N attestation is built the canonical way:
+--     1. ProposeFixing — a member proposes a price. The proposal is signed by that
+--        one proposer; every other member observes it.
+--     2. Confirm       — each additional member confirms. Confirm ARCHIVES and
+--        RE-CREATES the proposal with the confirming member added to BOTH the
+--        approver list AND the signatory set. The confirming member controls the
+--        choice (its authority is present to add itself as a signatory); the
+--        existing signatories' authority is present because they signed the
+--        contract being exercised. The signature set thus GROWS one member per tx.
+--     3. FinalizeFixing — once >= K approvers have signed, any approver finalises:
+--        it creates a `NavFixing` whose signatory set IS all the approvers. Because
+--        the proposal already carries all their authority, the fixing can be signed
+--        by all of them in one step. A `NavFixing` therefore CANNOT EXIST without K
+--        genuine member signatures — Test:testThresholdAttestation proves a single
+--        member cannot finalise a 2-of-3 fix.
+--
+-- WHY CANTON / DAML FITS
+--   The attestation is a first-class ledger fact: the `NavFixing`'s signatories ARE
+--   the attestors, so "this price was struck by K of N" is provable by inspecting
+--   the contract, not asserted by a server. On a transparent chain you would model
+--   this as a multisig contract too, but the PRICE and the members' participation
+--   would leak to the whole world; here the resting proposal is visible only to the
+--   committee (+ auditor), and the published fix is disclosed to exactly the venues
+--   that consume it. Governance WITHOUT leakage — the same Canton property the
+--   auction and the DvP rely on.
+-- ===========================================================================
+
+module Governance where
+
+import DA.List (dedup)
+
+-- ---------------------------------------------------------------------------
+-- OperatorCommittee — the standing K-of-N committee (the decentralised operator).
+-- ---------------------------------------------------------------------------
+-- This is the configuration record: who the member parties are, and how many of
+-- them (`threshold`) must attest before a fix is official. `admin` is the party
+-- that maintains membership (a coordinator, itself potentially decentralised in a
+-- production topology); it does NOT get to strike prices — only members do, and
+-- only K-of-N of them together.
+template OperatorCommittee
+  with
+    admin     : Party    -- maintains the committee roster (coordinator)
+    members   : [Party]  -- the attestor / operator members
+    threshold : Int      -- K: how many DISTINCT members must attest a fix
+    auditor   : Party    -- compliance observer of the governance process
+    label     : Text     -- human name, e.g. "Lucilla NAV Committee"
+  where
+    signatory admin
+    -- The members and the auditor observe the committee so members can propose into
+    -- it and everyone can see the roster/threshold under which fixes are struck.
+    observer (auditor :: members)
+
+    ensure threshold > 0
+        && threshold <= length members
+        && length (dedup members) == length members   -- no duplicate members
+        && not (null members)
+
+    -- PROPOSE A FIXING — a member opens a price attestation for an instrument's
+    -- open/close. Nonconsuming so the committee runs many fixes off one committee
+    -- contract. The proposer is the FIRST approver (it signs by proposing).
+    nonconsuming choice ProposeFixing : ContractId FixingProposal
+      with
+        proposer       : Party    -- the member opening the fix (must be on the committee)
+        instrumentId   : Text     -- the asset being priced, e.g. "cETH"
+        cashInstrument : Text     -- the unit the price is quoted in, e.g. "USDC"
+        session        : Text     -- "Open" | "Close": which fix this is
+        price          : Decimal  -- the proposed official price
+        rationale      : Text     -- why (e.g. "VWAP of the sealed cross", a source)
+      controller proposer
+      do
+        assertMsg "proposer must be a committee member" (proposer `elem` members)
+        assertMsg "price must be positive" (price > 0.0)
+        assertMsg "session must be Open or Close" (session == "Open" || session == "Close")
+        create FixingProposal with
+          admin; members; threshold; auditor
+          proposer
+          instrumentId; cashInstrument; session; price; rationale
+          approvers = [proposer]        -- the proposer is the first attestor
+
+-- ---------------------------------------------------------------------------
+-- FixingProposal — an in-progress price attestation gathering member signatures.
+-- ---------------------------------------------------------------------------
+-- The signature set (`approvers`) GROWS as members Confirm; the contract is signed
+-- by exactly the approvers gathered so far. It is visible to the whole committee
+-- (so any member can add its confirmation) and the auditor, but to NOBODY else —
+-- the price under consideration does not leak to the market before it is official.
+template FixingProposal
+  with
+    admin          : Party
+    members        : [Party]
+    threshold      : Int
+    auditor        : Party
+    proposer       : Party    -- who opened it (an approver, and who may finalise)
+    instrumentId   : Text
+    cashInstrument : Text
+    session        : Text
+    price          : Decimal
+    rationale      : Text
+    approvers      : [Party]  -- members who have attested so far (grows via Confirm)
+  where
+    -- The approvers gathered so far ALL sign — this is the accumulating multisig.
+    signatory approvers
+    -- Every committee member (so they can confirm) and the auditor observe it.
+    -- Members already in `approvers` are also signatories; Daml dedups the overlap.
+    observer (auditor :: members)
+
+    ensure price > 0.0
+        && length (dedup approvers) == length approvers   -- an approver signs at most once
+
+    -- CONFIRM — another member adds its attestation. The confirming member controls
+    -- the choice (its authority is present), so the successor can add it to the
+    -- signatory set; the existing approvers' authority carries because they sign
+    -- this contract. One new signature per transaction.
+    choice Confirm : ContractId FixingProposal
+      with
+        member : Party
+      controller member
+      do
+        assertMsg "confirmer must be a committee member" (member `elem` members)
+        assertMsg "member has already attested this fix"  (member `notElem` approvers)
+        create this with approvers = member :: approvers
+
+    -- FINALIZE — once the threshold of DISTINCT members has attested, promote the
+    -- proposal to an official `NavFixing` signed by all of them. Controlled by the
+    -- proposer (any approver would do, since all their authority is on this
+    -- contract). `publishTo` are the venues/desks the fix is disclosed to (e.g. the
+    -- auction operator that will print at it) — governance without leakage.
+    choice FinalizeFixing : ContractId NavFixing
+      with
+        publishTo : [Party]
+      controller proposer
+      do
+        assertMsg "not enough attestations to finalise the fix"
+          (length approvers >= threshold)
+        now <- getTime
+        create NavFixing with
+          attestors = approvers
+          admin; auditor; threshold
+          instrumentId; cashInstrument; session; price; rationale
+          publishedTo = dedup publishTo
+          finalizedAt = now
+
+    -- WITHDRAW — the proposer abandons an un-finalised fix (e.g. a stale price).
+    -- No official fix is produced.
+    choice WithdrawFixing : ()
+      controller proposer
+      do pure ()
+
+-- ---------------------------------------------------------------------------
+-- NavFixing — the OFFICIAL, threshold-attested price. Immutable proof.
+-- ---------------------------------------------------------------------------
+-- Its signatory set IS the attesting members, so its very existence proves that
+-- >= K distinct members struck this price together. This is the artifact the
+-- auction consumes (see MarketOnClose.RunClose's optional `fixingRef`): a close
+-- can be bound to a committee-attested NAV, so the printed price is provably not
+-- one venue's unilateral number.
+template NavFixing
+  with
+    attestors      : [Party]  -- the members who signed (>= threshold of them)
+    admin          : Party
+    auditor        : Party
+    threshold      : Int
+    instrumentId   : Text
+    cashInstrument : Text
+    session        : Text     -- "Open" | "Close"
+    price          : Decimal  -- the official price every consumer prints at
+    rationale      : Text
+    publishedTo    : [Party]  -- venues/desks disclosed the fix (e.g. the auction operator)
+    finalizedAt    : Time
+  where
+    signatory attestors
+    -- The auditor and the published-to venues observe the official fix; the fix is
+    -- deliberately NOT world-readable — it reaches exactly the desks that consume it.
+    observer (auditor :: publishedTo)
+
+    ensure price > 0.0
+        && threshold > 0
+        && length attestors >= threshold          -- provably K-of-N attested
+        && length (dedup attestors) == length attestors
+
+    -- DISCLOSE — extend the fix to another consuming venue/desk after the fact
+    -- (e.g. a second auction that wants to print at the same official NAV). Any
+    -- attestor may broaden publication; it never changes the price. Consuming +
+    -- re-create because observers are fixed at creation.
+    choice PublishTo : ContractId NavFixing
+      with
+        attestor : Party
+        venue    : Party
+      controller attestor
+      do
+        assertMsg "only an attestor may broaden publication" (attestor `elem` attestors)
+        create this with publishedTo = venue :: filter (/= venue) publishedTo
+
+-- ---------------------------------------------------------------------------
+-- navPriceOf — read the official price off a fixing (convenience for consumers).
+-- ---------------------------------------------------------------------------
+navPriceOf : NavFixing -> Decimal
+navPriceOf f = f.price

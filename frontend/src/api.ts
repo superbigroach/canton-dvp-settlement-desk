@@ -118,6 +118,56 @@ export interface MocCloseResponse {
   fills: MocFill[];
 }
 
+// ---- Decentralised operator: K-of-N committee-attested NAV ----------------
+
+export interface CidResponse {
+  contractId: string;
+}
+
+// ---- Basket / ETF builder -------------------------------------------------
+
+export interface BasketComponent {
+  instrumentId: string;  // an underlying, e.g. "cETH"
+  unitsPerShare: number; // units of it per basket share
+}
+
+export interface Basket {
+  basketCid: string;
+  basketId: string;      // the basket token symbol, e.g. "LX1"
+  administrator: string; // fund administrator / custodian
+  cashInstrument: string;
+  components: BasketComponent[];
+  participants: string[];
+}
+
+export interface BasketCreateResponse {
+  receiptCid: string | null;
+  mintedSharesCid: string | null;
+  shares: number;
+  navPerShare: number | null;
+}
+
+export interface BasketRedeemResponse {
+  receiptCid: string | null;
+  shares: number;
+  returnedHoldingCids: string[];
+}
+
+export interface NavLeg {
+  instrumentId: string;
+  unitsPerShare: number;
+  price: number | null;  // the underlying's official close mark
+  value: number | null;  // unitsPerShare × price
+}
+
+export interface NavResponse {
+  basketId: string;
+  navPerShare: number | null; // Σ value; null if any mark is missing
+  cashInstrument: string;
+  legs: NavLeg[];
+  complete: boolean;
+}
+
 // ---- transport ------------------------------------------------------------
 
 /** The backend surfaces its errors as {message}. Unwrap it for a clean UI toast. */
@@ -207,4 +257,78 @@ export const api = {
     if (!res.ok) throw new ApiError((body && (body.message || body.error)) || `HTTP ${res.status}`);
     return body as MocImbalance;
   },
+
+  // ---- Decentralised operator: committee-attested NAV ----------------------
+  // Stand up a K-of-N committee, propose a fix, gather member confirmations, then
+  // finalise into an official NavFixing that no single party could have produced.
+  createCommittee: (body: {
+    admin: string;
+    members: string[];
+    threshold: number;
+    auditor?: string;
+    label?: string;
+  }) => req<CidResponse>('/committee', { method: 'POST', body: JSON.stringify(body) }),
+
+  proposeFixing: (
+    committeeCid: string,
+    body: {
+      proposer: string;
+      instrumentId: string;
+      price: number;
+      cashInstrument?: string;
+      session?: Session;
+      rationale?: string;
+    },
+  ) =>
+    req<CidResponse>(`/committee/${encodeURIComponent(committeeCid)}/propose`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  // Each confirmation returns the NEW proposal cid (accumulating multisig).
+  confirmFixing: (proposalCid: string, member: string) =>
+    req<CidResponse>(`/fixing/${encodeURIComponent(proposalCid)}/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ member }),
+    }),
+
+  finalizeFixing: (proposalCid: string, proposer: string, publishTo: string[]) =>
+    req<CidResponse>(`/fixing/${encodeURIComponent(proposalCid)}/finalize`, {
+      method: 'POST',
+      body: JSON.stringify({ proposer, publishTo }),
+    }),
+
+  // ---- Basket / ETF builder ------------------------------------------------
+  baskets: (actingAs = '') =>
+    req<Basket[]>(`/baskets${actingAs ? `?actingAs=${encodeURIComponent(actingAs)}` : ''}`),
+
+  defineBasket: (body: {
+    administrator: string;
+    basketId: string;
+    components: BasketComponent[];
+    participants: string[];
+    auditor?: string;
+    description?: string;
+    cashInstrument?: string;
+  }) => req<Basket>('/basket', { method: 'POST', body: JSON.stringify(body) }),
+
+  // One-click in-kind creation (deliver underlyings → mint shares, atomic).
+  basketCreate: (body: { basketId: string; ap: string; shares: number }) =>
+    req<BasketCreateResponse>('/basket/create', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  // One-click in-kind redemption (burn shares → receive underlyings, atomic).
+  basketRedeem: (body: { basketId: string; ap: string; shares: number }) =>
+    req<BasketRedeemResponse>('/basket/redeem', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  basketNav: (basketId: string, actingAs = '') =>
+    req<NavResponse>(
+      `/basket/nav?basketId=${encodeURIComponent(basketId)}` +
+        (actingAs ? `&actingAs=${encodeURIComponent(actingAs)}` : ''),
+    ),
 };
