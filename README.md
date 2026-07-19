@@ -13,11 +13,20 @@ its own side).
 > settlement of tokenised assets between known counterparties. It is not a
 > submission to anything; it's a hands-on model of the real workflow.
 
+> **🌐 Live demo → https://crossdesk-devnet-app.web.app** — the full React desk,
+> connected to the **real shared HackCanton devnet node** (NODERS `hackcanton-01`,
+> Canton 3.x) via a Cloud Run backend over the Ledger API v2. It is **read-only**
+> (shows the allocated parties + live ACS) until the node operator grants this
+> user `actAs` on the CrossDesk parties, after which it settles **real on-chain
+> transactions with no redeploy**. See [`DEVNET_INTEGRATION.md`](DEVNET_INTEGRATION.md).
+
 > **Build status.** The Daml is written in the portable 2.x/3.x subset and
 > compiles with only the SDK's standard library (`daml-prim` / `daml-stdlib` /
 > `daml-script`) — **no external `.dar` version pins**. `daml build` succeeds and
 > `daml test` runs green (every `Script` in `daml/Test.daml` passes, with no
-> divulgence warnings) on Daml SDK **2.9.4**. See [Run it locally](#run-it-locally).
+> divulgence warnings) on Daml SDK **2.9.4**. The Spring backend also runs against
+> Canton 3.x / Ledger API v2 (`backend-devnet/`), deployed on the devnet node.
+> See [Run it locally](#run-it-locally) and [`backend-devnet/RUNBOOK.md`](backend-devnet/RUNBOOK.md).
 
 ---
 
