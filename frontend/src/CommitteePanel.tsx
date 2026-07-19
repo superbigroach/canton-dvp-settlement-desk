@@ -20,7 +20,8 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
   const assets = instruments.filter((i) => i.kind !== 'Cash');
 
   // Committee config
-  const [members, setMembers] = useState<string[]>(['Venue', 'Bank', 'Agent']);
+  // Default members exist on BOTH the local sandbox and the devnet roster.
+  const [members, setMembers] = useState<string[]>(['Issuer', 'Bank', 'Auditor']);
   const [threshold, setThreshold] = useState<number>(2);
   const [admin] = useState<string>('Issuer');
   const [committeeCid, setCommitteeCid] = useState<string>('');
@@ -101,8 +102,9 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
   async function finalize() {
     if (!proposalCid) return;
     const proposer = attestors[0];
-    // Publish the fix to the venue (the auction operator that will print at it).
-    const res = await run(() => api.finalizeFixing(proposalCid, proposer, ['Venue']));
+    // The fix is already visible to the committee + auditor; publish more widely
+    // only where a dedicated venue party exists (not on every roster).
+    const res = await run(() => api.finalizeFixing(proposalCid, proposer, []));
     if (!res) return;
     setFixCid(res.contractId);
     setProposalCid('');
