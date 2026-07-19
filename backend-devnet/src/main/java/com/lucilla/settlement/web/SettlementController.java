@@ -93,13 +93,17 @@ public class SettlementController {
     @PostMapping("/instruments")
     public ResponseEntity<Dtos.CidResponse> issueInstrument(
             @Valid @RequestBody Dtos.IssueInstrumentRequest req) {
-        String depository = blankTo(req.depository(), req.issuer());
+        // Resolve labels ("Issuer") to full party ids ("issuer-crossdesk::1220…") —
+        // on a real node, actAs claims only match the FULL id.
+        String issuer = ledger.resolveParty(req.issuer());
+        String depository = blankTo(req.depository(), "").isBlank()
+                ? issuer : ledger.resolveParty(req.depository());
         String version = blankTo(req.version(), "1");
         String description = req.description() == null ? "" : req.description();
         var cmd = LedgerCommands.createInstrument(
-                req.issuer(), depository, req.id(), version, req.kind(), description,
+                issuer, depository, req.id(), version, req.kind(), description,
                 Optional.ofNullable(req.referencePrice()));
-        String cid = ledger.submitForCreated(req.issuer(), cmd, LedgerCommands.instrumentTemplateId());
+        String cid = ledger.submitForCreated(issuer, cmd, LedgerCommands.instrumentTemplateId());
         return created(new Dtos.CidResponse(cid));
     }
 
@@ -108,9 +112,12 @@ public class SettlementController {
     @PostMapping("/holdings")
     public ResponseEntity<Dtos.CidResponse> issueHolding(
             @Valid @RequestBody Dtos.IssueHoldingRequest req) {
+        // Resolve labels to full party ids (actAs claims match the full id only).
+        String issuer = ledger.resolveParty(req.issuer());
+        String owner = ledger.resolveParty(req.owner());
         var cmd = LedgerCommands.createHolding(
-                req.issuer(), req.instrumentId(), req.owner(), req.amount());
-        String cid = ledger.submitForCreated(req.issuer(), cmd, LedgerCommands.holdingTemplateId());
+                issuer, req.instrumentId(), owner, req.amount());
+        String cid = ledger.submitForCreated(issuer, cmd, LedgerCommands.holdingTemplateId());
         return created(new Dtos.CidResponse(cid));
     }
 

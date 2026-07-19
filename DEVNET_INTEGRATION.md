@@ -169,11 +169,17 @@ A truthful timeline — this is where the real engineering was.
    `UNIMPLEMENTED` error is **gone** — the command now reaches the node's
    authorization layer.
 
-7. **`PERMISSION_DENIED` on every submit (incl. our own party).**
-   Reads return `200`; writes are denied. Decoding the token shows a **user-token
-   with no embedded Daml claims** (`sub 8b9dc176-…`, `sborjas`), so rights come
-   from **participant user-management**. Our user has **readAs but not actAs**.
-   → **This is the one open item, and it is node-operator-only** (see §7).
+7. **`PERMISSION_DENIED` on every submit — SOLVED via the participant logs.**
+   Reads returned `200`; writes were denied even after the operator granted actAs.
+   Querying the node's **Grafana/Loki logs** for the denied `tid` revealed the real
+   error: `Claims are only valid for userId '8b9dc176-…', actual userId is
+   'canton-dvp-desk'`. In **Ledger API v2 the submission's `applicationId` IS the
+   userId** — it must equal the token's `sub`, not an arbitrary app name.
+   → Set `LEDGER_APPLICATION_ID=8b9dc176-…`. Next error: `Claims do not authorize
+   to act as party 'Issuer'` — **actAs claims match FULL party ids** (`…::1220…`),
+   not labels. → Resolve labels via `resolveParty()` before submitting.
+   **Result: HTTP 201 — real contracts created, and a full atomic DvP settled on
+   the shared node** (receipt `006ef8c599…`, 2026-07-19).
 
 ---
 
@@ -190,19 +196,15 @@ A truthful timeline — this is where the real engineering was.
   `UNIMPLEMENTED`).
 - ✅ Token identity verified (`sborjas`, scope `daml_ledger_api`).
 
-**Pending — node-operator action only:**
+**RESOLVED — writes are live (2026-07-19):**
 
-- 🚧 Grant our user **`CanActAs`** on the 5 CrossDesk parties. The moment that is
-  set, the same `POST /api/instruments` (and the full DvP via `smoke-devnet.sh`)
-  creates real contracts on the node — **no code change, no new token.**
-
-The exact ask for the operator:
-
-> Grant Canton user **`8b9dc176-f2a4-445b-92ba-a2ca55ed1da9`** (username `sborjas`)
-> **`CanActAs`** on `issuer-crossdesk`, `bank-crossdesk`, `alice-crossdesk`,
-> `bob-crossdesk`, `auditor-crossdesk` (all `::122003aa7c49…`).
-> Denied request ids for the participant logs: `e951796fd5667c1805d161af6d0142ea`,
-> `a29cd6f8717528cf699499f1b4bf078d`.
+- ✅ The operator granted **`CanActAs`** on all CrossDesk parties (+ our own).
+- ✅ With `applicationId = token userId` and full party ids in actAs, **real
+  contracts create with HTTP 201**, and a **full atomic DvP settled on the shared
+  node**: *alice-crossdesk → bob-crossdesk · 10 cETH @ 3,200 USDC*, receipt
+  `006ef8c599…`, visible only to Alice/Bob/Auditor (sub-transaction privacy).
+- ✅ The hosted demo (https://crossdesk-devnet-app.web.app) now reads this live
+  on-chain state and can settle further transactions.
 
 ---
 

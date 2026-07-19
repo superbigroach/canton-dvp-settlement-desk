@@ -15,10 +15,11 @@ its own side).
 
 > **🌐 Live demo → https://crossdesk-devnet-app.web.app** — the full React desk,
 > connected to the **real shared HackCanton devnet node** (NODERS `hackcanton-01`,
-> Canton 3.x) via a Cloud Run backend over the Ledger API v2. It is **read-only**
-> (shows the allocated parties + live ACS) until the node operator grants this
-> user `actAs` on the CrossDesk parties, after which it settles **real on-chain
-> transactions with no redeploy**. See [`DEVNET_INTEGRATION.md`](DEVNET_INTEGRATION.md).
+> Canton 3.x) via a Cloud Run backend over the Ledger API v2, **settling real
+> on-chain transactions**. First live settlement (2026-07-19): an atomic DvP —
+> *alice-crossdesk → bob-crossdesk · 10 cETH @ 3,200 USDC* — receipt visible to
+> Alice/Bob/Auditor only (sub-transaction privacy on a shared node). See
+> [`DEVNET_INTEGRATION.md`](DEVNET_INTEGRATION.md).
 
 > **Build status.** The Daml is written in the portable 2.x/3.x subset and
 > compiles with only the SDK's standard library (`daml-prim` / `daml-stdlib` /

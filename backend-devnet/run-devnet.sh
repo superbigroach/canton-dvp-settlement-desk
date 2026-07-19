@@ -24,6 +24,9 @@ fi
 export LEDGER_HOST="ledger-api-grpc.participant.hackcanton-01.devnet.naas.noders.services"
 export LEDGER_PORT="443"
 export LEDGER_TLS="true"
+# CRITICAL (Ledger API v2): applicationId == the token's userId (JWT `sub`), or the
+# node rejects every submission with "Claims are only valid for userId ...".
+export LEDGER_APPLICATION_ID="${LEDGER_APPLICATION_ID:-8b9dc176-f2a4-445b-92ba-a2ca55ed1da9}"
 # Default to 8090 so this devnet backend can run ALONGSIDE the local (2.9.4)
 # backend, which owns 8080. Override with SERVER_PORT=... if you like.
 export SERVER_PORT="${SERVER_PORT:-8090}"
