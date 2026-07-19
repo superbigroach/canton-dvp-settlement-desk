@@ -305,6 +305,12 @@ public final class Dtos {
             List<NavLeg> legs, boolean complete) {
     }
 
+    /** A receipt as the acting party sees it, with WHO can see it (the privacy proof). */
+    public record ReceiptResponse(
+            String contractId, String kind, String headline, String settledAt,
+            List<String> visibleTo) {
+    }
+
     // ---- Generic responses ------------------------------------------------
 
     public record CidResponse(String contractId) {

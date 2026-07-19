@@ -168,6 +168,16 @@ export interface NavResponse {
   complete: boolean;
 }
 
+// A receipt as the acting party sees it, with WHO can see it. Queried as the acting
+// party, so the ledger's need-to-know rules decide what comes back (an outsider gets []).
+export interface LedgerReceipt {
+  contractId: string;
+  kind: string;         // "DvP" | "Auction fill" | "Creation" | "Redemption"
+  headline: string;
+  settledAt: string;
+  visibleTo: string[];  // labels of every party entitled to see this receipt
+}
+
 // ---- transport ------------------------------------------------------------
 
 /** The backend surfaces its errors as {message}. Unwrap it for a clean UI toast. */
@@ -331,4 +341,8 @@ export const api = {
       `/basket/nav?basketId=${encodeURIComponent(basketId)}` +
         (actingAs ? `&actingAs=${encodeURIComponent(actingAs)}` : ''),
     ),
+
+  // Receipts VISIBLE to a party (need-to-know — the ledger filters, an outsider gets []).
+  receiptsFor: (party: string) =>
+    req<LedgerReceipt[]>(`/receipts?party=${encodeURIComponent(party)}`),
 };

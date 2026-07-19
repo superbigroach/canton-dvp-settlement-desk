@@ -65,6 +65,20 @@ public class SettlementController {
                 .toList();
     }
 
+    /**
+     * The receipts VISIBLE to the acting party — queried as that party, so the ledger's own
+     * need-to-know rules decide what comes back. Auditor sees settlements without the holdings;
+     * a party sees its own trades; an outsider (Eve) sees an empty list.
+     */
+    @GetMapping("/receipts")
+    public List<Dtos.ReceiptResponse> receipts(@RequestParam String party) {
+        String p = ledger.resolveParty(party);
+        return ledger.receiptsVisibleTo(p).stream()
+                .map(r -> new Dtos.ReceiptResponse(
+                        r.contractId(), r.kind(), r.headline(), r.settledAt(), r.visibleTo()))
+                .toList();
+    }
+
     // ---- Instruments ------------------------------------------------------
 
     /** The published instruments (id, kind, reference/close price) for the pickers. */

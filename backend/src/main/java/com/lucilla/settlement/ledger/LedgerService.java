@@ -19,6 +19,8 @@ import com.lucilla.settlement.model.marketonclose.ImbalanceDisclosure;
 import com.lucilla.settlement.model.marketonclose.SealedOrder;
 import com.lucilla.settlement.model.settlement.FillRecord;
 import com.lucilla.settlement.model.settlement.SettlementBatch;
+import com.lucilla.settlement.model.settlement.SettlementReceipt;
+import com.lucilla.settlement.model.basket.BasketReceipt;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -364,6 +366,68 @@ public class LedgerService {
         });
     }
 
+    /**
+     * Settlement + basket receipts VISIBLE to {@code party} — queried AS that party, so the
+     * ledger itself decides who sees each receipt (need-to-know audit). A DvP receipt is seen
+     * by its two principals + the auditor; an auction fill by the venue + traders + auditor; a
+     * basket create/redeem by the AP + administrator + auditor. An outsider sees NOTHING.
+     */
+    public List<ReceiptView> receiptsVisibleTo(String party) {
+        List<ReceiptView> out = new ArrayList<>();
+        out.addAll(withRetry("settlement receipts for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<SettlementReceipt.Contract> filter = ContractFilter.of(SettlementReceipt.COMPANION);
+            List<ReceiptView> rs = new ArrayList<>();
+            client.getActiveContractSetClient()
+                    .getActiveContracts(filter, Set.of(party), false)
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (SettlementReceipt.Contract c : active.activeContracts) {
+                            SettlementReceipt r = c.data;
+                            boolean auction = r.venue.isPresent();
+                            List<String> vis = new ArrayList<>();
+                            if (auction) {
+                                vis.add(labelOf(r.venue.get()));
+                            }
+                            vis.add(labelOf(r.seller));
+                            vis.add(labelOf(r.buyer));
+                            vis.add(labelOf(r.auditor));
+                            rs.add(new ReceiptView(
+                                    c.id.contractId,
+                                    auction ? "Auction fill" : "DvP",
+                                    labelOf(r.seller) + " → " + labelOf(r.buyer) + " · "
+                                            + strip(r.assetAmount) + " " + r.assetInstrument + " @ "
+                                            + strip(r.unitPrice) + " " + r.cashInstrument,
+                                    r.settledAt.toString(),
+                                    vis.stream().distinct().toList()));
+                        }
+                    });
+            return rs;
+        }));
+        out.addAll(withRetry("basket receipts for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<BasketReceipt.Contract> filter = ContractFilter.of(BasketReceipt.COMPANION);
+            List<ReceiptView> rs = new ArrayList<>();
+            client.getActiveContractSetClient()
+                    .getActiveContracts(filter, Set.of(party), false)
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (BasketReceipt.Contract c : active.activeContracts) {
+                            BasketReceipt b = c.data;
+                            rs.add(new ReceiptView(
+                                    c.id.contractId,
+                                    b.action,
+                                    labelOf(b.ap) + " " + ("Creation".equals(b.action) ? "created" : "redeemed")
+                                            + " " + strip(b.shares) + " " + b.basketId,
+                                    b.settledAt.toString(),
+                                    List.of(labelOf(b.administrator), labelOf(b.ap), labelOf(b.auditor))));
+                        }
+                    });
+            return rs;
+        }));
+        return out;
+    }
+
     /** The published reference (close) price for an instrument id, or empty. */
     public Optional<BigDecimal> referencePriceOf(String issuerRef, String instrumentId) {
         return instrumentsVisibleTo(resolveParty(issuerRef)).stream()
@@ -502,7 +566,10 @@ public class LedgerService {
      * bounded retry makes the endpoint reliable without changing any ledger state.
      */
     private <T> T withRetry(String what, java.util.concurrent.Callable<T> op) {
-        int attempts = 4;
+        // 6 attempts with growing backoff: the local sandbox's ACS stream drops mid-frame under
+        // host load ("end-of-stream mid-frame"); a pure read is safe to retry, so we give it more
+        // chances (and more time to recover) before surfacing the error to the UI.
+        int attempts = 6;
         RuntimeException last = null;
         for (int i = 1; i <= attempts; i++) {
             try {
@@ -523,7 +590,7 @@ public class LedgerService {
                 last = re;
                 log.warn("Transient ledger read failure ({}), retry {}/{}: {}", what, i, attempts, msg);
                 try {
-                    Thread.sleep(150L * i);
+                    Thread.sleep(300L * i);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     throw new LedgerException("interrupted while retrying " + what, ie);
@@ -564,6 +631,12 @@ public class LedgerService {
     public record BasketView(
             String contractId, String administrator, String basketId, String description,
             String cashInstrument, List<ComponentView> components, List<String> participants) {
+    }
+
+    /** A receipt as seen by the acting party, with WHO can see it (the privacy proof). */
+    public record ReceiptView(
+            String contractId, String kind, String headline, String settledAt,
+            List<String> visibleTo) {
     }
 
     /** Flat, JSON-friendly view of a ClosingAuction. */

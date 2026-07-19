@@ -473,3 +473,16 @@ button.primary.lp:hover:not(:disabled) {
 .define-toggle { margin-top: 8px; }
 .define-basket { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
 .ghost.small { padding: 5px 10px; font-size: 12px; }
+
+/* =========================================================================
+   Panel order — Trade top-left with The Cross directly under it; the
+   Decentralised Operator swapped up to the top-right where Position was.
+   Uses CSS `order` so no markup moves (grid items reflow by order).
+   ========================================================================= */
+.grid > .trade        { order: 1; }  /* top-left */
+.grid > .committee    { order: 2; }  /* top-right */
+.grid > .cross        { order: 3; }  /* directly under Trade (left column) */
+.grid > .receipts     { order: 4; }  /* under the operator (right column) */
+.grid > .lp-imbalance { order: 5; }
+.grid > .fund         { order: 6; }  /* bottom-left */
+.grid > .position     { order: 7; }  /* bottom-right — right beside the Fund builder */

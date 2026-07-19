@@ -4,6 +4,7 @@ import {
   ApiError,
   type Holding,
   type Instrument,
+  type LedgerReceipt,
   type MocImbalance,
   type MocState,
   type Party,
@@ -13,21 +14,6 @@ import CommitteePanel from './CommitteePanel';
 import FundPanel from './FundPanel';
 
 const CASH = 'USDC';
-
-// A settlement proof we show the trader: either a bilateral DvP receipt or one
-// fill from an opening/closing cross batch. Accumulated newest-first.
-interface Receipt {
-  key: string;
-  kind: 'DvP' | 'Open' | 'Close';
-  time: string;
-  headline: string; // "Bob bought 3 DEMO:AAPL" etc.
-  asset: string;
-  quantity: number;
-  cashAmount: number;
-  unitPrice: number;
-  counterpartyLine: string;
-  cid: string; // receipt cid (DvP) or settlement-batch cid (cross)
-}
 
 type Side = 'Buy' | 'Sell';
 type Mode = 'DvP' | 'Auction';
@@ -46,7 +32,9 @@ export default function App() {
   const [instruments, setInstruments] = useState<Instrument[]>([]);
   const [acting, setActing] = useState<string>(''); // party label
   const [holdings, setHoldings] = useState<Holding[]>([]);
-  const [receipts, setReceipts] = useState<Receipt[]>([]);
+  // Receipts VISIBLE to the acting party — a real per-party ledger query (need-to-know audit),
+  // so switching parties shows exactly what that party is entitled to see (Eve sees nothing).
+  const [ledgerReceipts, setLedgerReceipts] = useState<LedgerReceipt[]>([]);
 
   const [mode] = useState<Mode>('Auction'); // auction-only desk (DvP engine still powers the cross)
   const [asset, setAsset] = useState<string>('');
@@ -92,6 +80,16 @@ export default function App() {
       setHoldings(await api.holdings(label));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  // Load the receipts the acting party is entitled to see — a real per-party ledger query.
+  const loadReceipts = useCallback(async (label: string) => {
+    if (!label) return;
+    try {
+      setLedgerReceipts(await api.receiptsFor(label));
+    } catch {
+      setLedgerReceipts([]);
     }
   }, []);
 
@@ -142,6 +140,9 @@ export default function App() {
   useEffect(() => {
     void loadHoldings(acting);
   }, [acting, loadHoldings]);
+  useEffect(() => {
+    void loadReceipts(acting);
+  }, [acting, loadReceipts]);
   useEffect(() => {
     void loadMoc(asset, session, acting);
   }, [asset, session, acting, loadMoc]);
@@ -217,23 +218,8 @@ export default function App() {
       }),
     );
     if (!res) return;
-    setReceipts((r) => [
-      {
-        key: `dvp-${res.receiptCid ?? Date.now()}`,
-        kind: 'DvP',
-        time: new Date().toLocaleTimeString(),
-        headline: `${buyer} bought ${fmt(res.assetAmount)} ${res.assetInstrument} from ${seller}`,
-        asset: res.assetInstrument,
-        quantity: res.assetAmount,
-        cashAmount: res.cashAmount,
-        unitPrice: res.unitPrice,
-        counterpartyLine: `${seller} (seller) ⇄ ${buyer} (buyer) · atomic DvP`,
-        cid: res.receiptCid ?? '(no receipt)',
-      },
-      ...r,
-    ]);
     flash('Trade executed — both legs settled atomically.');
-    await Promise.all([loadHoldings(acting), loadMoc(asset, session, acting), loadImbalance(asset, session, acting)]);
+    await Promise.all([loadHoldings(acting), loadReceipts(acting), loadMoc(asset, session, acting), loadImbalance(asset, session, acting)]);
   }
 
   async function doMocOrder() {
@@ -254,28 +240,11 @@ export default function App() {
     const auctionCid = mocState.auctionCid;
     const res = await runAction(() => api.mocClose(auctionCid));
     if (!res) return;
-    const kind = res.session === 'Open' ? 'Open' : 'Close';
-    const crossName = res.session === 'Open' ? 'opening cross' : 'closing cross';
-    setReceipts((r) => [
-      ...res.fills.map((f, idx) => ({
-        key: `x-${res.settlementBatchCid}-${idx}`,
-        kind: kind as 'Open' | 'Close',
-        time: new Date().toLocaleTimeString(),
-        headline: `${f.trader} ${f.side === 'Buy' ? 'bought' : 'sold'} ${fmt(f.quantity)} ${mocState.instrumentId}`,
-        asset: mocState.instrumentId,
-        quantity: f.quantity,
-        cashAmount: f.quantity * f.price,
-        unitPrice: f.price,
-        counterpartyLine: `Uniform-price ${crossName} · venue-matched at the ${sessionLabel(kind)}`,
-        cid: res.settlementBatchCid,
-      })),
-      ...r,
-    ]);
     flash(
-      `${kind === 'Open' ? 'Opening' : 'Closing'} cross printed ${res.fills.length} fill(s) ` +
+      `${res.session === 'Open' ? 'Opening' : 'Closing'} cross printed ${res.fills.length} fill(s) ` +
         `at ${fmt2(res.closingPrice)} ${CASH}.`,
     );
-    await Promise.all([loadHoldings(acting), loadMoc(asset, session, acting), loadImbalance(asset, session, acting)]);
+    await Promise.all([loadHoldings(acting), loadReceipts(acting), loadMoc(asset, session, acting), loadImbalance(asset, session, acting)]);
   }
 
   async function doWithdraw(orderCid: string) {
@@ -719,44 +688,57 @@ export default function App() {
           parties={parties}
           instruments={instruments}
           acting={acting}
-          onChanged={() => void loadHoldings(acting)}
+          onChanged={() => {
+            void loadHoldings(acting);
+            void loadReceipts(acting);
+          }}
           flash={flash}
         />
 
-        {/* -------- Receipts -------- */}
+        {/* -------- Receipts · PER-PARTY ledger view (need-to-know audit) -------- */}
         <section className="card receipts">
           <div className="card-head">
             <h2>Settlement Receipts</h2>
-            <span className="who">{receipts.length} on-ledger</span>
+            <span className="who">{ledgerReceipts.length} visible to {acting}</span>
           </div>
-          <p className="hint">Immutable proof written on-ledger inside each atomic settlement.</p>
-          {receipts.length === 0 ? (
-            <p className="empty">No settlements yet. Execute a trade to see its receipt.</p>
+          <p className="hint">
+            Need-to-know audit — queried on the ledger <strong>as {acting}</strong>. The ledger itself
+            decides who sees each receipt: the parties to a settlement plus the auditor. Switch to{' '}
+            <strong>Auditor</strong> to see trades without holdings; switch to <strong>Eve</strong> and
+            she sees nothing.
+          </p>
+          {ledgerReceipts.length === 0 ? (
+            <p className="empty">
+              {acting.toLowerCase() === 'eve'
+                ? 'Eve is party to nothing — she sees zero receipts. That is the privacy model.'
+                : `${acting} has no visible receipts yet. Create/redeem a basket, or run a cross.`}
+            </p>
           ) : (
             <ul className="receipt-list">
-              {receipts.map((r) => (
-                <li key={r.key} className={`receipt ${r.kind.toLowerCase()}`}>
-                  <div className="receipt-head">
-                    <span className={`badge ${r.kind.toLowerCase()}`}>
-                      {r.kind === 'DvP' ? 'DvP' : r.kind === 'Open' ? 'OPEN' : 'CLOSE'}
-                    </span>
-                    <span className="receipt-headline">{r.headline}</span>
-                    <span className="receipt-time mono">{r.time}</span>
-                  </div>
-                  <div className="receipt-body">
-                    <span className="mono">
-                      {fmt(r.quantity)} {r.asset} @ <strong>{fmt2(r.unitPrice)}</strong> ={' '}
-                      <strong>{fmt2(r.cashAmount)} {CASH}</strong>
-                    </span>
-                    <span className="cp">{r.counterpartyLine}</span>
-                    <code className="cid mono" title={r.cid}>
-                      {r.kind === 'DvP' ? 'receipt' : 'batch'} · {shortCid(r.cid)}
-                    </code>
-                  </div>
-                </li>
-              ))}
+              {ledgerReceipts.map((r) => {
+                const cls = r.kind.toLowerCase().replace(/\s+/g, '-');
+                return (
+                  <li key={r.contractId} className={`receipt ${cls}`}>
+                    <div className="receipt-head">
+                      <span className={`badge ${cls}`}>{r.kind}</span>
+                      <span className="receipt-headline">{r.headline}</span>
+                    </div>
+                    <div className="receipt-body">
+                      <span className="cp">
+                        visible to: <strong>{r.visibleTo.join(' · ')}</strong>
+                      </span>
+                      <code className="cid mono" title={r.contractId}>
+                        {shortCid(r.contractId)}
+                      </code>
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
+          <button className="ghost" disabled={busy} onClick={() => loadReceipts(acting)}>
+            Refresh
+          </button>
         </section>
       </main>
 
