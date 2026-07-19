@@ -304,8 +304,10 @@ export default function App() {
           </div>
         </div>
         <div className="topbar-right">
-          <span className="live" title="Connected to the local Canton ledger API">
-            <span className="dot" /> live · ledger localhost:6900
+          <span className="live" title="Connected to the Canton Ledger API">
+            <span className="dot" /> live · {window.location.hostname === 'localhost'
+              ? 'local sandbox ledger'
+              : 'Canton devnet · hackcanton-01'}
           </span>
           <label className="party-switch">
             <span>Acting as</span>
