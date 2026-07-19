@@ -1,0 +1,38 @@
+# application.yml — Canton DvP Settlement Desk backend.
+# ---------------------------------------------------------------------------
+# Every value is overridable by an environment variable (Spring relaxed binding),
+# so the SAME jar / container image runs against a local sandbox and a real
+# Canton participant with no rebuild:
+#
+#   LOCAL SANDBOX (default):   plaintext, no auth
+#     LEDGER_HOST=localhost LEDGER_PORT=6865 LEDGER_TLS=false      (no LEDGER_JWT)
+#
+#   REAL CANTON PARTICIPANT:   TLS + JWT bearer
+#     LEDGER_HOST=participant.example  LEDGER_PORT=6865
+#     LEDGER_TLS=true  LEDGER_JWT=<bearer-token-scoping-actAs/readAs>
+# ---------------------------------------------------------------------------
+server:
+  port: ${SERVER_PORT:8080}
+
+ledger:
+  host: ${LEDGER_HOST:localhost}
+  port: ${LEDGER_PORT:6865}
+  tls: ${LEDGER_TLS:false}
+  # Leave empty for the local sandbox (no auth). Set to a bearer token for a real
+  # participant. NEVER commit a real token — inject it via env / a k8s Secret.
+  jwt: ${LEDGER_JWT:}
+  application-id: ${LEDGER_APPLICATION_ID:canton-dvp-desk}
+  connect-timeout-seconds: ${LEDGER_CONNECT_TIMEOUT_SECONDS:10}
+  # DEVNET party roster — comma-separated "Label=partyId" pairs. The 3.x bindings
+  # drop the party-management admin service, so on the shared devnet node (where the
+  # parties are pre-allocated + fixed) we supply them here instead of querying the
+  # ledger. Empty on the local sandbox (parties come from the admin service there).
+  parties: ${LEDGER_PARTIES:}
+
+spring:
+  application:
+    name: canton-dvp-desk
+
+# Surface a JSON error body (message + status) instead of the default HTML page.
+server.error:
+  include-message: always

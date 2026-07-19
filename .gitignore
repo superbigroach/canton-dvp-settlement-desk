@@ -15,6 +15,8 @@ node_modules/
 # output (backend/src/main/generated-java/**) are intentionally NOT ignored.
 backend/build/
 backend/.gradle/
+backend-devnet/build/
+backend-devnet/.gradle/
 .gradle/
 
 # Secrets & local config — NEVER commit Devnet credentials / participant keys
@@ -22,6 +24,8 @@ backend/.gradle/
 .env.*
 *.pem
 *.key
+*.jwt
+.jwt
 participant.conf.local
 
 # OS / editor cruft

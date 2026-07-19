@@ -1,0 +1,7 @@
+# Keep the build context small and reproducible. The image rebuilds the jar from
+# source inside the build stage, so host build output must NOT leak in.
+build/
+.gradle/
+*.log
+.idea/
+.vscode/

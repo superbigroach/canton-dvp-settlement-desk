@@ -1,0 +1,91 @@
+// build.gradle — Spring Boot 3.x backend for the Canton DvP Settlement Desk.
+// ---------------------------------------------------------------------------
+// A REST desk that drives the Daml/Canton Ledger API over gRPC using the Daml
+// Java Bindings (2.9.4). The SAME jar runs against a local plaintext sandbox
+// (no auth) and a real Canton participant (TLS + JWT) — see application.yml.
+//
+// Java 17 (matches the WSL toolchain + the Daml 2.9.4 codegen output). The
+// container image (Dockerfile) builds and runs on Temurin 21; the bytecode is
+// targeted at 17 so both work.
+// ---------------------------------------------------------------------------
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.3.4'
+    id 'io.spring.dependency-management' version '1.1.6'
+}
+
+group = 'com.lucilla.settlement'
+version = '1.0.0'
+
+// Target Java 17 bytecode using whatever JDK runs the build — Java 17 in the WSL
+// toolchain, Java 21 in the Docker build image. (A strict `toolchain{}` block
+// would force Gradle to hunt for a 17 JDK and fail inside the 21 container.)
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+repositories {
+    mavenCentral()
+}
+
+// The Daml Java codegen (`daml codegen java`, configured in ../daml.yaml) writes
+// strongly-typed template classes here. They are committed, so this build — and
+// the Docker build, which has no Daml SDK — compiles without regenerating.
+sourceSets {
+    main {
+        java {
+            srcDir 'src/main/generated-java'
+        }
+    }
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+
+    // Daml Java Bindings (2.9.4) — the Ledger API client + codegen runtime.
+    // bindings-rxjava transitively brings grpc-netty 1.60, protobuf, rxjava2, so
+    // the gRPC transport (plaintext or TLS) is fully wired with just these two.
+    implementation 'com.daml:bindings-java:3.4.0-snapshot.20250714.14008.0.vfe77a32d'
+    implementation 'com.daml:bindings-rxjava:3.4.0-snapshot.20250714.14008.0.vfe77a32d'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+// Spring Boot 3.3 manages a newer Netty than grpc-netty 1.60 was built against.
+// Pin protobuf to the version the Daml bindings were compiled with to avoid a
+// generated-vs-runtime protobuf mismatch.
+dependencyManagement {
+    dependencies {
+        dependency 'com.google.protobuf:protobuf-java:3.24.0'
+    }
+}
+
+test {
+    useJUnitPlatform {
+        // Integration tests need a running ledger; excluded from the default
+        // build so `./gradlew build` NEVER depends on a live Canton/sandbox.
+        // Run them explicitly with:  ./gradlew integrationTest
+        excludeTags 'integration'
+    }
+    testLogging {
+        events 'passed', 'skipped', 'failed'
+    }
+}
+
+// Opt-in task that DOES run the @Tag("integration") tests (against a ledger the
+// operator has already started — see run-local.md). Not wired into `build`.
+tasks.register('integrationTest', Test) {
+    useJUnitPlatform {
+        includeTags 'integration'
+    }
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    shouldRunAfter test
+    testLogging {
+        events 'passed', 'skipped', 'failed'
+        showStandardStreams = true
+    }
+}

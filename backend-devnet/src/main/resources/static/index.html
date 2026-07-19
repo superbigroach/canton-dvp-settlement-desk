@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Canton DvP Settlement Desk</title>
+<style>
+  :root{
+    --bg:#0b1020; --panel:#121a30; --panel2:#0e1526; --line:#243252;
+    --ink:#e8edf7; --muted:#8ea0c4; --brand:#5b8cff; --brand2:#7c5cff;
+    --ok:#2fd07a; --warn:#ffcc57; --err:#ff6b7a; --chip:#1b2740;
+    --shadow:0 8px 30px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:radial-gradient(1200px 600px at 80% -10%,#182544 0,transparent 60%),
+    linear-gradient(180deg,#0a0f1e,#0b1020);
+    color:var(--ink);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    min-height:100vh;
+  }
+  a{color:var(--brand)}
+  header.top{
+    display:flex;align-items:center;gap:16px;padding:16px 24px;
+    border-bottom:1px solid var(--line);background:rgba(10,15,30,.7);backdrop-filter:blur(8px);
+    position:sticky;top:0;z-index:10;flex-wrap:wrap;
+  }
+  .logo{display:flex;align-items:center;gap:12px;font-weight:700;letter-spacing:.2px}
+  .logo .mark{
+    width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,var(--brand),var(--brand2));
+    display:grid;place-items:center;font-weight:800;color:#fff;box-shadow:var(--shadow)
+  }
+  .logo small{display:block;font-weight:500;color:var(--muted);font-size:11px;letter-spacing:.4px;text-transform:uppercase}
+  .spacer{flex:1}
+  .health{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);
+    background:var(--chip);border:1px solid var(--line);border-radius:999px;padding:6px 12px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--muted)}
+  .dot.up{background:var(--ok);box-shadow:0 0 10px var(--ok)}
+  .dot.down{background:var(--err);box-shadow:0 0 10px var(--err)}
+  .partybar{display:flex;align-items:center;gap:10px}
+  select,input,button{font:inherit}
+  select,input{
+    background:var(--panel2);border:1px solid var(--line);color:var(--ink);
+    border-radius:9px;padding:9px 11px;outline:none;width:100%;
+  }
+  select:focus,input:focus{border-color:var(--brand)}
+  label{display:block;font-size:12px;color:var(--muted);margin:0 0 5px 1px}
+  button{
+    background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;border:none;
+    border-radius:9px;padding:10px 14px;font-weight:600;cursor:pointer;transition:.15s;white-space:nowrap
+  }
+  button:hover{filter:brightness(1.08)}
+  button:active{transform:translateY(1px)}
+  button.ghost{background:var(--chip);border:1px solid var(--line);color:var(--ink)}
+  button.mini{padding:5px 9px;font-size:12px;border-radius:7px}
+  main{max-width:1240px;margin:0 auto;padding:22px 24px 80px;display:grid;gap:18px;
+    grid-template-columns:1fr 1fr}
+  .card{
+    background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);
+    border-radius:16px;padding:18px;box-shadow:var(--shadow)
+  }
+  .card.wide{grid-column:1 / -1}
+  .card h2{margin:0 0 4px;font-size:15px;letter-spacing:.2px}
+  .card p.sub{margin:0 0 14px;color:var(--muted);font-size:12px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+  .field{margin-bottom:12px}
+  .row-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+  tbody tr:hover{background:rgba(91,140,255,.06)}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+  .cid{color:var(--muted)}
+  .chip{display:inline-block;background:var(--chip);border:1px solid var(--line);
+    border-radius:7px;padding:2px 8px;font-size:12px}
+  .kind-Equity{color:#8fd0ff}.kind-Cash{color:#8fffc4}.kind-CryptoWrapped{color:#c9a8ff}
+  .out{background:#0a1020;border:1px solid var(--line);border-radius:11px;padding:12px;
+    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;white-space:pre-wrap;
+    word-break:break-word;color:#cdd8f2;max-height:260px;overflow:auto}
+  .toast{position:fixed;right:20px;bottom:20px;display:flex;flex-direction:column;gap:10px;z-index:50}
+  .toast .t{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--brand);
+    padding:12px 14px;border-radius:10px;box-shadow:var(--shadow);max-width:380px;font-size:13px;animation:sl .2s ease}
+  .toast .t.ok{border-left-color:var(--ok)}.toast .t.err{border-left-color:var(--err)}
+  @keyframes sl{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}
+  .tag{font-size:11px;color:var(--muted)}
+  .flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .step{background:var(--chip);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;color:var(--muted)}
+  .step.on{border-color:var(--brand);color:var(--ink)}
+  .arrow{color:var(--muted)}
+  .empty{color:var(--muted);font-size:13px;padding:14px 4px}
+  .pill{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line)}
+  .pill.buy{color:#8fffc4;border-color:#1f5c3f}.pill.sell{color:#ffb3bd;border-color:#5c1f2a}
+  hr.sep{border:none;border-top:1px solid var(--line);margin:14px 0}
+  @media(max-width:900px){main{grid-template-columns:1fr}.grid3{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="logo">
+    <div class="mark">C</div>
+    <div>Canton DvP Settlement Desk<small>Atomic Delivery-vs-Payment · Market-on-Close</small></div>
+  </div>
+  <div class="spacer"></div>
+  <div class="partybar">
+    <label style="margin:0">Acting party</label>
+    <select id="partyPicker" style="min-width:230px"></select>
+    <button class="ghost mini" onclick="loadParties()">Refresh</button>
+  </div>
+  <div class="health" title="backend → ledger">
+    <span class="dot" id="hDot"></span><span id="hText">connecting…</span>
+  </div>
+</header>
+
+<main>
+  <!-- Holdings -->
+  <section class="card wide">
+    <h2>Holdings</h2>
+    <p class="sub">Active positions visible to the acting party. Click a row to use its contract id in the DvP form.</p>
+    <div id="holdingsWrap"><div class="empty">Pick a party to load holdings…</div></div>
+  </section>
+
+  <!-- Propose DvP -->
+  <section class="card">
+    <h2>Propose DvP</h2>
+    <p class="sub">Seller delivers the asset, buyer delivers the cash — both legs settle atomically in one transaction.</p>
+    <div class="flow">
+      <span class="step on" id="fp">1 · Propose</span><span class="arrow">→</span>
+      <span class="step" id="fa">2 · Accept</span><span class="arrow">→</span>
+      <span class="step" id="fs">3 · Settle</span>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Proposer (seller)</label><select id="dProposer"></select></div>
+      <div class="field"><label>Counterparty (buyer)</label><select id="dCounter"></select></div>
+    </div>
+    <div class="field"><label>Auditor</label><select id="dAuditor"></select></div>
+    <div class="grid2">
+      <div class="field"><label>Asset instrument</label><input id="dAssetInst" placeholder="DEMO:AAPL"/></div>
+      <div class="field"><label>Asset amount</label><input id="dAssetAmt" placeholder="10"/></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Cash instrument</label><input id="dCashInst" placeholder="USDC"/></div>
+      <div class="field"><label>Cash amount</label><input id="dCashAmt" placeholder="2550"/></div>
+    </div>
+    <div class="field"><label>Asset holding cid (seller's asset)</label><input id="dAssetCid" class="mono" placeholder="click an asset holding row →"/></div>
+    <div class="field"><label>Cash holding cid (buyer's cash)</label><input id="dCashCid" class="mono" placeholder="click a cash holding row →"/></div>
+    <div class="row-actions"><button onclick="propose()">Propose DvP</button></div>
+    <hr class="sep"/>
+    <div class="grid2">
+      <div class="field"><label>Proposal cid</label><input id="dProposalCid" class="mono"/></div>
+      <div class="field" style="display:flex;align-items:flex-end"><button class="ghost" style="width:100%" onclick="acceptDvp()">Accept →</button></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Agreement cid</label><input id="dAgreementCid" class="mono"/></div>
+      <div class="field" style="display:flex;align-items:flex-end"><button style="width:100%" onclick="settleDvp()">Settle ✓</button></div>
+    </div>
+    <div class="field"><label>Receipt / result</label><div class="out" id="dOut">—</div></div>
+  </section>
+
+  <!-- Market on Close -->
+  <section class="card">
+    <h2>Market-on-Close Auction</h2>
+    <p class="sub">Sealed-order dark pool: open the book, collect sealed orders, cross at a single uniform close price.</p>
+    <div class="grid2">
+      <div class="field"><label>Operator (venue)</label><select id="aOperator"></select></div>
+      <div class="field"><label>Auditor</label><select id="aAuditor"></select></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Asset instrument</label><input id="aInst" placeholder="DEMO:AAPL"/></div>
+      <div class="field"><label>Cash instrument</label><input id="aCash" placeholder="USDC"/></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Reference (close) price</label><input id="aPrice" placeholder="255"/></div>
+      <div class="field"><label>Participants (comma ids/labels)</label><input id="aParts" placeholder="Alice, Bob, Bank"/></div>
+    </div>
+    <div class="row-actions"><button onclick="openAuction()">Open Auction</button></div>
+    <hr class="sep"/>
+    <div class="field"><label>Auction cid</label><input id="aAuctionCid" class="mono"/></div>
+    <div class="grid3">
+      <div class="field"><label>Trader</label><select id="oTrader"></select></div>
+      <div class="field"><label>Side</label><select id="oSide"><option>Buy</option><option>Sell</option></select></div>
+      <div class="field"><label>Quantity</label><input id="oQty" placeholder="4"/></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Limit price</label><input id="oLimit" placeholder="255"/></div>
+      <div class="field"><label>Committed holding cid</label><input id="oCid" class="mono" placeholder="cash (buy) / asset (sell)"/></div>
+    </div>
+    <div class="row-actions"><button class="ghost" onclick="submitOrder()">Submit Sealed Order</button></div>
+    <div id="ordersWrap" style="margin-top:12px"></div>
+    <div class="row-actions"><button onclick="runClose()">Close &amp; Cross Book</button></div>
+    <div class="field" style="margin-top:12px"><label>Batch / result</label><div class="out" id="aOut">—</div></div>
+  </section>
+
+  <!-- Raw response log -->
+  <section class="card wide">
+    <h2>Activity Log</h2>
+    <p class="sub">Every backend call and its raw response — the proof the desk is talking to a live Canton ledger.</p>
+    <div class="out" id="log" style="max-height:320px">ready.</div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = ''; // same origin
+let PARTIES = [];
+let ORDERS = []; // {cid, side, trader, qty, limit}
+
+function el(id){return document.getElementById(id)}
+function toast(msg,kind){
+  const t=document.createElement('div');t.className='t '+(kind||'');t.textContent=msg;
+  el('toast').appendChild(t);setTimeout(()=>t.remove(),4200);
+}
+function logLine(label,data){
+  const l=el('log');
+  const ts=new Date().toLocaleTimeString();
+  l.textContent = `[${ts}] ${label}\n` + (typeof data==='string'?data:JSON.stringify(data,null,2)) + '\n\n' + l.textContent;
+}
+async function api(method,path,body){
+  const opt={method,headers:{'Content-Type':'application/json'}};
+  if(body!==undefined) opt.body=JSON.stringify(body);
+  const res=await fetch(API+path,opt);
+  const text=await res.text();
+  let data; try{data=text?JSON.parse(text):null}catch(e){data=text}
+  logLine(`${method} ${path} → ${res.status}`, data);
+  if(!res.ok){
+    const m=(data&&data.message)?data.message:('HTTP '+res.status);
+    throw new Error(m);
+  }
+  return data;
+}
+function shortCid(c){return c?c.slice(0,10)+'…'+c.slice(-6):''}
+
+// ---- Parties -----------------------------------------------------------
+async function loadParties(){
+  try{
+    PARTIES = await api('GET','/api/parties');
+    const opts = PARTIES.map(p=>`<option value="${p.party}">${p.label}${p.displayName&&p.displayName!==p.label?' ('+p.displayName+')':''}</option>`).join('');
+    ['partyPicker','dProposer','dCounter','dAuditor','aOperator','aAuditor','oTrader'].forEach(id=>{
+      const cur=el(id).value; el(id).innerHTML=opts; if(cur) el(id).value=cur;
+    });
+    // sensible defaults by label
+    setByLabel('dProposer','Bob'); setByLabel('dCounter','Alice'); setByLabel('dAuditor','Auditor');
+    setByLabel('aOperator','Venue'); setByLabel('aAuditor','Auditor'); setByLabel('oTrader','Alice');
+    setByLabel('partyPicker','Bob');
+    toast(`Loaded ${PARTIES.length} parties`,'ok');
+    loadHoldings();
+  }catch(e){toast('Parties: '+e.message,'err')}
+}
+function setByLabel(selId,label){
+  const p=PARTIES.find(x=>x.label===label); if(p) el(selId).value=p.party;
+}
+function labelFor(pid){const p=PARTIES.find(x=>x.party===pid);return p?p.label:pid}
+
+// ---- Health ------------------------------------------------------------
+async function health(){
+  try{
+    const h=await api('GET','/api/health');
+    el('hDot').className='dot up';
+    el('hText').textContent=`ledger ${h.ledgerHost}:${h.ledgerPort} · ${h.auth}`;
+  }catch(e){el('hDot').className='dot down';el('hText').textContent='backend down'}
+}
+
+// ---- Holdings ----------------------------------------------------------
+async function loadHoldings(){
+  const party=el('partyPicker').value;
+  if(!party){return}
+  const wrap=el('holdingsWrap');
+  wrap.innerHTML='<div class="empty">loading…</div>';
+  try{
+    const hs=await api('GET','/api/holdings?party='+encodeURIComponent(party));
+    if(!hs.length){wrap.innerHTML='<div class="empty">No holdings visible to '+labelFor(party)+'.</div>';return}
+    let rows=hs.map(h=>`<tr>
+      <td><span class="chip">${h.instrumentId}</span></td>
+      <td class="mono">${Number(h.amount)}</td>
+      <td>${labelFor(h.owner)}</td>
+      <td>${labelFor(h.issuer)}</td>
+      <td class="mono cid" title="${h.contractId}">${shortCid(h.contractId)}</td>
+      <td class="row-actions" style="margin:0">
+        <button class="ghost mini" onclick="useCid('dAssetCid','${h.contractId}')">→ asset</button>
+        <button class="ghost mini" onclick="useCid('dCashCid','${h.contractId}')">→ cash</button>
+        <button class="ghost mini" onclick="useCid('oCid','${h.contractId}')">→ order</button>
+      </td></tr>`).join('');
+    wrap.innerHTML=`<table><thead><tr>
+      <th>Instrument</th><th>Amount</th><th>Owner</th><th>Issuer</th><th>Contract id</th><th></th>
+      </tr></thead><tbody>${rows}</tbody></table>`;
+  }catch(e){wrap.innerHTML='<div class="empty">'+e.message+'</div>'}
+}
+function useCid(field,cid){el(field).value=cid;toast('Filled '+field,'ok')}
+
+// ---- DvP ---------------------------------------------------------------
+async function propose(){
+  try{
+    const body={
+      proposer:el('dProposer').value, counterparty:el('dCounter').value, auditor:el('dAuditor').value,
+      assetHoldingCid:el('dAssetCid').value.trim(), cashHoldingCid:el('dCashCid').value.trim(),
+      assetInstrument:el('dAssetInst').value.trim(), assetAmount:Number(el('dAssetAmt').value),
+      cashInstrument:el('dCashInst').value.trim(), cashAmount:Number(el('dCashAmt').value)
+    };
+    const r=await api('POST','/api/dvp/propose',body);
+    el('dProposalCid').value=r.contractId;
+    el('dOut').textContent='Proposal created:\n'+r.contractId;
+    el('fp').classList.add('on');el('fa').classList.add('on');
+    toast('DvP proposed','ok');
+  }catch(e){el('dOut').textContent='✕ '+e.message;toast(e.message,'err')}
+}
+async function acceptDvp(){
+  try{
+    const cid=el('dProposalCid').value.trim();
+    const r=await api('POST',`/api/dvp/${encodeURIComponent(cid)}/accept`,{counterparty:el('dCounter').value});
+    el('dAgreementCid').value=r.contractId;
+    el('dOut').textContent='Agreement created:\n'+r.contractId;
+    el('fs').classList.add('on');
+    toast('DvP accepted','ok');
+  }catch(e){el('dOut').textContent='✕ '+e.message;toast(e.message,'err')}
+}
+async function settleDvp(){
+  try{
+    const cid=el('dAgreementCid').value.trim();
+    const r=await api('POST',`/api/dvp/${encodeURIComponent(cid)}/settle`,{proposer:el('dProposer').value});
+    el('dOut').textContent='SETTLED ✓\nreceipt: '+(r.receiptCid||'—')+'\nnew holdings:\n  '+(r.createdHoldingCids||[]).join('\n  ');
+    toast('DvP settled atomically','ok');
+    loadHoldings();
+  }catch(e){el('dOut').textContent='✕ '+e.message;toast(e.message,'err')}
+}
+
+// ---- Market on Close ---------------------------------------------------
+async function openAuction(){
+  try{
+    const parts=el('aParts').value.split(',').map(s=>s.trim()).filter(Boolean)
+      .map(s=>{const p=PARTIES.find(x=>x.label===s||x.party===s);return p?p.party:s});
+    const body={
+      operator:el('aOperator').value, auditor:el('aAuditor').value,
+      instrumentId:el('aInst').value.trim(), cashInstrument:el('aCash').value.trim(),
+      referencePrice:Number(el('aPrice').value), participants:parts
+    };
+    const r=await api('POST','/api/auction',body);
+    el('aAuctionCid').value=r.contractId;
+    ORDERS=[];renderOrders();
+    el('aOut').textContent='Auction open:\n'+r.contractId;
+    toast('Auction opened','ok');
+  }catch(e){el('aOut').textContent='✕ '+e.message;toast(e.message,'err')}
+}
+async function submitOrder(){
+  try{
+    const cid=el('aAuctionCid').value.trim();
+    const side=el('oSide').value;
+    const body={trader:el('oTrader').value, side, quantity:Number(el('oQty').value),
+      limitPrice:Number(el('oLimit').value), holdingCid:el('oCid').value.trim()};
+    const r=await api('POST',`/api/auction/${encodeURIComponent(cid)}/order`,body);
+    ORDERS.push({cid:r.contractId,side,trader:el('oTrader').value,qty:body.quantity,limit:body.limitPrice});
+    renderOrders();
+    el('aOut').textContent='Order sealed:\n'+r.contractId;
+    toast('Sealed order submitted','ok');
+  }catch(e){el('aOut').textContent='✕ '+e.message;toast(e.message,'err')}
+}
+function renderOrders(){
+  const w=el('ordersWrap');
+  if(!ORDERS.length){w.innerHTML='<div class="tag">No sealed orders yet.</div>';return}
+  w.innerHTML=`<table><thead><tr><th>Side</th><th>Trader</th><th>Qty</th><th>Limit</th><th>Order cid</th></tr></thead><tbody>`+
+    ORDERS.map(o=>`<tr><td><span class="pill ${o.side.toLowerCase()}">${o.side}</span></td>
+      <td>${labelFor(o.trader)}</td><td class="mono">${o.qty}</td><td class="mono">${o.limit}</td>
+      <td class="mono cid" title="${o.cid}">${shortCid(o.cid)}</td></tr>`).join('')+`</tbody></table>`;
+}
+async function runClose(){
+  try{
+    const cid=el('aAuctionCid').value.trim();
+    const buys=ORDERS.filter(o=>o.side==='Buy').map(o=>o.cid);
+    const sells=ORDERS.filter(o=>o.side==='Sell').map(o=>o.cid);
+    const r=await api('POST',`/api/auction/${encodeURIComponent(cid)}/close`,
+      {operator:el('aOperator').value,buyOrderCids:buys,sellOrderCids:sells});
+    el('aOut').textContent='CLOSED & CROSSED ✓\nsettlement batch: '+r.settlementBatchCid+'\nsealed auction: '+r.sealedAuctionCid;
+    toast('Auction crossed','ok');
+    loadHoldings();
+  }catch(e){el('aOut').textContent='✕ '+e.message;toast(e.message,'err')}
+}
+
+// ---- boot --------------------------------------------------------------
+el('partyPicker').addEventListener('change',loadHoldings);
+renderOrders();
+health(); loadParties();
+setInterval(health,15000);
+</script>
+</body>
+</html>

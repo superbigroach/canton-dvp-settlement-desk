@@ -62,11 +62,10 @@ template Instrument
     signatory issuer
     observer depository
 
-    -- Contract key: an instrument is uniquely identified by its InstrumentKey.
-    -- This is what lets holdings/settlement refer to an instrument by NAME and
-    -- resolve it, exactly as Daml Finance does. Maintainer must be a signatory.
-    key (InstrumentKey issuer depository id version) : InstrumentKey
-    maintainer key.issuer
+    -- NOTE: an InstrumentKey uniquely names an instrument, but we do NOT declare a
+    -- Daml *contract key* here — Daml-LF 2.x (Canton 3.x) removed contract-key support,
+    -- and nothing in this project looks an instrument up by key (it queries the ACS),
+    -- so omitting it keeps the package portable across the 2.x and 3.x lines.
 
     -- The issuer republishes the reference/closing price (e.g. the auction
     -- operator's mark, or an end-of-day fix). Consuming: it supersedes the old
