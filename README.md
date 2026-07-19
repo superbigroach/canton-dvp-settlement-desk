@@ -7,11 +7,12 @@ tokenised equity (`DEMO:AAPL`), tokenised cash (`USDC`), and wrapped Ethereum
 (all-or-nothing settlement) and **zero information leakage** (each party sees only
 its own side).
 
-> A Canton settlement desk I built to learn and demo the platform — a working
-> reference for the exact problem institutional digital-asset desks (JPMorgan's
-> Kinexys / JPMD, the Canton Network) exist to solve: privacy-preserving, atomic
-> settlement of tokenised assets between known counterparties. It is not a
-> submission to anything; it's a hands-on model of the real workflow.
+> A Canton settlement desk built for **HackCanton Season 2** — a working answer
+> to the exact problem institutional digital-asset desks (JPMorgan's Kinexys /
+> JPMD, the Canton Network) exist to solve: privacy-preserving, atomic
+> settlement of tokenised assets between known counterparties — extended into
+> the **fund-issuance layer**: in-kind ETF create/redeem priced by a
+> committee-struck NAV.
 
 > **🌐 Live demo → https://crossdesk-devnet-app.web.app** — the full React desk,
 > connected to the **real shared HackCanton devnet node** (NODERS `hackcanton-01`,
@@ -20,6 +21,15 @@ its own side).
 > *alice-crossdesk → bob-crossdesk · 10 cETH @ 3,200 USDC* — receipt visible to
 > Alice/Bob/Auditor only (sub-transaction privacy on a shared node). See
 > [`DEVNET_INTEGRATION.md`](DEVNET_INTEGRATION.md).
+
+> **Provenance (HackCanton S2).** Built **entirely during the hackathon
+> window** — the git history is the proof: the first commit (2026-07-11) is
+> titled *"Private cETH Settlement Desk — HackCanton Season 2"*, and every line
+> since (DvP engine, sealed MOC auction, K-of-N governance committee, in-kind
+> ETF/basket engine, the Daml 2.9 → Canton 3.x / Ledger API v2 port, the shared
+> devnet-node deployment, and the hosted live demo) landed between July 11 and
+> the submission. No pre-existing codebase. Full build log in
+> [`DEVNET_INTEGRATION.md`](DEVNET_INTEGRATION.md) and the commit history.
 
 > **Build status.** The Daml is written in the portable 2.x/3.x subset and
 > compiles with only the SDK's standard library (`daml-prim` / `daml-stdlib` /

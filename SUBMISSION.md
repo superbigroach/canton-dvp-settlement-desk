@@ -5,9 +5,12 @@ that prints an official NAV, a K-of-N committee so no single venue sets that pri
 an in-kind ETF builder — all on one atomic, principal-risk-free settlement engine.**
 
 - **Repo:** github.com/superbigroach/canton-dvp-settlement-desk
-- **Track:** Financial Applications / RWA & Business Workflows
-- **Live demo:** full-stack desk (React + Spring + Daml over the Ledger API) — see *Setup* below
+- **Track:** Investment Infrastructure: Funds, DAOs & Governance Tools
+- **Live demo:** **https://crossdesk-devnet-app.web.app** — connected to the shared
+  HackCanton devnet node (`hackcanton-01`), **settling real on-chain transactions**
+  (first atomic DvP: *alice-crossdesk → bob-crossdesk · 10 cETH @ 3,200 USDC*, 2026-07-19)
 - **Assets used:** **cETH** (OnRails) and **CBTC** (BitSafe) as first-class instruments
+- **Built entirely during the hackathon** — first commit 2026-07-11 ("… — HackCanton Season 2")
 
 *(This is the judges' quick-read. The full technical writeup is in `README.md`.)*
 
