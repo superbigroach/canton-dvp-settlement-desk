@@ -51,6 +51,39 @@ public class LedgerProperties {
     public String getParties() { return parties; }
     public void setParties(String parties) { this.parties = parties; }
 
+    // --- Hosted-demo token refresh (Keycloak) -------------------------------
+    // On a long-running hosted deployment the initial JWT expires (~3h). If a
+    // refreshToken + tokenEndpoint + clientId are supplied, TokenRefresher swaps
+    // in a fresh access token on a schedule so the demo stays connected. Leave
+    // refreshToken blank to disable (local/static-token use).
+
+    /** OIDC token endpoint (Keycloak) used to refresh the access token. */
+    private String tokenEndpoint = "";
+    /** OIDC public client id the token was issued to. */
+    private String clientId = "";
+    /** OIDC offline refresh token (grant_type=refresh_token). Blank = no refresh. */
+    private String refreshToken = "";
+    /** How often to refresh, in seconds (must be < the access-token lifetime). */
+    private long refreshSeconds = 1800;
+
+    public String getTokenEndpoint() { return tokenEndpoint; }
+    public void setTokenEndpoint(String tokenEndpoint) { this.tokenEndpoint = tokenEndpoint; }
+
+    public String getClientId() { return clientId; }
+    public void setClientId(String clientId) { this.clientId = clientId; }
+
+    public String getRefreshToken() { return refreshToken; }
+    public void setRefreshToken(String refreshToken) { this.refreshToken = refreshToken; }
+
+    public long getRefreshSeconds() { return refreshSeconds; }
+    public void setRefreshSeconds(long refreshSeconds) { this.refreshSeconds = refreshSeconds; }
+
+    /** True when auto-refresh is configured (hosted demo). */
+    public boolean hasRefresh() {
+        return refreshToken != null && !refreshToken.isBlank()
+                && tokenEndpoint != null && !tokenEndpoint.isBlank();
+    }
+
     public String getHost() { return host; }
     public void setHost(String host) { this.host = host; }
 

@@ -34,3 +34,8 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Cloud Run deploy artifact (prebuilt jar) + token files
+backend-devnet/cloudrun/app.jar
+*refresh*.txt
+crossdesk-env.yaml

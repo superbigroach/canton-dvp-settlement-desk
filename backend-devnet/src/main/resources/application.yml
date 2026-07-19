@@ -28,6 +28,13 @@ ledger:
   # parties are pre-allocated + fixed) we supply them here instead of querying the
   # ledger. Empty on the local sandbox (parties come from the admin service there).
   parties: ${LEDGER_PARTIES:}
+  # Hosted-demo token auto-refresh (Keycloak). Leave refresh-token blank to disable
+  # (local / static-token use). When set, the backend swaps in a fresh access token
+  # on a schedule so a long-running hosted deployment stays connected.
+  token-endpoint: ${LEDGER_TOKEN_ENDPOINT:}
+  client-id: ${LEDGER_CLIENT_ID:}
+  refresh-token: ${LEDGER_REFRESH_TOKEN:}
+  refresh-seconds: ${LEDGER_REFRESH_SECONDS:1800}
 
 spring:
   application:

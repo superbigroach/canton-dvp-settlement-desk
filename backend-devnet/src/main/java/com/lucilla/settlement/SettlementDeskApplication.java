@@ -3,6 +3,7 @@ package com.lucilla.settlement;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * Canton DvP Settlement Desk — Spring Boot entry point.
@@ -15,6 +16,7 @@ import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
  */
 @SpringBootApplication
 @ConfigurationPropertiesScan
+@EnableScheduling   // DEVNET: TokenRefresher keeps the Keycloak access token fresh for the hosted demo
 public class SettlementDeskApplication {
     public static void main(String[] args) {
         SpringApplication.run(SettlementDeskApplication.class, args);

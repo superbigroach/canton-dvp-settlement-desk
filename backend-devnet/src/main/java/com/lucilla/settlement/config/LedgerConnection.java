@@ -36,8 +36,49 @@ public class LedgerConnection {
     private final LedgerProperties props;
     private volatile DamlLedgerClient client;
 
+    /**
+     * The access token actually used on the wire. Starts as the configured JWT and
+     * is swapped by {@link #updateToken(String)} when TokenRefresher mints a fresh
+     * one (hosted demo). Falls back to {@code props.getJwt()} when null.
+     */
+    private volatile String currentToken;
+
     public LedgerConnection(LedgerProperties props) {
         this.props = props;
+    }
+
+    /** The token to present to the ledger — the refreshed one if we have it, else the static JWT. */
+    public String activeToken() {
+        String t = currentToken;
+        return (t != null && !t.isBlank()) ? t : props.getJwt();
+    }
+
+    /** True when we currently hold a non-blank access token (static or refreshed). */
+    public boolean hasActiveToken() {
+        String t = activeToken();
+        return t != null && !t.isBlank();
+    }
+
+    /**
+     * Swap in a freshly-minted access token and force a reconnect so subsequent
+     * calls authenticate with it. Called by TokenRefresher on the hosted demo.
+     */
+    public synchronized void updateToken(String newToken) {
+        if (newToken == null || newToken.isBlank()) {
+            return;
+        }
+        this.currentToken = newToken;
+        // Drop the current client; the next get() lazily reconnects with the new token.
+        if (client != null) {
+            try {
+                client.close();
+            } catch (Exception e) {
+                log.warn("Error closing ledger client during token refresh", e);
+            } finally {
+                client = null;
+            }
+        }
+        log.info("Ledger access token refreshed; client will reconnect on next use.");
     }
 
     /** Returns a connected client, connecting on first call. Thread-safe (double-checked). */
@@ -59,8 +100,10 @@ public class LedgerConnection {
     }
 
     private DamlLedgerClient connect() {
+        String token = activeToken();
+        boolean hasToken = token != null && !token.isBlank();
         log.info("Connecting to Ledger API at {}:{} (tls={}, jwt={})",
-                props.getHost(), props.getPort(), props.isTls(), props.hasJwt() ? "yes" : "no");
+                props.getHost(), props.getPort(), props.isTls(), hasToken ? "yes" : "no");
 
         DamlLedgerClient.Builder builder =
                 DamlLedgerClient.newBuilder(props.getHost(), props.getPort())
@@ -69,8 +112,8 @@ public class LedgerConnection {
         if (props.isTls()) {
             builder = builder.withSslContext(clientTls());
         }
-        if (props.hasJwt()) {
-            builder = builder.withAccessToken(props.getJwt());
+        if (hasToken) {
+            builder = builder.withAccessToken(token);
         }
 
         DamlLedgerClient c = builder.build();

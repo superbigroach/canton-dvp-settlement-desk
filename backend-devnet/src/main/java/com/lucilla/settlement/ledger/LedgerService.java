@@ -90,8 +90,10 @@ public class LedgerService {
                         Optional.empty(),                 // v2: Optional<String> synchronizerId
                         List.of(command))
                 .withActAs(actAs);
-        if (connection.properties().hasJwt()) {
-            submission = submission.withAccessToken(connection.properties().getJwt());
+        if (connection.hasActiveToken()) {
+            // Use the CURRENT token (the refreshed one on the hosted demo), not the
+            // possibly-stale static JWT, so submissions keep authenticating after a refresh.
+            submission = submission.withAccessToken(connection.activeToken());
         }
         try {
             // v2 (Canton 3.3+) removed the transaction-TREE command endpoints; we ask
