@@ -549,6 +549,7 @@ Devnet is Canton Coin, free from the tap.
 ## Further reading
 
 - **[backend/](./backend)** — the Spring Boot desk (REST → Ledger API via the Daml Java bindings), with **[backend/run-local.md](./backend/run-local.md)** for the local sandbox walkthrough.
+- **[docs/WHY_JAVA_SPRING.md](./docs/WHY_JAVA_SPRING.md)** — why Java 17 / Spring Boot 3 / the JVM for a long-running settlement service (JIT throughput, one-jar-many-ledgers, TDD without a ledger).
 - **[deploy/GKE_RUNBOOK.md](./deploy/GKE_RUNBOOK.md)** — containerize + deploy the app tier on GKE (Helm or plain YAML), with cost + teardown.
 - **[docs/DAML_FINANCE_INTEGRATION.md](./docs/DAML_FINANCE_INTEGRATION.md)** — the precise mapping of every template to its Daml Finance V4 equivalent, and the documented (low-risk) library swap.
 - **[DEPLOY.md](./DEPLOY.md)** — Canton Devnet deployment.
