@@ -12,6 +12,17 @@ an in-kind ETF builder — all on one atomic, principal-risk-free settlement eng
 - **Assets used:** **cETH** (OnRails) and **CBTC** (BitSafe) as first-class instruments
 - **Built entirely during the hackathon** — first commit 2026-07-11 ("… — HackCanton Season 2")
 
+### 🎥 Demo video — guided timeline (~3:50, nothing simulated)
+| Time | What you see |
+|---|---|
+| 0:00 | Founder intro & the problem — European closing auctions (up to ⅓ of daily volume) and why public order books leak |
+| 0:23 | The solution — a sealed, atomic, multi-party auction desk on Canton |
+| 0:48 | **Live in-kind ETF creation** — 10 LX1 shares (0.10 cETH + 0.01 CBTC each) minted atomically on the shared devnet node; redemption mirror |
+| 1:40 | **Decentralised NAV committee** — propose → attest (2-of-3) → official NavFixing struck on-chain |
+| 2:20 | **Sealed closing cross** — hidden buy/sell orders, venue runs the cross, DvP settles at the committee NAV |
+| 2:54 | **Privacy proof** — same ledger viewed as Alice, Bob, Bank, Auditor: non-participants see nothing, the auditor sees everything |
+| 3:17 | Close — "CrossDesk: the fund factory for tokenised assets" |
+
 *(This is the judges' quick-read. The full technical writeup is in `README.md`.)*
 
 ---
