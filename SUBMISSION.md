@@ -1,8 +1,10 @@
 # CrossDesk — HackCanton S2 Submission
 
-**The closing/opening auction for tokenised assets: a sealed uniform-price call auction
-that prints an official NAV, a K-of-N committee so no single venue sets that price, and
-an in-kind ETF builder — all on one atomic, principal-risk-free settlement engine.**
+**CrossDesk is the on-chain fund-issuance layer for tokenised assets on Canton: atomic
+in-kind creation & redemption, and a credibly-neutral NAV struck by a K-of-N committee —
+the exact machinery a tokenised fund needs to exist on-chain. The NAV is priced by a
+sealed, uniform-price call auction, and every leg settles atomically on one
+principal-risk-free engine.**
 
 - **Repo:** github.com/superbigroach/canton-dvp-settlement-desk
 - **Track:** Investment Infrastructure: Funds, DAOs & Governance Tools
@@ -28,17 +30,22 @@ an in-kind ETF builder — all on one atomic, principal-risk-free settlement eng
 ---
 
 ## 1 · The user and the problem
-Institutions trading **tokenised assets** (wrapped crypto like cETH/CBTC, tokenised
-equities, cash tokens) have no on-chain venue that gives them all three things at once:
+Thirty-billion-plus dollars of tokenised funds are on-chain — but the machinery that
+makes a fund a *fund* isn't. Institutions issuing and trading **tokenised assets**
+(wrapped crypto like cETH/CBTC, tokenised equities, cash tokens) have no on-chain venue
+for the two primitives a fund actually runs on:
 
-- **an official, credibly-neutral price** — a "closing NAV" that no single operator can
-  set unilaterally (today it's one venue's number, which can be gamed);
-- **a sealed order book** — so a large order isn't front-run before it trades;
-- **atomic settlement** — both legs move together, or neither (no Herstatt/principal risk).
+- **an in-kind primary market** — create/redeem shares against the underlying basket
+  atomically (the mechanism that keeps a fund glued to NAV; the one the SEC approved for
+  crypto ETFs in July 2025), instead of a TradFi back office;
+- **a credibly-neutral NAV** — an official price no single administrator can set
+  unilaterally (today it's one venue's number, struck off-chain and reconciled for weeks).
 
-Transparent chains can't do the sealed book (the mempool leaks every order). CrossDesk
-solves all three on Canton, and adds a **tokenised-fund (ETF) primary market** on the
-same engine.
+Striking that NAV honestly also needs a **sealed order book** (so the largest orders
+aren't front-run) and **atomic settlement** (both legs move together, or neither — no
+Herstatt/principal risk) — neither of which a transparent chain can provide, because the
+mempool leaks every order. CrossDesk delivers all of it on Canton: an in-kind fund
+primary market and a committee NAV, on one privacy-preserving atomic-settlement engine.
 
 ## 2 · Parties and visibility (privacy is enforced at the contract level)
 | Party | Role | Sees |
@@ -107,7 +114,8 @@ LocalNet deployment (DPM / Canton Builder) packages the same DAR onto a local Ca
   +10 LX1); NAV 890 USDC; redeem 4 (+0.4 cETH, +0.04 CBTC).
 
 ## Why it's different
-Not "another exchange" and not a continuous orderbook — it's the **price-formation layer**
-(the official open/close) for tokenised assets, with a **decentralised price authority** and
-a **tokenised-fund primary market**, all sharing one privacy-preserving atomic-settlement
-engine that a transparent chain fundamentally cannot provide.
+Not "another exchange" and not a continuous orderbook — CrossDesk is the **fund-issuance
+layer**: an in-kind primary market plus a **credibly-neutral, committee-struck NAV**, the
+exact machinery a tokenised fund needs to exist on-chain. The sealed uniform-price auction
+that prices the NAV and the atomic DvP that settles every leg are the engine underneath —
+privacy-preserving, principal-risk-free, and impossible on a transparent chain.

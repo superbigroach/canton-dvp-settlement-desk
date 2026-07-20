@@ -1,18 +1,20 @@
-# Canton DvP Settlement Desk
+# CrossDesk — the on-chain fund-issuance layer for tokenised assets on Canton
 
-**Atomic Delivery-versus-Payment (DvP) and a sealed-order Market-on-Close auction
-between tokenised assets — private by construction.** Two institutions swap a
-tokenised equity (`DEMO:AAPL`), tokenised cash (`USDC`), and wrapped Ethereum
-(`cETH`, by [onRails](https://onrails.io)) with **zero principal risk**
-(all-or-nothing settlement) and **zero information leakage** (each party sees only
-its own side).
+**Atomic in-kind creation & redemption, and a credibly-neutral NAV struck by a
+decentralised K-of-N committee — the fund-issuance machinery tokenised assets are
+missing.** A tokenised fund is defined as a smart contract: an authorised
+participant delivers the basket of underlyings — wrapped Ethereum (`cETH`, by
+[onRails](https://onrails.io)), wrapped Bitcoin (`CBTC`, by BitSafe), tokenised
+cash (`USDC`) — and receives freshly-minted shares, or hands shares back for the
+basket, in **one atomic transaction** with **zero principal risk**. The official
+NAV is priced by a sealed, uniform-price **Market-on-Close auction** — private by
+construction, so no order leaks and no single party sets the price.
 
-> A Canton settlement desk built for **HackCanton Season 2** — a working answer
-> to the exact problem institutional digital-asset desks (JPMorgan's Kinexys /
-> JPMD, the Canton Network) exist to solve: privacy-preserving, atomic
-> settlement of tokenised assets between known counterparties — extended into
-> the **fund-issuance layer**: in-kind ETF create/redeem priced by a
-> committee-struck NAV.
+> A Canton **fund-issuance desk** built for **HackCanton Season 2** — the
+> on-chain machinery a tokenised fund needs to exist: an in-kind create/redeem
+> primary market and a committee-struck NAV, on top of the privacy-preserving,
+> atomic **DvP settlement** that institutional digital-asset desks (JPMorgan's
+> Kinexys / JPMD, the Canton Network) exist to provide.
 
 > **🌐 Live demo → https://crossdesk-devnet-app.web.app** — the full React desk,
 > connected to the **real shared HackCanton devnet node** (NODERS `hackcanton-01`,
@@ -43,34 +45,43 @@ its own side).
 
 ## The problem
 
-Settling a trade between two institutions is a race between two failures:
+Thirty-billion-plus dollars of funds have moved on-chain — but the machinery that
+makes a fund a *fund* hasn't. You tokenise the asset and inherit the old plumbing:
 
-- **Principal (Herstatt) risk & T+2.** Someone must move first. If you deliver
-  and your counterparty defaults before paying, you are unsecured. The entire
-  edifice of escrow agents, CCPs, and multi-day (T+2) settlement exists to paper
-  over the fact that delivery and payment are not simultaneous.
-- **Big orders move markets.** If the market can *see* a large resting order —
-  in a public order book, or in a blockchain mempool — everyone steps in front of
-  it. Front-running and MEV on transparent chains are the industrial-scale
-  version of this: pending state is public, so it is a searcher's paradise. You
-  cannot run an honest large-in-scale auction where the order book leaks.
-- **Bridges add risk.** Moving ETH onto another chain to settle usually means a
-  bridge — the single most exploited component in crypto.
+- **No native primary market.** In-kind creation/redemption — the mechanism that
+  keeps a fund glued to its NAV, and the one the SEC approved for crypto ETFs in
+  July 2025 — still lives in a TradFi back office, not on the chain the assets
+  sit on.
+- **No trustworthy on-chain NAV.** The official price is struck off-chain by a
+  single administrator you have to trust, and reconciled for weeks. There is no
+  credibly-neutral NAV to create, redeem, or mark against.
+- **You can't strike that price in the open.** A NAV auction needs a sealed book:
+  if the market can *see* the largest resting orders — in a public order book or a
+  blockchain mempool — everyone front-runs them (MEV is the industrial-scale
+  version). And moving the underlyings across chains to settle means a bridge —
+  the single most-exploited component in crypto.
 
 ## The solution
 
-A **settlement desk** where every trade is **atomic** *and* **private**:
+**An on-chain fund factory: define a basket, create and redeem it in-kind and
+atomically — priced by a NAV no single party can set.**
 
-- **Atomic DvP.** A Daml transaction commits all-or-nothing. Both legs of a swap
-  move in **one** transaction, so a half-settled state is impossible *by
-  construction* — principal risk goes to zero, and finality is instant.
-- **Privacy = a programmable dark pool.** On Canton a contract is visible only to
-  its signatories and observers. A resting order is signed by the venue and the
-  one trader who placed it, and by nobody else — so the book is sealed until the
-  cross runs. That is a **dark pool / Market-on-Close auction** that a transparent
-  chain fundamentally cannot host.
-- **No bridge.** `cETH` is a first-class Canton token; settlement is a native
-  ledger transfer.
+- **In-kind primary market.** A basket (e.g. `LX1 = 0.10 cETH + 0.01 CBTC` per
+  share) is an ordinary tokenised instrument. An authorised participant delivers
+  the exact underlyings and receives freshly-minted shares — or burns shares and
+  gets the underlyings back — in **one** Daml transaction. Both sides move or
+  neither does, so unit-supply and holdings can never drift (`Basket.daml`,
+  Flow 4).
+- **A committee-struck NAV.** The official price only exists once a **threshold K
+  of N** independent members have attested it — provable from the contract's own
+  signatures — so no single administrator can set it (`Governance.daml`, Flow 3).
+- **Priced by a private, atomic auction.** The mark is produced by a sealed,
+  uniform-price **Market-on-Close** cross: on Canton a resting order is visible
+  only to the venue and the trader who placed it, so the book is a **programmable
+  dark pool** — real price discovery with no front-running (`MarketOnClose.daml`,
+  Flow 2). Every matched leg settles all-or-nothing via **atomic DvP**
+  (`Settlement.daml`, Flow 1) — zero principal risk, instant finality, no bridge
+  (`cETH` and `CBTC` are first-class Canton tokens).
 
 ## The owner's angle
 
@@ -79,7 +90,8 @@ I'm a former equities trader (Bookmap, $250M+ traded volume) whose domain was
 a single official price. MOC works *because* the order book is sealed until the
 simultaneous match: reveal a large sell order early and the price gaps against it
 before a share trades. `MarketOnClose.daml` is that mechanism rebuilt on Canton —
-the auction I traded, now programmable, sealed, and settled atomically on-ledger.
+the auction I traded, now programmable, sealed, and settled atomically on-ledger —
+the price-formation engine under CrossDesk's NAV.
 
 ---
 
