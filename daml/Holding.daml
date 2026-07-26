@@ -23,8 +23,34 @@
 --   of a DvP — and MarketOnClose.daml move EVERY matched leg of an auction — in
 --   ONE transaction. If the owner were a signatory, the incoming owner's
 --   authority would be required inside the nested transfer and would NOT be in
---   scope, breaking single-transaction atomic settlement. This is the canonical
---   Digital Asset holding model.
+--   scope, breaking single-transaction atomic settlement.
+--
+--   HOW REAL DAML FINANCE DOES IT (the honest comparison — we are NOT the same)
+--   Daml Finance takes the OTHER route. Its holdings are signed by BOTH sides of
+--   the custody relationship:
+--
+--       -- Daml.Finance.Holding.V4.TransferableFungible
+--       signatory account.custodian, account.owner, Lockable.getLockers this
+--
+--   It then recovers multi-leg atomicity NOT from single-signature transfers but
+--   from the SETTLEMENT layer: a `Batch` of `Instruction`s where each party
+--   ALLOCATES its own leg (pledging the holding) and APPROVES its receiving
+--   account, after which `Batch.Settle` executes every instruction in one
+--   transaction. Delegated authority to move a holding on the owner's behalf comes
+--   from `Account.Controllers`, not from omitting the owner as a signatory.
+--
+--   So there are TWO legitimate routes to atomic multi-leg settlement:
+--     (a) OURS  — issuer-only signatory; transfers compose directly; simpler, and
+--                 sufficient for a single venue that is already trusted to run the
+--                 cross. The cost: the owner's consent to RECEIVE is implicit, and
+--                 there is no custody relationship modelled at all.
+--     (b) THEIRS — custodian + owner sign; consent is explicit; settlement
+--                  atomicity is provided by the Batch/Instruction lifecycle. The
+--                  right model once real custodians and accounts exist.
+--
+--   We chose (a) deliberately so this package compiles on the bare SDK with no
+--   daml-finance data-dependency (see docs/DAML_FINANCE_INTEGRATION.md). It is a
+--   simplification, not the library's model.
 --
 -- PRIVACY
 --   A Holding is visible ONLY to its issuer and its current owner. No competitor,
