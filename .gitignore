@@ -39,3 +39,9 @@ Thumbs.db
 backend-devnet/cloudrun/app.jar
 *refresh*.txt
 crossdesk-env.yaml
+
+# Personal social-media drafts — never push
+social/
+
+# Firebase hosting deploy cache
+frontend/.firebase/
