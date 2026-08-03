@@ -33,9 +33,29 @@
 --                              close. Padding the list with a duplicate fails too.
 --   testCancellationKeepsTheBookHonest — a withdrawal and a venue clear adjust the
 --                              count, so the honest close still runs afterwards.
---   testMarketOnCloseImbalance — an over-subscribed side is rationed PRO-RATA at
---                              the one close price; the residual does not settle
---                              (and the excess supply drags the print DOWN).
+--   testMarketOnCloseImbalance — an over-subscribed side is rationed at the one
+--                              close price; the residual does not settle (and the
+--                              excess supply drags the print DOWN).
+--   testAllocationUnit       — THE ALLOCATION RULE as pure arithmetic: orders priced
+--                              THROUGH the print fill in full, only the marginal
+--                              level is rationed, dust rounds to zero without
+--                              exploding, and every allocation sums EXACTLY to the
+--                              crossed volume.
+--   testMixedSurplusTieBreak — Xetra §11.1.1 step 4(a): with bid surplus below and
+--                              ask surplus above, the print is narrowed to the
+--                              BOUNDARY pair before the anchor gets a vote — which
+--                              is what keeps "better-priced fills in full" feasible.
+--   testDustDoesNotAbortTheClose — one dust-sized heavy-side order used to take the
+--                              WHOLE auction down. Now the close prints, the dust
+--                              order is cancelled on close, and its owner keeps
+--                              every unit it committed.
+--   testFillsMatchReceipts   — delivered amounts EQUAL receipt amounts for every
+--                              filled order, including the last in the list; the
+--                              rounding residual lands by the published rule.
+--   testPriceCollar          — the print must land inside the band around the
+--                              anchor (percentage OR absolute floor, whichever is
+--                              greater); a thin book that crosses outside it aborts
+--                              the close and settles NOTHING.
 --   testDarkPoolPrivacy      — a non-party (and even a rival participant) cannot
 --                              see a resting sealed order.
 --   testAtomicRollback       — a bad leg rolls the WHOLE settlement back.
@@ -692,12 +712,21 @@ testPriceDiscoveryUnit = do
 -- prints 15 units there, rations the heavy sell side pro-rata, and cancels the one
 -- bid that sat below the print. The operator supplied the orders and nothing else.
 --
+-- AND — since the allocation fix — this is also the end-to-end proof of PRICE
+-- PRIORITY. Twenty units of supply are offered into fifteen of demand, so the sell
+-- side is rationed; but it is NOT rationed uniformly. Bob offered at 250, THROUGH
+-- the 256 print, so he is guaranteed to participate and fills all 10. Carol offered
+-- AT the print, so hers is the marginal level and it is the only one rationed: she
+-- fills 5 of 10. Under the old pro-rata-across-all-levels rule both would have been
+-- cut to 7.5 and Bob's more aggressive offer would have bought him nothing.
+--
 -- Book (AAPL / USDC, sealed; anchor 260):
 --   SELL Bob   10 @ 250    BUY Alice 15 @ 256   (reserves 15 × 256 = 3,840)
 --   SELL Carol 10 @ 256    BUY Dave   5 @ 251   (reserves  5 × 251 = 1,255)
 --   250 → 10 trade | 251 → 10 | 256 → 15 | 260 → 0.   Print: 256.
--- Alice fills 15 in full; Bob and Carol are rationed 7.5 each (20 offered into 15
--- of demand); Dave's 251 bid is away from the cross and does not trade.
+-- Alice fills 15 in full; Bob fills 10 in FULL (through the print) and Carol takes
+-- the 5 that is left at the marginal level; Dave's 251 bid is away from the cross
+-- and does not trade.
 -- ---------------------------------------------------------------------------
 testPriceDiscoveryBeatsReference : Script ()
 testPriceDiscoveryBeatsReference = do
@@ -745,16 +774,28 @@ testPriceDiscoveryBeatsReference = do
   aliceUsd  <- ownedAmount alice usdc
   aliceAapl === 15.0
   aliceUsd  === 0.0
-  -- Bob and Carol offered 20 into 15 of demand: each rationed pro-rata to 7.5,
-  -- paid 7.5 × 256 = 1,920, and keeps the 2.5 that did not settle.
+  -- PRICE PRIORITY THROUGH THE PRINT — the headline allocation property, end to
+  -- end. Bob and Carol offered 20 into 15 of demand, so the sell side IS rationed —
+  -- but only at the margin. Bob's 250 offer is priced THROUGH the 256 print, so it
+  -- is guaranteed to participate and fills all 10 (2,560 USDC; no AAPL left over).
+  -- Carol's offer sits AT the print, which makes hers the marginal level and the
+  -- only one rationed: 5 of her 10 fill (1,280 USDC) and she keeps the other 5.
+  -- The old rule pro-rated the WHOLE eligible side and gave each of them 7.5 —
+  -- i.e. offering 6 points cheaper bought Bob no precedence whatsoever, and the only
+  -- way for either of them to get filled was to send a bigger order.
   bobUsd    <- ownedAmount bob   usdc
   carolUsd  <- ownedAmount carol usdc
   bobAapl   <- ownedAmount bob   aapl
   carolAapl <- ownedAmount carol aapl
-  bobUsd    === 1920.0
-  carolUsd  === 1920.0
-  bobAapl   === 2.5
-  carolAapl === 2.5
+  bobUsd    === 2560.0
+  carolUsd  === 1280.0
+  bobAapl   === 0.0
+  carolAapl === 5.0
+  -- The seller fill records say the same thing the balances do.
+  let bobFill   = head (filter (\f -> f.seller == bob)   batch.fills)
+      carolFill = head (filter (\f -> f.seller == carol) batch.fills)
+  bobFill.quantity   === 10.0    -- through the print: filled in FULL
+  carolFill.quantity === 5.0     -- at the print: the marginal level, rationed
   -- CANCEL ON CLOSE: Dave bid below the print, so his order did not trade and was
   -- cleared off the book by the close itself. He keeps every cent he committed —
   -- the archive touches the ORDER, never the balance.
@@ -1421,4 +1462,386 @@ testNavPerShare = do
         | otherwise = None
   navPerShare comps priceOf === Some 890.0
   navPerShare comps (const None) === None
+
+-- ---------------------------------------------------------------------------
+-- TEST 13 — THE ALLOCATION RULE AS PURE ARITHMETIC.
+-- ---------------------------------------------------------------------------
+-- The rule every real closing auction shares, pinned down with no ledger in the
+-- way: ORDERS PRICED STRICTLY THROUGH THE PRINT FILL IN FULL, and only the marginal
+-- (at-the-print) level is ever rationed.
+--   Xetra T7 §11.1.1: "price/time priority is valid so that the maximum of ONE
+--     order, which is either limited to the auction price or is unlimited, can be
+--     partially executed."
+--   Euronext §3.1: buys above / sells below the traded price "are filled in their
+--     entirety (price priority)"; only at-price orders are rationed.
+--   Nasdaq Rule 4754(b)(3): class → PRICE → display → time.
+--   NYSE Rule 7.35B(h)(1): better-priced orders "are GUARANTEED to participate."
+-- What CrossDesk used to do — pro-rate the ENTIRE eligible side — is the one thing
+-- none of them do, and it is why this test exists.
+-- ---------------------------------------------------------------------------
+testAllocationUnit : Script ()
+testAllocationUnit = do
+  -- (1) THROUGH THE PRINT FILLS IN FULL; THE MARGINAL LEVEL IS RATIONED.
+  -- Fifteen units of demand to hand out. The 110 bid is priced through a 100 print
+  -- and takes all 10 of what it asked for. The two 100 bids are the marginal level:
+  -- 5 units left over 20 of interest, so 2.5 each. Under the old rule all three
+  -- would have been cut to 5 and the 110 bid would have gained nothing for bidding
+  -- up — which is exactly the equilibrium that makes oversizing rational.
+  allocateSide Buy 15.0
+    [("thru", 110.0, 10.0), ("at1", 100.0, 10.0), ("at2", 100.0, 10.0)]
+    === [("thru", 10.0), ("at1", 2.5), ("at2", 2.5)]
+
+  -- (2) THREE LEVELS, AND THE WORST-PRICED ONE GETS NOTHING. Ten units: the 120 bid
+  -- clears in full, the 110 bid takes the remaining 4, and the 100 bid — eligible,
+  -- but behind two better prices — is allocated ZERO. Eligibility is not precedence.
+  -- Note the input is deliberately out of order: priority comes from the PRICE.
+  allocateSide Buy 10.0
+    [("lo", 100.0, 10.0), ("hi", 120.0, 6.0), ("mid", 110.0, 8.0)]
+    === [("hi", 6.0), ("mid", 4.0), ("lo", 0.0)]
+
+  -- (3) THE SELL SIDE IS THE MIRROR IMAGE: a LOWER limit is the more aggressive
+  -- offer, so it is the one that fills first. (This is the book in TEST 3f.)
+  allocateSide Sell 15.0 [("high", 256.0, 10.0), ("low", 250.0, 10.0)]
+    === [("low", 10.0), ("high", 5.0)]
+
+  -- (4) THE LIGHT SIDE IS NOT A SPECIAL CASE. When the crossed volume equals the
+  -- side's own total, every level fills in full and the same function is a no-op —
+  -- which is why the close no longer branches on "which side is heavy".
+  allocateSide Buy 20.0 [("a", 260.0, 12.0), ("b", 255.0, 8.0)]
+    === [("a", 12.0), ("b", 8.0)]
+
+  -- (5) THE ALLOCATION SUMS EXACTLY TO THE CROSSED VOLUME. This is the audit's
+  -- worked example: three equal bids of 100 against 100 units of supply. A third of
+  -- 100 is not representable, the three raw shares sum to 99.9999999999, and the
+  -- pool holds 100. The residual (one ledger unit, 1e-10) is carried by the largest
+  -- order at the level — all three tie on size, so it goes to the first in the book.
+  -- The point is the LAST line: the fills sum to the crossed volume on the nose, so
+  -- nobody has to silently absorb a pool remainder and no receipt can misstate it.
+  let thirds = allocateSide Buy 100.0
+        [("a", 260.0, 100.0), ("b", 260.0, 100.0), ("c", 260.0, 100.0)]
+  thirds === [("a", 33.3333333334), ("b", 33.3333333333), ("c", 33.3333333333)]
+  sum (map snd thirds) === 100.0
+
+  -- (6) THE RESIDUAL GOES TO THE LARGEST ORDER, NOT TO WHOEVER IS LAST. Here the
+  -- raw shares round UP and sum to one unit MORE than the crossed volume, so the
+  -- residual is negative — and it is still the big order that carries it, even
+  -- though it is listed FIRST. That is the whole difference from the old behaviour,
+  -- where array position decided who absorbed the rounding.
+  let sixths = allocateSide Buy 1.0
+        [("big", 100.0, 4.0), ("s1", 100.0, 1.0), ("s2", 100.0, 1.0)]
+  sixths === [("big", 0.6666666666), ("s1", 0.1666666667), ("s2", 0.1666666667)]
+  sum (map snd sixths) === 1.0
+
+  -- (7) DUST ROUNDS TO ZERO AND NOTHING EXPLODES. A 1e-10 order alongside a million
+  -- gets a share of about 1e-16, which is below the ledger's smallest unit, so its
+  -- allocation is exactly 0.0 — and the side still sums to the crossed volume.
+  -- `RunClose` filters that order out before pledging instead of aborting on it.
+  let dusty = allocateSide Sell 1.0
+        [("whale", 250.0, 1000000.0), ("dust", 250.0, 0.0000000001)]
+  dusty === [("whale", 1.0), ("dust", 0.0)]
+  sum (map snd dusty) === 1.0
+
+  -- (8) THE COLLAR, as pure arithmetic. Nasdaq: "the greater of $0.50 or 10%."
+  -- At a 255 anchor the percentage dominates; at a 2.00 anchor 10% would be 0.20 and
+  -- the ABSOLUTE FLOOR binds instead — which is the reason every venue with a
+  -- percentage band publishes one (Nasdaq $0.50, Euronext EUR 0.02, NYSE $0.15).
+  collarBand 255.0 === 25.5
+  collarBand 2.0   === 0.5
+  collarBand 0.01  === 0.5
+  assertMsg "the top edge of the band must be printable"     (withinCollar 255.0 280.5)
+  assertMsg "a hair above the band must not print"      (not (withinCollar 255.0 280.51))
+  assertMsg "the bottom edge of the band must be printable"  (withinCollar 255.0 229.5)
+  assertMsg "a hair below the band must not print"      (not (withinCollar 255.0 229.49))
+
+-- ---------------------------------------------------------------------------
+-- TEST 14 — MIXED SURPLUS: narrow to the boundary pair BEFORE the anchor votes.
+-- ---------------------------------------------------------------------------
+-- Xetra T7 §11.1.1 step 4, case (a): when the surviving limits carry a BID surplus
+-- on one part and an ASK surplus on another, the algorithm first narrows to "the
+-- lowest limit with an ask surplus or the highest limit with a bid surplus", and
+-- only then clamps the reference price into what is left.
+--
+-- WHY IT IS LOAD-BEARING AND NOT PEDANTRY. Skip that step and a far-away anchor can
+-- drag the print PAST the boundary onto a survivor at which a better-priced order
+-- on the heavy side cannot be filled in full — the exact outcome NYSE Rule
+-- 7.35B(g)(1) forbids a DMM from choosing ("the DMM must select an Auction Price at
+-- which all better-priced orders on the Side of the Imbalance can be satisfied").
+-- With the narrowing in place, "priced through the print fills in full" is always
+-- feasible, which is what makes TEST 13's allocation rule sound rather than lucky.
+-- ---------------------------------------------------------------------------
+testMixedSurplusTieBreak : Script ()
+testMixedSurplusTieBreak = do
+  let buy  q p = BookOrder with side = Buy;  quantity = q; limitPrice = p
+      sell q p = BookOrder with side = Sell; quantity = q; limitPrice = p
+      priceOf  = fmap (\c -> c.price)
+      -- The pathological book: supply and demand interleaved so that FOUR different
+      -- prices trade the same 10 units and strand the same 10 — two bid-heavy, two
+      -- ask-heavy. Volume cannot separate them and imbalance cannot separate them.
+      book = [sell 10.0 90.0, buy 10.0 100.0, sell 10.0 150.0, buy 10.0 200.0]
+
+  (crossAt book  90.0).executedQty === 10.0
+  (crossAt book 100.0).executedQty === 10.0
+  (crossAt book 150.0).executedQty === 10.0
+  (crossAt book 200.0).executedQty === 10.0
+  (crossAt book  90.0).imbalance ===  10.0   -- bid surplus
+  (crossAt book 100.0).imbalance ===  10.0   -- bid surplus
+  (crossAt book 150.0).imbalance === -10.0   -- ask surplus
+  (crossAt book 200.0).imbalance === -10.0   -- ask surplus
+
+  -- ANCHOR BELOW THE INTERVAL. The four survivors narrow to the boundary pair —
+  -- highest bid-surplus limit (100) and lowest ask-surplus limit (150) — and the
+  -- anchor is clamped UP to 100. Without the narrowing the anchor would have pulled
+  -- the print all the way down to 90.
+  priceOf (discoverPrice 90.0 book) === Some 100.0
+
+  -- ANCHOR ABOVE THE INTERVAL: clamped DOWN to the other boundary, 150.
+  priceOf (discoverPrice 300.0 book) === Some 150.0
+
+  -- ANCHOR STRICTLY INSIDE THE INTERVAL: the print IS the anchor. Xetra states this
+  -- as "reference strictly between them → auction price = the reference price
+  -- itself"; here it falls out for free, because the anchor is in the candidate set
+  -- and inside that interval it scores the same volume with ZERO imbalance, so it
+  -- wins outright one stage earlier.
+  priceOf (discoverPrice 120.0 book) === Some 120.0
+
+  -- THE PAYOFF, MADE CONCRETE. At the old answer (90) the bids priced THROUGH the
+  -- print total 20 units against 10 of crossing volume — "better-priced orders fill
+  -- in full" is not even arithmetically possible there. At the narrowed print of 100
+  -- exactly one bid is through the print, and it takes the whole 10; the bid AT the
+  -- print gets nothing, which is correct and is why zero fills must not abort.
+  let thruAt90  = sum [o.quantity | o <- book, o.side == Buy, o.limitPrice >  90.0]
+      thruAt100 = sum [o.quantity | o <- book, o.side == Buy, o.limitPrice > 100.0]
+  thruAt90  === 20.0
+  thruAt100 === 10.0
+  allocateSide Buy 10.0 [("bid200", 200.0, 10.0), ("bid100", 100.0, 10.0)]
+    === [("bid200", 10.0), ("bid100", 0.0)]
+
+-- ---------------------------------------------------------------------------
+-- TEST 15 — ONE DUST ORDER MUST NOT TAKE DOWN THE CLOSE.
+-- ---------------------------------------------------------------------------
+-- THE LIVENESS BUG, AND WHY IT WAS SERIOUS ON THIS VENUE SPECIFICALLY. The close is
+-- ONE atomic Daml transaction — that all-or-nothing finality is the product. So an
+-- assertion that trips on ONE order takes down the ENTIRE auction, and
+-- `PledgeToVenue` asserts `fillQty > 0.0`. A heavy-side order small enough that its
+-- ration rounds below the ledger's smallest unit (1e-10) gets a fill of exactly
+-- 0.0 — so a single dust order was a denial of service on the print. Anyone could
+-- have sent one.
+--
+-- Book (AAPL / USDC, anchor 255):
+--   SELL Bob   1,000,000 @ 250      BUY Alice 1 @ 260  (reserves 260)
+--   SELL Carol 0.0000000001 @ 250   ← the dust
+-- Every candidate trades 1 unit and every one is sell-heavy by the same amount, so
+-- market pressure prints at the bottom: 250. Carol's ration is ~1e-16 → 0.0.
+-- ---------------------------------------------------------------------------
+testDustDoesNotAbortTheClose : Script ()
+testDustDoesNotAbortTheClose = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  carol <- allocatePartyByHint (PartyIdHint "Carol")
+
+  bobAsset   <- mint issuer aapl bob   1000000.0
+  carolAsset <- mint issuer aapl carol 0.0000000001   -- one ledger unit of AAPL
+  aliceCash  <- mint issuer usdc alice 260.0
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bob, carol]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+
+  (a1, bobSell)   <- submitOrder auctionCid bob   Sell 1000000.0     250.0 bobAsset
+  (a2, carolSell) <- submitOrder a1         carol Sell 0.0000000001 250.0 carolAsset
+  (a3, aliceBuy)  <- submitOrder a2         alice Buy  1.0           260.0 aliceCash
+
+  sealed <- submit venue do exerciseCmd a3 CloseBidding
+  -- THE ASSERTION THAT IS THE WHOLE TEST: this used to abort. The close prints.
+  batchCid <- submit venue do
+    exerciseCmd sealed RunClose with
+      buyOrders  = [aliceBuy]
+      sellOrders = [bobSell, carolSell]
+
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 250.0
+  -- TWO fill records, not three: Alice's buy and Bob's sell. Carol traded nothing,
+  -- so she gets no receipt for a trade that did not happen.
+  length batch.fills === 2
+  assertMsg "the dust order must not appear in the batch"
+    (null (filter (\f -> f.seller == carol) batch.fills))
+
+  -- THE DUST TRADER IS WHOLE. Her order is cleared off the book exactly like an
+  -- order that sat away from the print — the archive touches the ORDER, never the
+  -- balance — so she still holds every unit she committed and owes nothing.
+  assertMsg "a zero-fill order is cancelled on close, not left resting" . isNone
+    =<< queryContractId venue carolSell
+  carolAapl <- ownedAmount carol aapl
+  carolUsd  <- ownedAmount carol usdc
+  carolAapl === 0.0000000001
+  carolUsd  === 0.0
+
+  -- Everyone else settles normally: Bob sold 1 of his million at 250, Alice bought
+  -- 1 and got her 10 of change back off the 260 she reserved at her limit.
+  bobAapl   <- ownedAmount bob   aapl
+  bobUsd    <- ownedAmount bob   usdc
+  aliceAapl <- ownedAmount alice aapl
+  aliceUsd  <- ownedAmount alice usdc
+  bobAapl   === 999999.0
+  bobUsd    === 250.0
+  aliceAapl === 1.0
+  aliceUsd  === 10.0
+
+-- ---------------------------------------------------------------------------
+-- TEST 16 — WHAT WAS DELIVERED IS WHAT THE RECEIPT SAYS.
+-- ---------------------------------------------------------------------------
+-- THE DEFECT THIS PINS DOWN. `distribute` used to hand the ENTIRE remaining pool to
+-- whoever happened to be LAST in the list, ignoring their computed amount — while
+-- their `SettlementReceipt` was written from the COMPUTED number. Pro-rata fills do
+-- not sum exactly in a fixed-precision Decimal, so the last recipient silently
+-- absorbed the residual and their confirm then misstated what they got. On a money
+-- path an exchange confirm that disagrees with the ledger is not a rounding
+-- nuisance; it is a broken confirm, and who benefits was decided by array position.
+--
+-- The audit's own worked example, run for real: three bids of 100 against one offer
+-- of 100 at a 260 print. 100/3 is not representable — the raw shares are
+-- 33.3333333333 and sum to 99.9999999999 against a pool of 100.
+-- ---------------------------------------------------------------------------
+testFillsMatchReceipts : Script ()
+testFillsMatchReceipts = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  carol <- allocatePartyByHint (PartyIdHint "Carol")
+  dave  <- allocatePartyByHint (PartyIdHint "Dave")
+
+  -- Each buyer reserves at its own limit: 100 × 260 = 26,000.
+  aliceCash <- mint issuer usdc alice 26000.0
+  carolCash <- mint issuer usdc carol 26000.0
+  daveCash  <- mint issuer usdc dave  26000.0
+  bobAsset  <- mint issuer aapl bob   100.0
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bob, carol, dave]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+
+  (a1, bobSell)  <- submitOrder auctionCid bob   Sell 100.0 260.0 bobAsset
+  (a2, aliceBuy) <- submitOrder a1         alice Buy  100.0 260.0 aliceCash
+  (a3, carolBuy) <- submitOrder a2         carol Buy  100.0 260.0 carolCash
+  (a4, daveBuy)  <- submitOrder a3         dave  Buy  100.0 260.0 daveCash
+
+  sealed   <- submit venue do exerciseCmd a4 CloseBidding
+  batchCid <- submit venue do
+    exerciseCmd sealed RunClose with
+      buyOrders  = [aliceBuy, carolBuy, daveBuy]
+      sellOrders = [bobSell]
+
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 260.0
+  length batch.fills === 4
+
+  -- Pull the venue-signed confirm for each participant.
+  Some aliceR <- queryContractId auditor (head [f.receipt | f <- batch.fills, f.buyer  == alice])
+  Some carolR <- queryContractId auditor (head [f.receipt | f <- batch.fills, f.buyer  == carol])
+  Some daveR  <- queryContractId auditor (head [f.receipt | f <- batch.fills, f.buyer  == dave ])
+  Some bobR   <- queryContractId auditor (head [f.receipt | f <- batch.fills, f.seller == bob  ])
+
+  -- THE ASSERTION THAT MATTERS: the ledger balance each buyer actually holds IS the
+  -- number on their confirm. Dave is LAST in the list the venue supplied — the slot
+  -- that used to silently receive the whole pool remainder.
+  aliceAapl <- ownedAmount alice aapl
+  carolAapl <- ownedAmount carol aapl
+  daveAapl  <- ownedAmount dave  aapl
+  aliceAapl === aliceR.assetAmount
+  carolAapl === carolR.assetAmount
+  daveAapl  === daveR.assetAmount
+
+  -- THE RESIDUAL RULE, STATED AND DETERMINISTIC: the marginal level is rationed
+  -- pro-rata by size and the one-unit (1e-10) rounding residual is carried by the
+  -- LARGEST order at that level — here all three tie on size, so it goes to the
+  -- first in the book the close was handed. Alice therefore holds one extra unit,
+  -- her receipt SAYS one extra unit, and the three fills sum to exactly the 100 the
+  -- uncross crossed.
+  aliceR.assetAmount === 33.3333333334
+  carolR.assetAmount === 33.3333333333
+  daveR.assetAmount  === 33.3333333333
+  (aliceR.assetAmount + carolR.assetAmount + daveR.assetAmount) === 100.0
+
+  -- The cash leg is settled by the same rule and it balances too: the seller's
+  -- confirm equals the USDC he actually holds, and equals the whole pool the three
+  -- buyers pledged (100 × 260).
+  bobUsd  <- ownedAmount bob usdc
+  bobAapl <- ownedAmount bob aapl
+  bobUsd  === bobR.cashAmount
+  bobUsd  === 26000.0
+  bobAapl === 0.0          -- the light side filled in full
+
+-- ---------------------------------------------------------------------------
+-- TEST 17 — THE PRICE COLLAR: a thin book cannot print anywhere it likes.
+-- ---------------------------------------------------------------------------
+-- THE ATTACK. CrossDesk's output is an OFFICIAL PRICE — a NAV, a fixing, a number
+-- other contracts reference. Two orders are a legitimate maximum-volume cross: one
+-- 1-unit buy and one 1-unit sell at 10,000 against a 255 anchor cross perfectly, and
+-- the venue would have signed a `SettlementBatch` calling 10,000 the official close.
+-- Thin books are precisely when someone would attack a fixing.
+--
+-- THE ANSWER, AND WHY THIS ONE. Every venue bounds the print — Nasdaq at the greater
+-- of $0.50 or 10% of the quote midpoint, NYSE inside the 7.35B(g)(2) two-endpoint
+-- band, Xetra and Euronext inside static and dynamic price ranges. They split into
+-- two families on a breach: REJECT (Nasdaq, NYSE — the print simply cannot land
+-- outside) and EXTEND (Xetra's volatility interruption, Euronext's reservation and
+-- repeated uncrossing). The extend family needs a call phase and a clock, and its
+-- documented Xetra end state is termination "manually according to FWB exchange
+-- rules" — a human. CrossDesk's close is ONE atomic transaction and that finality is
+-- what it sells, so it is the reject family: the close aborts and NOTHING settles.
+-- ---------------------------------------------------------------------------
+testPriceCollar : Script ()
+testPriceCollar = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  aliceCash <- mint issuer usdc alice 10000.0   -- 1 @ her 10,000 limit
+  bobAsset  <- mint issuer aapl bob   1.0
+
+  -- The venue's published anchor is 255, so the band is 255 ± max(0.50, 10%) =
+  -- 229.50 to 280.50.
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bob]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+
+  (a1, aliceBuy) <- submitOrder auctionCid alice Buy  1.0 10000.0 aliceCash
+  (a2, bobSell)  <- submitOrder a1         bob   Sell 1.0 10000.0 bobAsset
+
+  -- The book genuinely crosses — this is not a no-cross abort. The uncross finds
+  -- 10,000 and would trade a unit there.
+  let buy  q p = BookOrder with side = Buy;  quantity = q; limitPrice = p
+      sell q p = BookOrder with side = Sell; quantity = q; limitPrice = p
+      thin = [buy 1.0 10000.0, sell 1.0 10000.0]
+  fmap (\c -> c.price)       (discoverPrice 255.0 thin) === Some 10000.0
+  fmap (\c -> c.executedQty) (discoverPrice 255.0 thin) === Some 1.0
+  assertMsg "10,000 must be outside a band centred on 255"
+    (not (withinCollar 255.0 10000.0))
+
+  -- AND THE CLOSE REFUSES TO PRINT IT.
+  sealed <- submit venue do exerciseCmd a2 CloseBidding
+  submitMustFail venue do
+    exerciseCmd sealed RunClose with buyOrders = [aliceBuy]; sellOrders = [bobSell]
+
+  -- ATOMIC: the collar breach rolled the WHOLE close back. Nobody's leg moved —
+  -- Alice keeps all 10,000 USDC, Bob keeps his AAPL, and no official price exists
+  -- for this session. Aborting and re-running beats printing a number a downstream
+  -- contract would then have to honour.
+  aliceUsd  <- ownedAmount alice usdc
+  aliceAapl <- ownedAmount alice aapl
+  bobAapl   <- ownedAmount bob   aapl
+  bobUsd    <- ownedAmount bob   usdc
+  aliceUsd  === 10000.0
+  aliceAapl === 0.0
+  bobAapl   === 1.0
+  bobUsd    === 0.0
+  batches <- query @SettlementBatch auditor
+  assertMsg "a collared-out close must leave no settlement batch behind" (null batches)
 
