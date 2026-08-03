@@ -1,6 +1,6 @@
 package com.lucilla.settlement.integration;
 
-import com.daml.ledger.javaapi.data.TransactionTree;
+import com.daml.ledger.javaapi.data.Transaction;
 import com.lucilla.settlement.ledger.LedgerCommands;
 import com.lucilla.settlement.ledger.LedgerService;
 import org.junit.jupiter.api.Tag;
@@ -67,7 +67,7 @@ class LedgerIntegrationIT {
                 LedgerCommands.dvpProposalTemplateId());
         String agreement = ledger.submitForCreated(alice,
                 LedgerCommands.acceptProposal(proposal), LedgerCommands.dvpAgreementTemplateId());
-        TransactionTree settleTree = ledger.submit(bob, LedgerCommands.settleAgreement(agreement));
+        Transaction settleTree = ledger.submit(bob, LedgerCommands.settleAgreement(agreement));
 
         // A settlement receipt was written in the settle transaction.
         List<String> receipts = ledger.createdOf(settleTree, LedgerCommands.settlementReceiptTemplateId());

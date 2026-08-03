@@ -291,7 +291,8 @@ public class LedgerService {
                             ClosingAuction a = c.data;
                             out.add(new AuctionView(c.id.contractId, a.operator, a.instrumentId,
                                     a.cashInstrument, a.session, a.referencePrice, a.participants,
-                                    a.liquidityProvider.orElse(null), a.isOpen));
+                                    a.liquidityProvider.orElse(null),
+                                    a.submittedCount, a.cancelledCount, a.isOpen));
                         }
                     });
             return out;
@@ -676,7 +677,13 @@ public class LedgerService {
             String contractId, String operator, String instrumentId, String cashInstrument,
             String session, java.math.BigDecimal referencePrice, List<String> participants,
             String liquidityProvider,   // full party id of the designated DLP, or null
+            long submittedCount, long cancelledCount,
             boolean isOpen) {
+
+        /** Orders RunClose expects to be handed: everything lodged, less everything cancelled. */
+        public long liveOrderCount() {
+            return submittedCount - cancelledCount;
+        }
     }
 
     /** Flat, JSON-friendly view of an ImbalanceDisclosure (the aggregate only). */

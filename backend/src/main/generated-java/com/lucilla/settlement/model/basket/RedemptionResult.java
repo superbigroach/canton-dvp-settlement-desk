@@ -13,7 +13,6 @@ import com.daml.ledger.javaapi.data.codegen.json.JsonLfEncoder;
 import com.daml.ledger.javaapi.data.codegen.json.JsonLfEncoders;
 import com.daml.ledger.javaapi.data.codegen.json.JsonLfReader;
 import com.lucilla.settlement.model.holding.Holding;
-import java.lang.Deprecated;
 import java.lang.IllegalArgumentException;
 import java.lang.Object;
 import java.lang.Override;
@@ -24,7 +23,7 @@ import java.util.List;
 import java.util.Objects;
 
 public class RedemptionResult extends DamlRecord<RedemptionResult> {
-  public static final String _packageId = "f10d37a10d40ff7923e1d7476f49347809a28a7803b3be0c4252b2417f921d12";
+  public static final String _packageId = "cd6202b647482a998c93612fd615750e35250bcfb57272e00d9198ebe014161a";
 
   public final List<Holding.ContractId> returnedUnderlyings;
 
@@ -34,14 +33,6 @@ public class RedemptionResult extends DamlRecord<RedemptionResult> {
       BasketReceipt.ContractId receipt) {
     this.returnedUnderlyings = returnedUnderlyings;
     this.receipt = receipt;
-  }
-
-  /**
-   * @deprecated since Daml 2.5.0; use {@code valueDecoder} instead
-   */
-  @Deprecated
-  public static RedemptionResult fromValue(Value value$) throws IllegalArgumentException {
-    return valueDecoder().decode(value$);
   }
 
   public static ValueDecoder<RedemptionResult> valueDecoder() throws IllegalArgumentException {

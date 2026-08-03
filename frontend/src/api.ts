@@ -56,12 +56,22 @@ export interface MocOrderRequest {
   instrumentId: string;
   cashInstrument?: string; // defaults to USDC server-side
   session?: Session;       // Open (MOO) | Close (MOC); defaults to Close server-side
+  // Worst price this order accepts (Buy: max, Sell: min). Omit to pin it to the
+  // auction's published anchor, which guarantees the order crosses. Limits AWAY
+  // from the anchor are what let the uncross discover a different print.
+  // A BUY reserves quantity * limitPrice in cash (NOT quantity * anchor).
+  limitPrice?: number;
 }
 
 export interface MocOrderResponse {
   orderCid: string;
+  // The auction contract id AFTER the submission. SubmitOrder is consuming — it
+  // archives the auction and re-creates it with the book count incremented — so
+  // the cid the order was sent to is already dead.
   auctionCid: string;
   openedAuction: boolean;
+  // The auction's published ANCHOR (and this order's limit when none was given).
+  // NOT where the cross will print: that is discovered from the book at the close.
   closingPrice: number;
 }
 
@@ -78,7 +88,7 @@ export interface MocState {
   instrumentId: string;
   cashInstrument: string;
   session: string;              // "Open" | "Close"
-  referencePrice: number | null;
+  referencePrice: number | null; // the venue's published ANCHOR, not the print
   isOpen: boolean;
   orders: MocOrderView[];       // filtered by the ledger to the acting party's view
   othersResting: number;        // OTHER sealed orders hidden from a trader (0 for venue)
@@ -114,6 +124,8 @@ export interface MocFill {
 export interface MocCloseResponse {
   settlementBatchCid: string;
   session: string;              // "Open" | "Close"
+  // The DISCOVERED uniform price: the volume-maximising uncross of the sealed
+  // book. May legitimately print above or below the auction's anchor.
   closingPrice: number;
   fills: MocFill[];
 }

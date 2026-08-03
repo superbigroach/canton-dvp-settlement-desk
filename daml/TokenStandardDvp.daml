@@ -1,0 +1,637 @@
+-- TokenStandardDvp.daml
+-- ===========================================================================
+-- CIP-56 / CANTON NETWORK TOKEN STANDARD — the real thing.
+-- ===========================================================================
+-- Every template in this module implements one or more of the OFFICIAL
+-- `Splice.Api.Token.*V1` interfaces, taken unmodified from the Splice release
+-- and vendored as DARs in `deps/` (see daml.yaml). Nothing here re-declares a
+-- standard type: the interfaces, their views, their choices and their
+-- authorisation rules are the standard's, not ours.
+--
+-- WHAT THIS GIVES US, AND WHAT IT DOES NOT
+--   IN  — cETH and cBTC as genuine token-standard instruments: a Holding any
+--         CIP-56 wallet can read, a TransferFactory/TransferInstruction any
+--         CIP-56 wallet can drive, and an AllocationFactory/Allocation that a
+--         venue can settle atomically.
+--   OUT — the project's legacy `Holding.daml` / `Instrument.daml` / the
+--         Settlement, MarketOnClose, Basket and Governance workflows built on
+--         them are NOT migrated. They remain self-issued stand-ins. See
+--         docs/TOKEN_STANDARD_DVP.md for exactly what is which, and the
+--         migration route for the rest.
+--
+-- THE SHAPE OF THE STANDARD (worth internalising — it is not our invention)
+--   A token standard settlement is a THREE-PARTY dance:
+--     1. The REGISTRY (instrument admin) owns the rules. It publishes factory
+--        contracts (`TransferFactory`, `AllocationFactory`) and is a signatory
+--        on every holding of its instrument. Here: `TokenStandardRegistry`.
+--     2. The VENUE / app requests allocations by publishing a contract that
+--        implements `AllocationRequest`. Here: `TokenStandardDvp`.
+--     3. Each SENDER answers by exercising `AllocationFactory_Allocate` on the
+--        registry's factory, which locks their holding and yields a contract
+--        implementing `Allocation`. Here: `TokenStandardAllocation`.
+--   The venue then exercises `Allocation_ExecuteTransfer` on EVERY leg inside
+--   ONE choice — one Daml transaction, all-or-nothing. That is the DvP.
+--
+--   Note what the standard buys that a hand-rolled DvP does not: the venue
+--   never touches the assets, never needs a choice on the holding template, and
+--   works against ANY registry that implements the standard. cETH could be
+--   issued by onRails and the cash leg by a completely different registry with
+--   completely different Daml code, and this same `TokenStandardDvp_Settle`
+--   would still settle them atomically.
+--
+-- LOCKS ARE REAL HERE
+--   We deliberately did NOT take the shortcut used by the Splice reference
+--   token (`TestTokenV1`), where the allocation contract IS the holding. That
+--   shortcut leaves `AllocationView.holdingCids` empty and forces wallets to
+--   understand a special construction. Instead an allocation locks a real
+--   `TokenStandardHolding` — `lock = Some Lock{holders, expiresAt, context}`,
+--   exactly as `HoldingV1.Lock` defines it — and names it in `holdingCids`, so
+--   a standard wallet can show "10.0 cETH, locked until T, for settlement X".
+-- ===========================================================================
+
+module TokenStandardDvp where
+
+import DA.Foldable qualified as F
+import DA.Optional (fromSomeNote, isNone, optionalToList)
+import DA.Set qualified as Set
+import DA.TextMap (TextMap)
+import DA.TextMap qualified as TextMap
+
+-- The official CIP-56 interface packages (vendored DARs, see deps/).
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV1 qualified as TS
+import Splice.Api.Token.TransferInstructionV1 qualified as TS
+import Splice.Api.Token.AllocationV1 qualified as TS
+import Splice.Api.Token.AllocationInstructionV1 qualified as TS
+import Splice.Api.Token.AllocationRequestV1 qualified as TS
+
+
+-- ---------------------------------------------------------------------------
+-- Small helpers.
+-- ---------------------------------------------------------------------------
+-- The Splice reference implementations pull these from `splice-token-standard-
+-- utils`. We re-implement the handful we need locally rather than take another
+-- data-dependency: they are three lines each, and this keeps the vendored
+-- dependency surface to the six interface DARs the standard actually defines.
+
+-- | Assert a requirement, aborting the whole transaction if it does not hold.
+require : CanAssert m => Text -> Bool -> m ()
+require msg cond = assertMsg ("The requirement '" <> msg <> "' was not met.") cond
+
+-- | Assert that a deadline has NOT yet passed (ledger time is strictly before it).
+assertNotExpired : Text -> Time -> Update ()
+assertNotExpired name deadline = do
+  now <- getTime
+  require (name <> " has not passed") (now < deadline)
+
+-- | Assert that a timestamp is not in the future. The standard requires
+-- `requestedAt` fields to be in the past when instructing.
+assertNotInFuture : Text -> Time -> Update ()
+assertNotInFuture name t = do
+  now <- getTime
+  require (name <> " must not be in the future") (t <= now)
+
+-- | `ExtraArgs` carrying no registry choice-context and no caller metadata.
+-- Registries that need off-ledger context (fee schedules, price feeds) receive
+-- it here; ours is self-contained and needs none.
+emptyExtraArgs : ExtraArgs
+emptyExtraArgs = ExtraArgs with
+  context = emptyChoiceContext
+  meta = emptyMetadata
+
+-- | The lock we place on a holding while it is committed to a settlement or a
+-- transfer.
+--
+-- `holders` is the standard's field for "the parties which are locking the
+-- contract", and we populate it with exactly the parties whose action can
+-- release the lock — for an allocation that is the standard's own
+-- `allocationControllers` (executor, sender, receiver); for a transfer offer it
+-- is sender and receiver. Those same parties become observers of the locked
+-- holding (see `TokenStandardHolding`), which is what lets a venue actually
+-- execute a settlement it can see.
+settlementLock : [Party] -> Time -> Text -> TS.Lock
+settlementLock holders expiry reason = TS.Lock with
+  holders
+  expiresAt = Some expiry
+  expiresAfter = None
+  context = Some reason
+
+-- | Release a locked holding back to its owner, unchanged apart from the lock.
+-- Used by every "the settlement did not happen" path: transfer reject, transfer
+-- withdraw, allocation withdraw, allocation cancel.
+unlockHolding : ContractId TokenStandardHolding -> Update (ContractId TS.Holding)
+unlockHolding lockedCid = do
+  locked <- fetch lockedCid
+  archive lockedCid
+  toInterfaceContractId <$> create locked with lock = None
+
+
+-- ---------------------------------------------------------------------------
+-- TokenStandardHolding — a CIP-56 holding of cETH / cBTC.
+-- ---------------------------------------------------------------------------
+-- This is the project's FIRST contract to implement a Daml interface, and the
+-- interface it implements is `Splice.Api.Token.HoldingV1.Holding` — the same
+-- one Canton Coin implements. Any token-standard wallet, and the Canton Network
+-- Registry API, can read this without knowing this module exists.
+--
+-- AUTHORISATION — note how this differs from the legacy `Holding.daml`, which
+-- is issuer-signatory-only so that transfers compose directly. Here BOTH the
+-- registry (instrument admin) and the owner sign, which is the standard's
+-- model: nobody can move your holding without your authority, and atomicity
+-- comes from the allocation lifecycle instead of from a weakened signatory set.
+template TokenStandardHolding
+  with
+    admin : Party
+      -- ^ The registry that administers the instrument. Redundant with
+      -- `instrumentId.admin` but needed as a signatory expression; the `ensure`
+      -- below keeps the two honest.
+    owner : Party
+    instrumentId : TS.InstrumentId
+    amount : Decimal
+    lock : Optional TS.Lock
+      -- ^ `None` for a free holding. `Some ...` while the holding is committed
+      -- to an allocation or an outstanding transfer offer.
+  where
+    signatory admin, owner
+
+    -- A FREE holding is private to its owner and the registry — nobody else on
+    -- the network can see that it exists. A LOCKED holding is additionally
+    -- disclosed to the lock's `holders`, i.e. exactly the parties who are able
+    -- to release it (a settlement executor, a transfer counterparty). This is
+    -- both a privacy statement and a hard requirement: a party that cannot see
+    -- the locked holding could never build the transaction that releases it.
+    observer optional [] (\l -> l.holders) lock
+
+    ensure amount > 0.0 && instrumentId.admin == admin
+
+    interface instance TS.Holding for TokenStandardHolding where
+      view = TS.HoldingView with
+        owner
+        instrumentId
+        amount
+        lock
+        meta = emptyMetadata
+
+
+-- ---------------------------------------------------------------------------
+-- TokenStandardTransferOffer — a CIP-56 `TransferInstruction`.
+-- ---------------------------------------------------------------------------
+-- The two-step transfer path of the standard: the sender's funds are locked and
+-- the receiver decides. A wallet drives this entirely through the interface
+-- choices (`TransferInstruction_Accept` / `_Reject` / `_Withdraw`), which is
+-- why a standard wallet can move cETH without any cETH-specific code.
+template TokenStandardTransferOffer
+  with
+    transfer : TS.Transfer
+    lockedHoldingCid : ContractId TokenStandardHolding
+      -- ^ The sender's locked funds backing this offer.
+  where
+    signatory transfer.sender, transfer.instrumentId.admin
+    observer transfer.receiver
+
+    ensure transfer.amount > 0.0 && transfer.requestedAt <= transfer.executeBefore
+
+    interface instance TS.TransferInstruction for TokenStandardTransferOffer where
+      view = TS.TransferInstructionView with
+        originalInstructionCid = None
+        transfer
+        status = TS.TransferPendingReceiverAcceptance
+        meta = emptyMetadata
+
+      -- Receiver accepts: the locked holding is burned and re-created,
+      -- unlocked, in the receiver's name. The receiver's authority is present
+      -- because the standard makes them the controller of this choice.
+      transferInstruction_acceptImpl _self _arg = do
+        assertNotExpired "Transfer.executeBefore" transfer.executeBefore
+        locked <- fetch lockedHoldingCid
+        archive lockedHoldingCid
+        newCid <- create locked with
+          owner = transfer.receiver
+          lock = None
+        pure TS.TransferInstructionResult with
+          senderChangeCids = []
+          output = TS.TransferInstructionResult_Completed with
+            receiverHoldingCids = [toInterfaceContractId newCid]
+          meta = emptyMetadata
+
+      -- Receiver declines, or sender pulls the offer: the funds are unlocked
+      -- and returned to the sender, unchanged.
+      transferInstruction_rejectImpl _self _arg = do
+        backCid <- unlockHolding lockedHoldingCid
+        pure TS.TransferInstructionResult with
+          output = TS.TransferInstructionResult_Failed
+          senderChangeCids = [backCid]
+          meta = emptyMetadata
+
+      transferInstruction_withdrawImpl _self _arg = do
+        backCid <- unlockHolding lockedHoldingCid
+        pure TS.TransferInstructionResult with
+          output = TS.TransferInstructionResult_Failed
+          senderChangeCids = [backCid]
+          meta = emptyMetadata
+
+      -- We run no multi-step registry workflow, so there is no state for the
+      -- registry to advance. The standard permits this; failing loudly is more
+      -- honest than pretending to do something.
+      transferInstruction_updateImpl _self _arg =
+        fail "TransferInstruction_Update: this registry settles transfers in one step"
+
+
+-- ---------------------------------------------------------------------------
+-- TokenStandardAllocation — a CIP-56 `Allocation`.
+-- ---------------------------------------------------------------------------
+-- A sender's binding commitment of assets to ONE leg of ONE settlement. This is
+-- the contract the DvP actually executes against, and the reason the venue
+-- never needs custody: the venue can only ever move an allocation into exactly
+-- the transfer the sender already agreed to.
+template TokenStandardAllocation
+  with
+    allocation : TS.AllocationSpecification
+    lockedHoldingCid : ContractId TokenStandardHolding
+      -- ^ The sender's locked funds backing this allocation. Surfaced to
+      -- wallets through `AllocationView.holdingCids`.
+  where
+    signatory allocation.transferLeg.sender, allocation.transferLeg.instrumentId.admin
+
+    -- Both the executor (who settles it) and the receiver (who is a controller
+    -- of the standard's execute/cancel choices) must be able to see it.
+    observer [allocation.settlement.executor, allocation.transferLeg.receiver]
+
+    ensure
+      allocation.transferLeg.amount > 0.0 &&
+      allocation.settlement.allocateBefore <= allocation.settlement.settleBefore
+
+    interface instance TS.Allocation for TokenStandardAllocation where
+      view = TS.AllocationView with
+        allocation
+        holdingCids = [toInterfaceContractId lockedHoldingCid]
+        meta = emptyMetadata
+
+      -- THE SETTLEMENT STEP. Controlled by executor + sender + receiver (the
+      -- standard's `allocationControllers`). The venue calls this once per leg
+      -- inside a single transaction; if any leg fails, none of them happened.
+      allocation_executeTransferImpl _self _arg = do
+        assertNotExpired
+          "Allocation.settlement.settleBefore"
+          allocation.settlement.settleBefore
+        locked <- fetch lockedHoldingCid
+        archive lockedHoldingCid
+        deliveredCid <- create locked with
+          owner = allocation.transferLeg.receiver
+          lock = None
+        pure TS.Allocation_ExecuteTransferResult with
+          senderHoldingCids = []
+          receiverHoldingCids = [toInterfaceContractId deliveredCid]
+          meta = emptyMetadata
+
+      -- Sender pulls their commitment before settlement.
+      allocation_withdrawImpl _self _arg = do
+        backCid <- unlockHolding lockedHoldingCid
+        pure TS.Allocation_WithdrawResult with
+          senderHoldingCids = [backCid]
+          meta = emptyMetadata
+
+      -- Executor (with sender and receiver) tears the settlement down.
+      allocation_cancelImpl _self _arg = do
+        backCid <- unlockHolding lockedHoldingCid
+        pure TS.Allocation_CancelResult with
+          senderHoldingCids = [backCid]
+          meta = emptyMetadata
+
+
+-- ---------------------------------------------------------------------------
+-- TokenStandardRegistry — the instrument admin's rulebook.
+-- ---------------------------------------------------------------------------
+-- Implements BOTH standard factories. In production a wallet obtains this
+-- contract from the registry's off-ledger Registry API as a *disclosed*
+-- contract; the tests do exactly that via `queryDisclosure`, so the flow is the
+-- real one and the registry contract needs no observers.
+--
+-- This one contract is what makes cETH and cBTC first-class CIP-56 instruments:
+-- `instrumentId = InstrumentId { admin = <this registry>, id = "cETH" }`.
+template TokenStandardRegistry
+  with
+    admin : Party
+  where
+    signatory admin
+
+    -- ---- Transfers ------------------------------------------------------
+    interface instance TS.TransferFactory for TokenStandardRegistry where
+      view = TS.TransferFactoryView with
+        admin
+        meta = emptyMetadata
+
+      transferFactory_publicFetchImpl _self arg = do
+        require "expectedAdmin must match this registry" (arg.expectedAdmin == admin)
+        pure TS.TransferFactoryView with
+          admin
+          meta = emptyMetadata
+
+      transferFactory_transferImpl _self arg = do
+        require "expectedAdmin must match this registry" (arg.expectedAdmin == admin)
+        let transfer = arg.transfer
+
+        -- Validate every field of the requested transfer. The standard is
+        -- explicit that the registry, not the caller, is the authority here.
+        require "the instrument must be administered by this registry"
+          (transfer.instrumentId.admin == admin)
+        require "the transfer amount must be positive" (transfer.amount > 0.0)
+        assertNotInFuture "Transfer.requestedAt" transfer.requestedAt
+        assertNotExpired "Transfer.executeBefore" transfer.executeBefore
+
+        -- Lock exactly the transferred amount, returning any change.
+        (lockedCid, optChangeCid) <- lockHoldingAmount
+          transfer.sender
+          transfer.inputHoldingCids
+          transfer.amount
+          transfer.instrumentId
+          -- The receiver must be able to see the locked funds: they are the
+          -- party who accepts or rejects the offer.
+          [transfer.sender, transfer.receiver]
+          transfer.executeBefore
+          ("transfer to " <> show transfer.receiver)
+        let senderChangeCids = optionalToList optChangeCid
+
+        offerCid <- create TokenStandardTransferOffer with
+          transfer
+          lockedHoldingCid = lockedCid
+        pure TS.TransferInstructionResult with
+          senderChangeCids
+          output = TS.TransferInstructionResult_Pending with
+            transferInstructionCid = toInterfaceContractId offerCid
+          meta = emptyMetadata
+
+    -- ---- Allocations (the DvP path) -------------------------------------
+    interface instance TS.AllocationFactory for TokenStandardRegistry where
+      view = TS.AllocationFactoryView with
+        admin
+        meta = emptyMetadata
+
+      allocationFactory_publicFetchImpl _self arg = do
+        require "expectedAdmin must match this registry" (arg.expectedAdmin == admin)
+        pure TS.AllocationFactoryView with
+          admin
+          meta = emptyMetadata
+
+      allocationFactory_allocateImpl _self arg = do
+        require "expectedAdmin must match this registry" (arg.expectedAdmin == admin)
+        let allocation = arg.allocation
+            settlement = allocation.settlement
+            leg = allocation.transferLeg
+
+        require "the instrument must be administered by this registry"
+          (leg.instrumentId.admin == admin)
+        require "the transfer amount must be positive" (leg.amount > 0.0)
+        assertNotInFuture "Allocation.settlement.requestedAt" settlement.requestedAt
+        assertNotInFuture "AllocationFactory_Allocate.requestedAt" arg.requestedAt
+        assertNotExpired "Allocation.settlement.allocateBefore" settlement.allocateBefore
+        require "allocateBefore must not be after settleBefore"
+          (settlement.allocateBefore <= settlement.settleBefore)
+        require "at least one input holding must be provided"
+          (not (null arg.inputHoldingCids))
+
+        (lockedCid, optChangeCid) <- lockHoldingAmount
+          leg.sender
+          arg.inputHoldingCids
+          leg.amount
+          leg.instrumentId
+          -- Exactly the standard's `allocationControllers`: the parties who
+          -- jointly control execution and cancellation of this allocation.
+          [settlement.executor, leg.sender, leg.receiver]
+          settlement.settleBefore
+          ("allocation for settlement " <> settlement.settlementRef.id)
+
+        allocationCid <- create TokenStandardAllocation with
+          allocation
+          lockedHoldingCid = lockedCid
+
+        pure TS.AllocationInstructionResult with
+          senderChangeCids = optionalToList optChangeCid
+          -- We allocate in one step, so there is never a pending
+          -- `AllocationInstruction`. The standard allows either.
+          output = TS.AllocationInstructionResult_Completed with
+            allocationCid = toInterfaceContractId allocationCid
+          meta = emptyMetadata
+
+
+-- | Consume the caller's free holdings, lock exactly `amount` of them, and hand
+-- back any change as a new free holding.
+--
+-- Returns `(locked holding, optional change holding as a standard Holding cid)`.
+-- Must be called where both the registry's and the sender's authority are in
+-- scope — which is precisely the case inside the factory choices, since the
+-- factory is registry-signed and the standard makes the sender the controller.
+lockHoldingAmount
+  :  Party                      -- ^ sender / owner of the inputs
+  -> [ContractId TS.Holding]    -- ^ input holdings, named by the caller
+  -> Decimal                    -- ^ amount to lock
+  -> TS.InstrumentId
+  -> [Party]                    -- ^ lock holders (become observers of the lock)
+  -> Time                       -- ^ lock expiry
+  -> Text                       -- ^ human-readable lock context
+  -> Update (ContractId TokenStandardHolding, Optional (ContractId TS.Holding))
+lockHoldingAmount sender inputCids amount instrumentId lockHolders expiry reason = do
+  -- Archiving every named input is required by the standard: it makes this
+  -- transaction CONFLICT with any other spend of the same holdings, which is
+  -- how a sender prevents an accidental double-allocation.
+  inputAmounts <- forA inputCids $ \cid -> do
+    holdingView <- view <$> fetch cid
+    require "input holding must be owned by the sender" (holdingView.owner == sender)
+    require "input holding must be of the requested instrument"
+      (holdingView.instrumentId == instrumentId)
+    require "input holding must not already be locked" (isNone holdingView.lock)
+    archive cid
+    pure holdingView.amount
+
+  let total = sum inputAmounts
+  require "input holdings must cover the requested amount" (total >= amount)
+
+  lockedCid <- create TokenStandardHolding with
+    admin = instrumentId.admin
+    owner = sender
+    instrumentId
+    amount
+    lock = Some (settlementLock lockHolders expiry reason)
+
+  let change = total - amount
+  optChangeCid <-
+    if change == 0.0
+      then pure None
+      else do
+        changeCid <- create TokenStandardHolding with
+          admin = instrumentId.admin
+          owner = sender
+          instrumentId
+          amount = change
+          lock = None
+        pure (Some (toInterfaceContractId changeCid))
+
+  pure (lockedCid, optChangeCid)
+
+
+-- ===========================================================================
+-- THE VENUE — a two-leg delivery-versus-payment over the token standard.
+-- ===========================================================================
+-- This is the app half of CIP-56. It holds no assets, has no choice on any
+-- holding, and would work unchanged against a registry written by someone else.
+
+-- | The proposed trade. Each trading party accepts in turn; the venue then
+-- promotes it to a `TokenStandardDvp` and asks for allocations.
+template TokenStandardDvpProposal
+  with
+    venue : Party
+    dvpId : Text
+      -- ^ The venue's identifier for this settlement. It becomes the standard's
+      -- `SettlementInfo.settlementRef`, and it is what binds an allocation to
+      -- THIS trade and no other.
+    legs : TextMap TS.TransferLeg
+    approvers : [Party]
+  where
+    signatory venue, approvers
+    observer tradingParties legs
+
+    choice TokenStandardDvpProposal_Accept : ContractId TokenStandardDvpProposal
+      with
+        approver : Party
+      controller approver
+      do
+        require "approver must be a party to the trade"
+          (approver `Set.member` tradingParties legs)
+        require "approver must not have accepted already" (approver `notElem` approvers)
+        create this with approvers = approver :: approvers
+
+    choice TokenStandardDvpProposal_InitiateSettlement : ContractId TokenStandardDvp
+      with
+        allocateBefore : Time
+        settleBefore : Time
+      controller venue
+      do
+        require "every trading party must have accepted"
+          (Set.fromList approvers == tradingParties legs)
+        require "allocateBefore must not be after settleBefore"
+          (allocateBefore <= settleBefore)
+        now <- getTime
+        require "allocateBefore must be in the future" (now < allocateBefore)
+        create TokenStandardDvp with
+          venue
+          dvpId
+          legs
+          createdAt = now
+          allocateBefore
+          settleBefore
+
+-- | The live settlement. Implements `AllocationRequest`, so a token-standard
+-- wallet shows each sender "you owe leg X of settlement Y by time T" WITHOUT
+-- this app publishing any bespoke API.
+template TokenStandardDvp
+  with
+    venue : Party
+    dvpId : Text
+    legs : TextMap TS.TransferLeg
+    createdAt : Time
+    allocateBefore : Time
+    settleBefore : Time
+  where
+    signatory venue, tradingParties legs
+
+    -- ---- THE DvP ---------------------------------------------------------
+    -- Executes EVERY leg in a single Daml transaction. Delivery without
+    -- payment is not a state this ledger can reach: if the cash leg's
+    -- allocation is missing, expired, or does not match what was requested,
+    -- the assertion aborts and the asset leg never moves either.
+    choice TokenStandardDvp_Settle : TextMap TS.Allocation_ExecuteTransferResult
+      with
+        allocations : TextMap (ContractId TS.Allocation)
+          -- ^ One allocation per leg, keyed by the same leg id as `legs`.
+      controller venue
+      do
+        assertNotExpired "TokenStandardDvp.settleBefore" settleBefore
+
+        let expected = dvpAllocationSpecs this
+        require "an allocation must be supplied for every leg of the DvP"
+          (TextMap.size allocations == TextMap.size expected)
+
+        forTextMapWithKey allocations $ \legId allocCid -> do
+          let spec = fromSomeNote
+                ("allocation supplied for a leg that is not part of this DvP: " <> legId)
+                (TextMap.lookup legId expected)
+          allocationView <- view <$> fetch @TS.Allocation allocCid
+          -- The venue cannot substitute a different amount, a different
+          -- instrument, a different counterparty, or an allocation earmarked
+          -- for some other settlement: the whole specification must match.
+          require
+            ("the allocation for leg '" <> legId <> "' must match the requested allocation exactly")
+            (allocationView.allocation == spec)
+          exercise allocCid TS.Allocation_ExecuteTransfer with
+            extraArgs = emptyExtraArgs
+
+    -- Abandon the settlement and release every allocation back to its sender.
+    choice TokenStandardDvp_Abort : ()
+      with
+        allocations : [ContractId TS.Allocation]
+      controller venue
+      do
+        F.forA_ allocations $ \allocCid ->
+          exercise allocCid TS.Allocation_Cancel with extraArgs = emptyExtraArgs
+
+    interface instance TS.AllocationRequest for TokenStandardDvp where
+      view = TS.AllocationRequestView with
+        settlement = mkSettlementInfo venue dvpId createdAt allocateBefore settleBefore
+        transferLegs = legs
+        meta = emptyMetadata
+
+      -- A sender signalling up front that they will not deliver. A production
+      -- venue would charge for this; we simply require the rejector to actually
+      -- be on the hook for a leg.
+      allocationRequest_RejectImpl _self arg = do
+        require "only a sender of one of the legs may reject"
+          (F.any (\leg -> arg.actor == leg.sender) legs)
+        pure ChoiceExecutionMetadata with meta = emptyMetadata
+
+      allocationRequest_WithdrawImpl _self _arg =
+        -- Archiving the DvP is the whole effect: the request is gone.
+        pure ChoiceExecutionMetadata with meta = emptyMetadata
+
+
+-- ---------------------------------------------------------------------------
+-- Venue helpers.
+-- ---------------------------------------------------------------------------
+
+-- | The standard's description of this settlement. Built in exactly one place
+-- so that the AllocationRequest the senders see, the allocations they create,
+-- and the specification the venue checks at settlement time cannot drift apart.
+mkSettlementInfo : Party -> Text -> Time -> Time -> Time -> TS.SettlementInfo
+mkSettlementInfo executor dvpId requestedAt allocateBefore settleBefore =
+  TS.SettlementInfo with
+    executor
+    settlementRef = TS.Reference with
+      id = dvpId
+      cid = None
+    requestedAt
+    allocateBefore
+    settleBefore
+    meta = emptyMetadata
+
+-- | The exact allocation each sender is expected to produce, keyed by leg id.
+dvpAllocationSpecs : TokenStandardDvp -> TextMap TS.AllocationSpecification
+dvpAllocationSpecs dvp =
+  TextMap.fromList $ do
+    (transferLegId, transferLeg) <- TextMap.toList dvp.legs
+    pure
+      ( transferLegId
+      , TS.AllocationSpecification with
+          settlement = mkSettlementInfo
+            dvp.venue dvp.dvpId dvp.createdAt dvp.allocateBefore dvp.settleBefore
+          transferLegId
+          transferLeg
+      )
+
+-- | Every party on either side of any leg.
+tradingParties : TextMap TS.TransferLeg -> Set.Set Party
+tradingParties = F.foldl (\acc leg -> Set.insert leg.sender (Set.insert leg.receiver acc)) Set.empty
+
+-- | `TextMap` traversal that keeps the key in scope.
+forTextMapWithKey : Applicative f => TextMap a -> (Text -> a -> f b) -> f (TextMap b)
+forTextMapWithKey m f = TextMap.fromList <$> mapA step (TextMap.toList m)
+  where
+    step (k, v) = (k,) <$> f k v

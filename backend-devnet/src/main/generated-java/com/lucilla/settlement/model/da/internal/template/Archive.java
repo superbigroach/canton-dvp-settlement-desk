@@ -21,7 +21,7 @@ import java.util.List;
 import java.util.Objects;
 
 public class Archive extends DamlRecord<Archive> {
-  public static final String _packageId = "d14e08374fc7197d6a0de468c968ae8ba3aadbf9315476fd39071831f5923662";
+  public static final String _packageId = "9e70a8b3510d617f8a136213f33d6a903a10ca0eeec76bb06ba55d1ed9680f69";
 
   public Archive() {
   }

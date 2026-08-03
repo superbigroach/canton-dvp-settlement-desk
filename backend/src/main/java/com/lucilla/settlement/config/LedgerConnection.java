@@ -1,7 +1,7 @@
 package com.lucilla.settlement.config;
 
-import com.daml.ledger.api.v1.admin.PartyManagementServiceGrpc;
-import com.daml.ledger.api.v1.admin.PartyManagementServiceGrpc.PartyManagementServiceBlockingStub;
+import com.daml.ledger.api.v2.admin.PartyManagementServiceGrpc;
+import com.daml.ledger.api.v2.admin.PartyManagementServiceGrpc.PartyManagementServiceBlockingStub;
 import com.daml.ledger.rxjava.DamlLedgerClient;
 import io.grpc.CallOptions;
 import io.grpc.Channel;
@@ -75,11 +75,16 @@ public class LedgerConnection {
     /**
      * A blocking stub for the ledger's <b>party-management</b> admin service.
      *
-     * <p>The high-level rxjava {@link DamlLedgerClient} in bindings 2.9.4 does not
-     * expose the admin services, so we open our OWN gRPC channel to the same
-     * Ledger API host:port and drive the generated {@link PartyManagementServiceGrpc}
-     * stub directly. Same plaintext-vs-TLS + optional JWT bearer story as the main
-     * client, driven entirely from {@link LedgerProperties}. Lazily built.
+     * <p>The high-level rxjava {@link DamlLedgerClient} does not expose the admin
+     * services, so we open our OWN gRPC channel to the same Ledger API host:port and
+     * drive the generated {@link PartyManagementServiceGrpc} stub directly. Same
+     * plaintext-vs-TLS + optional JWT bearer story as the main client, driven entirely
+     * from {@link LedgerProperties}. Lazily built.
+     *
+     * <p>This is the v2 admin service. Keeping it is what lets the LOCAL build resolve
+     * parties live: a local sandbox re-allocates every party with a fresh namespace
+     * suffix on each run, so the roster cannot be configured ahead of time the way
+     * backend-devnet does it against the fixed shared node.
      */
     public PartyManagementServiceBlockingStub partyManagement() {
         return PartyManagementServiceGrpc.newBlockingStub(authed(adminChannel()));
@@ -153,7 +158,9 @@ public class LedgerConnection {
 
         DamlLedgerClient c = builder.build();
         c.connect();
-        log.info("Connected. ledgerId={}", c.getLedgerId());
+        // Ledger API v2 dropped the ledger-id handshake (and getLedgerId() with it);
+        // a successful connect() is the confirmation.
+        log.info("Connected to Ledger API v2 at {}:{}.", props.getHost(), props.getPort());
         return c;
     }
 

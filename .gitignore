@@ -2,6 +2,12 @@
 .daml/
 *.dar
 
+# ...EXCEPT the vendored CIP-56 / Canton Network Token Standard interface DARs.
+# These are official, unmodified `splice-api-token-*` release artifacts, not
+# build output, and they are committed deliberately so that `daml build` is
+# reproducible without a checkout of the Splice repo. See docs/TOKEN_STANDARD_DVP.md.
+!deps/*.dar
+
 # DAML / Canton runtime & logs
 canton.log
 log/

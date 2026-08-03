@@ -26,7 +26,7 @@ import java.util.Objects;
 import java.util.function.Function;
 
 public class Tuple2<t1, t2> {
-  public static final String _packageId = "40f452260bef3f29dede136108fc08a88d5a5250310281067087da6f0baddff7";
+  public static final String _packageId = "5aee9b21b8e9a4c4975b5f4c4198e6e6e8469df49e2010820e792f393db870f4";
 
   public final t1 _1;
 

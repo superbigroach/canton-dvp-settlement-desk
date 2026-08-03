@@ -1,6 +1,5 @@
 package com.lucilla.settlement.model.marketonclose;
 
-import com.daml.ledger.javaapi.data.Value;
 import com.daml.ledger.javaapi.data.codegen.DamlEnum;
 import com.daml.ledger.javaapi.data.codegen.ValueDecoder;
 import com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoder;
@@ -8,7 +7,6 @@ import com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders;
 import com.daml.ledger.javaapi.data.codegen.json.JsonLfEncoder;
 import com.daml.ledger.javaapi.data.codegen.json.JsonLfEncoders;
 import com.daml.ledger.javaapi.data.codegen.json.JsonLfReader;
-import java.lang.Deprecated;
 import java.lang.IllegalArgumentException;
 import java.lang.String;
 import java.util.HashMap;
@@ -28,14 +26,6 @@ public enum Side implements DamlEnum<Side> {
     m.put("Buy", BUY);
     m.put("Sell", SELL);
     return m;
-  }
-
-  /**
-   * @deprecated since Daml 2.5.0; use {@code valueDecoder} instead
-   */
-  @Deprecated
-  public static final Side fromValue(Value value$) {
-    return valueDecoder().decode(value$);
   }
 
   public static final ValueDecoder<Side> valueDecoder() {

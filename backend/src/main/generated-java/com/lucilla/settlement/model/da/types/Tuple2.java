@@ -15,7 +15,6 @@ import com.daml.ledger.javaapi.data.codegen.json.JsonLfWriter;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.io.UncheckedIOException;
-import java.lang.Deprecated;
 import java.lang.IllegalArgumentException;
 import java.lang.Object;
 import java.lang.Override;
@@ -27,7 +26,7 @@ import java.util.Objects;
 import java.util.function.Function;
 
 public class Tuple2<t1, t2> {
-  public static final String _packageId = "40f452260bef3f29dede136108fc08a88d5a5250310281067087da6f0baddff7";
+  public static final String _packageId = "5aee9b21b8e9a4c4975b5f4c4198e6e6e8469df49e2010820e792f393db870f4";
 
   public final t1 _1;
 
@@ -36,16 +35,6 @@ public class Tuple2<t1, t2> {
   public Tuple2(t1 _1, t2 _2) {
     this._1 = _1;
     this._2 = _2;
-  }
-
-  /**
-   * @deprecated since Daml 2.5.0; use {@code valueDecoder} instead
-   */
-  @Deprecated
-  public static <t1, t2> Tuple2<t1, t2> fromValue(Value value$, Function<Value, t1> fromValuet1,
-      Function<Value, t2> fromValuet2) throws IllegalArgumentException {
-    return Tuple2.<t1, t2>valueDecoder(ValueDecoder.fromFunction(fromValuet1),
-          ValueDecoder.fromFunction(fromValuet2)).decode(value$);
   }
 
   public static <t1, t2> ValueDecoder<Tuple2<t1, t2>> valueDecoder(ValueDecoder<t1> fromValuet1,

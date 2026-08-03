@@ -144,7 +144,16 @@ public final class Dtos {
             @NotNull @Positive BigDecimal quantity,
             @NotBlank String instrumentId,
             String cashInstrument,            // defaults to "USDC" when blank
-            String session) {                 // Open | Close (defaults to Close when blank)
+            String session,                   // Open | Close (defaults to Close when blank)
+            // The worst price this order will accept (Buy: max, Sell: min). Optional —
+            // omit it and the order is pinned to the auction's published anchor, which
+            // guarantees it crosses. Supplying limits AWAY from the anchor is what lets
+            // the uncross discover a price other than the reference.
+            //
+            // NOTE for buyers: the ledger reserves quantity * THIS limit in cash (never
+            // quantity * referencePrice), because the discovered cross may print above
+            // the anchor. Unspent cash comes back as change at settlement.
+            @Positive BigDecimal limitPrice) {
     }
 
     public record InstrumentResponse(

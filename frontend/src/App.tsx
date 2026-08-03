@@ -41,6 +41,11 @@ export default function App() {
   const [side, setSide] = useState<Side>('Buy');
   const [quantity, setQuantity] = useState<string>('1');
   const [price, setPrice] = useState<string>(''); // DvP only
+  // Auction only. The WORST price this sealed order accepts (Buy: max, Sell: min).
+  // Blank pins it to the anchor, which always crosses. Limits set AWAY from the
+  // anchor are what let the uncross discover a different print — that is the whole
+  // point of price discovery, so this field is how the demo shows it.
+  const [limitPrice, setLimitPrice] = useState<string>('');
   const [counterparty, setCounterparty] = useState<string>('');
   const [session, setSession] = useState<Session>('Close');
 
@@ -173,7 +178,12 @@ export default function App() {
   const priceNum = Number(price) || 0;
   const closePrice = refPriceOf(asset);
   const dvpCash = qtyNum * priceNum;
-  const mocCash = qtyNum * (closePrice ?? 0);
+  // A BUY reserves quantity * limitPrice — NOT quantity * anchor. The cross can
+  // print above the anchor, so the limit is the true worst case and reserving at
+  // the anchor would leave the buyer short. Blank limit == the anchor.
+  const limitNum = Number(limitPrice) || 0;
+  const effectiveLimit = limitNum > 0 ? limitNum : (closePrice ?? 0);
+  const mocCash = qtyNum * effectiveLimit;
   const selectedInstrument = instrumentOf(asset);
 
   // Spot guard: a Sell must be covered by the asset; a Buy by cash. (The ledger
@@ -225,12 +235,22 @@ export default function App() {
   async function doMocOrder() {
     if (!acting || !asset) return;
     const res = await runAction(() =>
-      api.mocOrder({ trader: acting, side, quantity: qtyNum, instrumentId: asset, session }),
+      api.mocOrder({
+        trader: acting,
+        side,
+        quantity: qtyNum,
+        instrumentId: asset,
+        session,
+        // Omit when blank so the server pins the limit to the anchor.
+        ...(limitNum > 0 ? { limitPrice: limitNum } : {}),
+      }),
     );
     if (!res) return;
     flash(
       `Sealed ${side.toUpperCase()} order sent to the ${session.toLowerCase()} cross ` +
-        `(crosses at ${fmt2(res.closingPrice)} ${CASH}).`,
+        `(limit ${fmt2(effectiveLimit)} ${CASH}` +
+        (limitNum > 0 ? '' : ', pinned to the anchor') +
+        ` — the print is discovered at the cross).`,
     );
     await Promise.all([loadHoldings(acting), loadMoc(asset, session, acting), loadImbalance(asset, session, acting)]);
   }
@@ -242,7 +262,7 @@ export default function App() {
     if (!res) return;
     flash(
       `${res.session === 'Open' ? 'Opening' : 'Closing'} cross printed ${res.fills.length} fill(s) ` +
-        `at ${fmt2(res.closingPrice)} ${CASH}.`,
+        `at the discovered price of ${fmt2(res.closingPrice)} ${CASH}.`,
     );
     await Promise.all([loadHoldings(acting), loadReceipts(acting), loadMoc(asset, session, acting), loadImbalance(asset, session, acting)]);
   }
@@ -350,7 +370,7 @@ export default function App() {
               <span className="mono nav muted">—</span>
             )}
           </span>
-          <span className="quote-note">Exogenous reference · every fill prints here</span>
+          <span className="quote-note">Published anchor · the cross is discovered from the book</span>
         </div>
       </section>
 
@@ -484,8 +504,10 @@ export default function App() {
           ) : (
             <>
               <p className="hint">
-                <strong>Auction</strong> — an anonymous sealed order that crosses at the venue&rsquo;s
-                official price. No counterparty and no price you set — the cross price is what it is.
+                <strong>Auction</strong> — an anonymous sealed order. No counterparty, and no price
+                the venue gets to hand down: at the cross the ledger <strong>uncrosses the sealed
+                book</strong> and prints the one price that trades the most, so every fill settles
+                at a price the orders themselves support.
               </p>
               <div className="field">
                 <span>Session</span>
@@ -498,8 +520,24 @@ export default function App() {
                   </button>
                 </div>
               </div>
+              <label className="field small">
+                <span>Limit ({CASH})</span>
+                <input
+                  className="mono"
+                  type="number"
+                  min="0"
+                  step="any"
+                  placeholder={closePrice != null ? `${fmt2(closePrice)} (anchor)` : 'anchor'}
+                  value={limitPrice}
+                  onChange={(e) => setLimitPrice(e.target.value)}
+                />
+                <span className="summary-sub">
+                  {side === 'Buy' ? 'most you will pay' : 'least you will accept'} — blank pins to
+                  the anchor. Set it away from the anchor to let the book find its own price.
+                </span>
+              </label>
               <div className="summary">
-                <span>Crosses at the {sessionLabel(session)}</span>
+                <span>{sessionLabel(session)} anchor</span>
                 <strong className="mono nav-inline">
                   {closePrice != null ? `${fmt2(closePrice)} ${CASH}` : '—'}
                 </strong>
@@ -593,8 +631,11 @@ export default function App() {
             <>
               <div className="cross-meta">
                 <span className="pill asset">{mocState.instrumentId}</span>
-                <span className="cross-meta-price">
-                  @ <strong className="mono">{mocState.referencePrice != null ? fmt2(mocState.referencePrice) : '—'}</strong> {CASH}
+                <span
+                  className="cross-meta-price"
+                  title="The venue's published anchor. The cross prints the volume-maximising price discovered from the sealed book, which may be above or below this."
+                >
+                  anchor <strong className="mono">{mocState.referencePrice != null ? fmt2(mocState.referencePrice) : '—'}</strong> {CASH}
                 </span>
                 <span className="tag">
                   {actingIsVenue

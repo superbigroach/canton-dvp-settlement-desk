@@ -8,7 +8,6 @@ import com.daml.ledger.javaapi.data.CreateCommand;
 import com.daml.ledger.javaapi.data.CreatedEvent;
 import com.daml.ledger.javaapi.data.DamlOptional;
 import com.daml.ledger.javaapi.data.DamlRecord;
-import com.daml.ledger.javaapi.data.ExerciseByKeyCommand;
 import com.daml.ledger.javaapi.data.ExerciseCommand;
 import com.daml.ledger.javaapi.data.Identifier;
 import com.daml.ledger.javaapi.data.Numeric;
@@ -21,7 +20,6 @@ import com.daml.ledger.javaapi.data.Value;
 import com.daml.ledger.javaapi.data.codegen.Choice;
 import com.daml.ledger.javaapi.data.codegen.ContractCompanion;
 import com.daml.ledger.javaapi.data.codegen.ContractTypeCompanion;
-import com.daml.ledger.javaapi.data.codegen.ContractWithKey;
 import com.daml.ledger.javaapi.data.codegen.Created;
 import com.daml.ledger.javaapi.data.codegen.Exercised;
 import com.daml.ledger.javaapi.data.codegen.PrimitiveValueDecoders;
@@ -32,10 +30,7 @@ import com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders;
 import com.daml.ledger.javaapi.data.codegen.json.JsonLfEncoder;
 import com.daml.ledger.javaapi.data.codegen.json.JsonLfEncoders;
 import com.daml.ledger.javaapi.data.codegen.json.JsonLfReader;
-import com.daml.ledger.javaapi.data.codegen.json.JsonLfWriter;
-import java.io.IOException;
-import java.io.StringWriter;
-import java.io.UncheckedIOException;
+import com.lucilla.settlement.model.da.internal.template.Archive;
 import java.lang.Deprecated;
 import java.lang.IllegalArgumentException;
 import java.lang.Object;
@@ -50,32 +45,34 @@ import java.util.Optional;
 import java.util.Set;
 
 public final class Instrument extends Template {
-  public static final Identifier TEMPLATE_ID = new Identifier("f10d37a10d40ff7923e1d7476f49347809a28a7803b3be0c4252b2417f921d12", "Instrument", "Instrument");
+  public static final Identifier TEMPLATE_ID = new Identifier("#canton-dvp-settlement-desk", "Instrument", "Instrument");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("f10d37a10d40ff7923e1d7476f49347809a28a7803b3be0c4252b2417f921d12", "Instrument", "Instrument");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("cd6202b647482a998c93612fd615750e35250bcfb57272e00d9198ebe014161a", "Instrument", "Instrument");
 
-  public static final String PACKAGE_ID = "f10d37a10d40ff7923e1d7476f49347809a28a7803b3be0c4252b2417f921d12";
-
-  public static final Choice<Instrument, com.lucilla.settlement.model.da.internal.template.Archive, Unit> CHOICE_Archive = 
-      Choice.create("Archive", value$ -> value$.toValue(), value$ ->
-        com.lucilla.settlement.model.da.internal.template.Archive.valueDecoder().decode(value$),
-        value$ -> PrimitiveValueDecoders.fromUnit.decode(value$));
-
-  public static final Choice<Instrument, SetReferencePrice, ContractId> CHOICE_SetReferencePrice = 
-      Choice.create("SetReferencePrice", value$ -> value$.toValue(), value$ ->
-        SetReferencePrice.valueDecoder().decode(value$), value$ ->
-        new ContractId(value$.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected value$ to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()));
-
-  public static final ContractCompanion.WithKey<Contract, ContractId, Instrument, InstrumentKey> COMPANION = 
-      new ContractCompanion.WithKey<>("com.lucilla.settlement.model.instrument.Instrument",
-        TEMPLATE_ID, TEMPLATE_ID_WITH_PACKAGE_ID, ContractId::new,
-        v -> Instrument.templateValueDecoder().decode(v), Instrument::fromJson, Contract::new,
-        List.of(CHOICE_Archive, CHOICE_SetReferencePrice), e -> InstrumentKey.valueDecoder()
-        .decode(e));
+  public static final String PACKAGE_ID = "cd6202b647482a998c93612fd615750e35250bcfb57272e00d9198ebe014161a";
 
   public static final String PACKAGE_NAME = "canton-dvp-settlement-desk";
 
   public static final PackageVersion PACKAGE_VERSION = new PackageVersion(new int[] {1, 0, 0});
+
+  public static final Choice<Instrument, Archive, Unit> CHOICE_Archive = 
+      Choice.create("Archive", value$ -> value$.toValue(), value$ -> Archive.valueDecoder()
+        .decode(value$), value$ -> PrimitiveValueDecoders.fromUnit.decode(value$),
+        new Archive.JsonDecoder$().get(), JsonLfDecoders.unit, Archive::jsonEncoder,
+        JsonLfEncoders::unit);
+
+  public static final Choice<Instrument, SetReferencePrice, ContractId> CHOICE_SetReferencePrice = 
+      Choice.create("SetReferencePrice", value$ -> value$.toValue(), value$ ->
+        SetReferencePrice.valueDecoder().decode(value$), value$ ->
+        new ContractId(value$.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected value$ to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()),
+        new SetReferencePrice.JsonDecoder$().get(), JsonLfDecoders.contractId(ContractId::new),
+        SetReferencePrice::jsonEncoder, JsonLfEncoders::contractId);
+
+  public static final ContractCompanion.WithoutKey<Contract, ContractId, Instrument> COMPANION = 
+      new ContractCompanion.WithoutKey<>(new ContractTypeCompanion.Package(Instrument.PACKAGE_ID, Instrument.PACKAGE_NAME, Instrument.PACKAGE_VERSION),
+        "com.lucilla.settlement.model.instrument.Instrument", TEMPLATE_ID, ContractId::new,
+        v -> Instrument.templateValueDecoder().decode(v), Instrument::fromJson, Contract::new,
+        List.of(CHOICE_Archive, CHOICE_SetReferencePrice));
 
   public final String issuer;
 
@@ -108,46 +105,10 @@ public final class Instrument extends Template {
   }
 
   /**
-   * @deprecated since Daml 2.3.0; use {@code byKey(key).exerciseArchive} instead
-   */
-  @Deprecated
-  public static Update<Exercised<Unit>> exerciseByKeyArchive(InstrumentKey key,
-      com.lucilla.settlement.model.da.internal.template.Archive arg) {
-    return byKey(key).exerciseArchive(arg);
-  }
-
-  /**
-   * @deprecated since Daml 2.3.0; use {@code byKey(key).exerciseArchive()} instead
-   */
-  @Deprecated
-  public static Update<Exercised<Unit>> exerciseByKeyArchive(InstrumentKey key) {
-    return byKey(key).exerciseArchive();
-  }
-
-  /**
-   * @deprecated since Daml 2.3.0; use {@code byKey(key).exerciseSetReferencePrice} instead
-   */
-  @Deprecated
-  public static Update<Exercised<ContractId>> exerciseByKeySetReferencePrice(InstrumentKey key,
-      SetReferencePrice arg) {
-    return byKey(key).exerciseSetReferencePrice(arg);
-  }
-
-  /**
-   * @deprecated since Daml 2.3.0; use {@code byKey(key).exerciseSetReferencePrice(newPrice)} instead
-   */
-  @Deprecated
-  public static Update<Exercised<ContractId>> exerciseByKeySetReferencePrice(InstrumentKey key,
-      BigDecimal newPrice) {
-    return byKey(key).exerciseSetReferencePrice(newPrice);
-  }
-
-  /**
    * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseArchive} instead
    */
   @Deprecated
-  public Update<Exercised<Unit>> createAndExerciseArchive(
-      com.lucilla.settlement.model.da.internal.template.Archive arg) {
+  public Update<Exercised<Unit>> createAndExerciseArchive(Archive arg) {
     return createAnd().exerciseArchive(arg);
   }
 
@@ -156,7 +117,7 @@ public final class Instrument extends Template {
    */
   @Deprecated
   public Update<Exercised<Unit>> createAndExerciseArchive() {
-    return createAndExerciseArchive(new com.lucilla.settlement.model.da.internal.template.Archive());
+    return createAndExerciseArchive(new Archive());
   }
 
   /**
@@ -187,17 +148,8 @@ public final class Instrument extends Template {
   }
 
   @Override
-  protected ContractCompanion.WithKey<Contract, ContractId, Instrument, InstrumentKey> getCompanion(
-      ) {
+  protected ContractCompanion.WithoutKey<Contract, ContractId, Instrument> getCompanion() {
     return COMPANION;
-  }
-
-  /**
-   * @deprecated since Daml 2.5.0; use {@code valueDecoder} instead
-   */
-  @Deprecated
-  public static Instrument fromValue(Value value$) throws IllegalArgumentException {
-    return valueDecoder().decode(value$);
   }
 
   public static ValueDecoder<Instrument> valueDecoder() throws IllegalArgumentException {
@@ -241,7 +193,7 @@ public final class Instrument extends Template {
             case "version": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(3, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text);
             case "kind": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(4, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text);
             case "description": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(5, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text);
-            case "referencePrice": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(6, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10)));
+            case "referencePrice": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(6, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10)), java.util.Optional.empty());
             default: return null;
           }
         }
@@ -299,15 +251,6 @@ public final class Instrument extends Template {
         this.referencePrice);
   }
 
-  /**
-   * Set up an {@link ExerciseByKeyCommand}; invoke an {@code exercise} method on the result of
-      this to finish creating the command, or convert to an interface first with {@code toInterface}
-      to invoke an interface {@code exercise} method.
-   */
-  public static ByKey byKey(InstrumentKey key) {
-    return new ByKey(key.toValue());
-  }
-
   public static final class ContractId extends com.daml.ledger.javaapi.data.codegen.ContractId<Instrument> implements Exercises<ExerciseCommand> {
     public ContractId(String contractId) {
       super(contractId);
@@ -325,35 +268,10 @@ public final class Instrument extends Template {
     }
   }
 
-  public static class Contract extends ContractWithKey<ContractId, Instrument, InstrumentKey> {
-    public Contract(ContractId id, Instrument data, Optional<String> agreementText,
-        Optional<InstrumentKey> key, Set<String> signatories, Set<String> observers) {
-      super(id, data, agreementText, key, signatories, observers);
-    }
-
-    public static JsonLfDecoder<InstrumentKey> keyJsonDecoder() {
-      return new InstrumentKey.JsonDecoder$().get();
-    }
-
-    public static InstrumentKey keyFromJson(String json) throws JsonLfDecoder.Error {
-      return keyJsonDecoder().decode(new JsonLfReader(json));
-    }
-
-    public JsonLfEncoder keyJsonEncoder() {
-      return this.key.map(InstrumentKey::jsonEncoder).orElse(null);
-    }
-
-    public String keyToJson() {
-      var enc = keyJsonEncoder();
-      if (enc == null) return null;
-      var w = new StringWriter();
-      try {
-        enc.encode(new JsonLfWriter(w));
-      } catch (IOException e) {
-        // Not expected with StringWriter
-        throw new UncheckedIOException(e);
-      }
-      return w.toString();
+  public static class Contract extends com.daml.ledger.javaapi.data.codegen.Contract<ContractId, Instrument> {
+    public Contract(ContractId id, Instrument data, Set<String> signatories,
+        Set<String> observers) {
+      super(id, data, signatories, observers);
     }
 
     @Override
@@ -362,10 +280,8 @@ public final class Instrument extends Template {
     }
 
     public static Contract fromIdAndRecord(String contractId, DamlRecord record$,
-        Optional<String> agreementText, Optional<InstrumentKey> key, Set<String> signatories,
-        Set<String> observers) {
-      return COMPANION.fromIdAndRecord(contractId, record$, agreementText, key, signatories,
-          observers);
+        Set<String> signatories, Set<String> observers) {
+      return COMPANION.fromIdAndRecord(contractId, record$, signatories, observers);
     }
 
     public static Contract fromCreatedEvent(CreatedEvent event) {
@@ -373,14 +289,13 @@ public final class Instrument extends Template {
     }
   }
 
-  public interface Exercises<Cmd> extends com.daml.ledger.javaapi.data.codegen.Exercises.Archive<Cmd> {
-    default Update<Exercised<Unit>> exerciseArchive(
-        com.lucilla.settlement.model.da.internal.template.Archive arg) {
+  public interface Exercises<Cmd> extends com.daml.ledger.javaapi.data.codegen.Exercises.Archivable<Cmd> {
+    default Update<Exercised<Unit>> exerciseArchive(Archive arg) {
       return makeExerciseCmd(CHOICE_Archive, arg);
     }
 
     default Update<Exercised<Unit>> exerciseArchive() {
-      return exerciseArchive(new com.lucilla.settlement.model.da.internal.template.Archive());
+      return exerciseArchive(new Archive());
     }
 
     default Update<Exercised<ContractId>> exerciseSetReferencePrice(SetReferencePrice arg) {
@@ -410,18 +325,6 @@ public final class Instrument extends Template {
   public static class JsonDecoder$ {
     public JsonLfDecoder<Instrument> get() {
       return jsonDecoder();
-    }
-  }
-
-  public static final class ByKey extends com.daml.ledger.javaapi.data.codegen.ByKey implements Exercises<ExerciseByKeyCommand> {
-    ByKey(Value key) {
-      super(key);
-    }
-
-    @Override
-    protected ContractTypeCompanion<? extends com.daml.ledger.javaapi.data.codegen.Contract<ContractId, ?>, ContractId, Instrument, ?> getCompanion(
-        ) {
-      return COMPANION;
     }
   }
 }

@@ -36,6 +36,12 @@ class SettlementControllerTest {
 
     @Test
     void issueHolding_returns201WithContractId() throws Exception {
+        // DEVNET: this build resolves BOTH the issuer and the owner label to a full
+        // party id before building the command (on a real node an actAs claim only
+        // matches the full "label::namespace" id). The mock must therefore answer
+        // resolveParty, or the controller would submit as null and match nothing.
+        when(ledger.resolveParty("Issuer")).thenReturn("Issuer");
+        when(ledger.resolveParty("Alice")).thenReturn("Alice");
         when(ledger.submitForCreated(eq("Issuer"), any(), any())).thenReturn("holding#1");
 
         mvc.perform(post("/api/holdings")

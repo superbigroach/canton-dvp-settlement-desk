@@ -44,11 +44,20 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
 
-    // Daml Java Bindings (2.9.4) — the Ledger API client + codegen runtime.
-    // bindings-rxjava transitively brings grpc-netty 1.60, protobuf, rxjava2, so
-    // the gRPC transport (plaintext or TLS) is fully wired with just these two.
-    implementation 'com.daml:bindings-java:2.9.4'
-    implementation 'com.daml:bindings-rxjava:2.9.4'
+    // Daml Java Bindings (3.4) — the Ledger API v2 client + codegen runtime.
+    // bindings-rxjava transitively brings grpc-netty, protobuf, rxjava2, so the gRPC
+    // transport (plaintext or TLS) is fully wired with just these two.
+    //
+    // WHY 3.x AND NOT 2.9.4 ANY MORE. The Daml model is built by SDK 3.4.11 to
+    // Daml-LF 2.2 (it data-depends on the CIP-56 splice-api-token DARs, which only
+    // exist on the 3.x line), and `daml codegen java` for that DAR emits 3.x-only
+    // bindings — they implement `Exercises.Archivable` and carry a
+    // `ContractTypeCompanion.Package`, neither of which exists in 2.9.4. A 2.9.4
+    // client also speaks Ledger API v1, which a Daml 3.4 participant no longer
+    // serves, so it could not have talked to this project's own sandbox regardless.
+    // Kept in lockstep with backend-devnet so ONE codegen output compiles in both.
+    implementation 'com.daml:bindings-java:3.4.0-snapshot.20250714.14008.0.vfe77a32d'
+    implementation 'com.daml:bindings-rxjava:3.4.0-snapshot.20250714.14008.0.vfe77a32d'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'

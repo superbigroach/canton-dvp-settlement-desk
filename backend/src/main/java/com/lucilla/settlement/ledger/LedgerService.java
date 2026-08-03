@@ -3,9 +3,14 @@ package com.lucilla.settlement.ledger;
 import com.daml.ledger.javaapi.data.CommandsSubmission;
 import com.daml.ledger.javaapi.data.ContractFilter;
 import com.daml.ledger.javaapi.data.CreatedEvent;
+import com.daml.ledger.javaapi.data.CumulativeFilter;
+import com.daml.ledger.javaapi.data.Event;
+import com.daml.ledger.javaapi.data.EventFormat;
+import com.daml.ledger.javaapi.data.Filter;
 import com.daml.ledger.javaapi.data.Identifier;
-import com.daml.ledger.javaapi.data.TransactionTree;
-import com.daml.ledger.javaapi.data.TreeEvent;
+import com.daml.ledger.javaapi.data.Transaction;
+import com.daml.ledger.javaapi.data.TransactionFormat;
+import com.daml.ledger.javaapi.data.TransactionShape;
 import com.daml.ledger.javaapi.data.codegen.HasCommands;
 import com.daml.ledger.rxjava.DamlLedgerClient;
 import com.lucilla.settlement.config.LedgerConnection;
@@ -39,10 +44,11 @@ import java.util.UUID;
  * updates over the Ledger API (gRPC) under the correct {@code actAs} party, and
  * reads active contracts back.
  *
- * <p>Submissions use {@code submitAndWaitForTransactionTree} so that, on success,
- * the freshly-created contract id (the DvPAgreement from an Accept, the
- * SettlementBatch from a close, …) can be pulled straight out of the resulting
- * transaction tree and handed back to the caller as the handle for the next step.
+ * <p>Submissions use {@code submitAndWaitForTransaction} with the LEDGER_EFFECTS
+ * shape so that, on success, the freshly-created contract id (the DvPAgreement from
+ * an Accept, the successor ClosingAuction from a SubmitOrder, the SettlementBatch
+ * from a close, …) can be pulled straight out of the resulting transaction and
+ * handed back to the caller as the handle for the next step.
  *
  * <p>This class is the documented <b>integration boundary</b>: its behaviour is
  * exercised by {@code LedgerIntegrationIT} against a running sandbox. The pure
@@ -70,26 +76,32 @@ public class LedgerService {
      * caller needs a handle to (create, or an exercise that creates a successor).
      */
     public String submitForCreated(String actAs, HasCommands command, Identifier createdTemplate) {
-        TransactionTree tree = submit(actAs, command);
+        Transaction tree = submit(actAs, command);
         return firstCreatedOf(tree, createdTemplate).orElseThrow(() ->
                 new LedgerException("no " + createdTemplate.getEntityName()
                         + " contract was created by the transaction"));
     }
 
-    /** Submit a single command as {@code actAs} and block for the transaction tree. */
-    public TransactionTree submit(String actAs, HasCommands command) {
+    /** Submit a single command as {@code actAs} and block for the resulting transaction. */
+    public Transaction submit(String actAs, HasCommands command) {
         DamlLedgerClient client = connection.get();
         CommandsSubmission submission = CommandsSubmission
                 .create(connection.properties().getApplicationId(),
                         UUID.randomUUID().toString(),
+                        Optional.empty(),                 // v2: Optional<String> synchronizerId
                         List.of(command))
                 .withActAs(actAs);
         if (connection.properties().hasJwt()) {
-            submission = submission.withAccessToken(Optional.of(connection.properties().getJwt()));
+            // v2 takes the raw token, not an Optional.
+            submission = submission.withAccessToken(connection.properties().getJwt());
         }
         try {
+            // Ledger API v2 removed the transaction-TREE command endpoints. We ask for a
+            // flat Transaction with the LEDGER_EFFECTS shape, which still carries a
+            // CreatedEvent for every contract the update creates — which is exactly what
+            // firstCreatedOf / createdHoldingsOf / batchOf read back.
             return client.getCommandClient()
-                    .submitAndWaitForTransactionTree(submission)
+                    .submitAndWaitForTransaction(submission, ledgerEffectsFormat(actAs))
                     .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
                     .blockingGet();
         } catch (RuntimeException e) {
@@ -98,10 +110,25 @@ public class LedgerService {
         }
     }
 
+    /**
+     * A LEDGER_EFFECTS transaction format scoped to {@code party}, with a wildcard
+     * (all-templates) filter — the v2 replacement for the old transaction-tree result.
+     * LEDGER_EFFECTS gives the full set of created/exercised nodes (not just the ACS
+     * delta), which is what the decoders below need to recover freshly-created cids.
+     */
+    private TransactionFormat ledgerEffectsFormat(String party) {
+        Filter wildcard = new CumulativeFilter(
+                java.util.Map.of(), java.util.Map.of(),
+                Optional.of(Filter.Wildcard.HIDE_CREATED_EVENT_BLOB));
+        EventFormat eventFormat = new EventFormat(
+                java.util.Map.of(party, wildcard), Optional.empty(), true);
+        return new TransactionFormat(eventFormat, TransactionShape.LEDGER_EFFECTS);
+    }
+
     /** Holdings CREATED by a transaction (cid + amount), decoded from the tree. */
-    public List<HoldingView> createdHoldingsOf(TransactionTree tree) {
+    public List<HoldingView> createdHoldingsOf(Transaction tree) {
         List<HoldingView> out = new ArrayList<>();
-        for (TreeEvent ev : tree.getEventsById().values()) {
+        for (Event ev : tree.getEventsById().values()) {
             if (ev instanceof CreatedEvent created
                     && sameTemplate(created.getTemplateId(), Holding.TEMPLATE_ID)) {
                 Holding.Contract c = Holding.Contract.fromCreatedEvent(created);
@@ -113,8 +140,8 @@ public class LedgerService {
     }
 
     /** The SettlementBatch created by a close transaction, decoded to a flat view. */
-    public Optional<BatchView> batchOf(TransactionTree tree) {
-        for (TreeEvent ev : tree.getEventsById().values()) {
+    public Optional<BatchView> batchOf(Transaction tree) {
+        for (Event ev : tree.getEventsById().values()) {
             if (ev instanceof CreatedEvent created
                     && sameTemplate(created.getTemplateId(), SettlementBatch.TEMPLATE_ID)) {
                 SettlementBatch b = SettlementBatch.Contract.fromCreatedEvent(created).data;
@@ -237,7 +264,7 @@ public class LedgerService {
 
     /** Split {@code holdingCid} and return the cid of the piece worth exactly {@code amount}. */
     private String splitForExact(String owner, String holdingCid, BigDecimal amount) {
-        TransactionTree tree = submit(owner, LedgerCommands.splitHolding(holdingCid, amount));
+        Transaction tree = submit(owner, LedgerCommands.splitHolding(holdingCid, amount));
         return createdHoldingsOf(tree).stream()
                 .filter(h -> h.amount().compareTo(amount) == 0)
                 .map(HoldingView::contractId).findFirst()
@@ -255,15 +282,16 @@ public class LedgerService {
             DamlLedgerClient client = connection.get();
             ContractFilter<ClosingAuction.Contract> filter = ContractFilter.of(ClosingAuction.COMPANION);
             List<AuctionView> out = new ArrayList<>();
-            client.getActiveContractSetClient()
-                    .getActiveContracts(filter, Set.of(party), false)
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false, client.getStateClient().getLedgerEnd().blockingGet())
                     .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
                     .blockingForEach(active -> {
                         for (ClosingAuction.Contract c : active.activeContracts) {
                             ClosingAuction a = c.data;
                             out.add(new AuctionView(c.id.contractId, a.operator, a.instrumentId,
                                     a.cashInstrument, a.session, a.referencePrice, a.participants,
-                                    a.liquidityProvider.orElse(null), a.isOpen));
+                                    a.liquidityProvider.orElse(null),
+                                    a.submittedCount, a.cancelledCount, a.isOpen));
                         }
                     });
             return out;
@@ -276,8 +304,8 @@ public class LedgerService {
             DamlLedgerClient client = connection.get();
             ContractFilter<SealedOrder.Contract> filter = ContractFilter.of(SealedOrder.COMPANION);
             List<OrderView> out = new ArrayList<>();
-            client.getActiveContractSetClient()
-                    .getActiveContracts(filter, Set.of(party), false)
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false, client.getStateClient().getLedgerEnd().blockingGet())
                     .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
                     .blockingForEach(active -> {
                         for (SealedOrder.Contract c : active.activeContracts) {
@@ -307,8 +335,8 @@ public class LedgerService {
             ContractFilter<ImbalanceDisclosure.Contract> filter =
                     ContractFilter.of(ImbalanceDisclosure.COMPANION);
             List<ImbalanceView> out = new ArrayList<>();
-            client.getActiveContractSetClient()
-                    .getActiveContracts(filter, Set.of(party), false)
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false, client.getStateClient().getLedgerEnd().blockingGet())
                     .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
                     .blockingForEach(active -> {
                         for (ImbalanceDisclosure.Contract c : active.activeContracts) {
@@ -328,8 +356,8 @@ public class LedgerService {
             DamlLedgerClient client = connection.get();
             ContractFilter<Instrument.Contract> filter = ContractFilter.of(Instrument.COMPANION);
             List<InstrumentView> out = new ArrayList<>();
-            client.getActiveContractSetClient()
-                    .getActiveContracts(filter, Set.of(party), false)
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false, client.getStateClient().getLedgerEnd().blockingGet())
                     .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
                     .blockingForEach(active -> {
                         for (Instrument.Contract c : active.activeContracts) {
@@ -348,8 +376,8 @@ public class LedgerService {
             DamlLedgerClient client = connection.get();
             ContractFilter<BasketDefinition.Contract> filter = ContractFilter.of(BasketDefinition.COMPANION);
             List<BasketView> out = new ArrayList<>();
-            client.getActiveContractSetClient()
-                    .getActiveContracts(filter, Set.of(party), false)
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false, client.getStateClient().getLedgerEnd().blockingGet())
                     .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
                     .blockingForEach(active -> {
                         for (BasketDefinition.Contract c : active.activeContracts) {
@@ -378,8 +406,8 @@ public class LedgerService {
             DamlLedgerClient client = connection.get();
             ContractFilter<SettlementReceipt.Contract> filter = ContractFilter.of(SettlementReceipt.COMPANION);
             List<ReceiptView> rs = new ArrayList<>();
-            client.getActiveContractSetClient()
-                    .getActiveContracts(filter, Set.of(party), false)
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false, client.getStateClient().getLedgerEnd().blockingGet())
                     .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
                     .blockingForEach(active -> {
                         for (SettlementReceipt.Contract c : active.activeContracts) {
@@ -408,8 +436,8 @@ public class LedgerService {
             DamlLedgerClient client = connection.get();
             ContractFilter<BasketReceipt.Contract> filter = ContractFilter.of(BasketReceipt.COMPANION);
             List<ReceiptView> rs = new ArrayList<>();
-            client.getActiveContractSetClient()
-                    .getActiveContracts(filter, Set.of(party), false)
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false, client.getStateClient().getLedgerEnd().blockingGet())
                     .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
                     .blockingForEach(active -> {
                         for (BasketReceipt.Contract c : active.activeContracts) {
@@ -448,9 +476,9 @@ public class LedgerService {
     }
 
     /** Contract ids of ALL created contracts of a template in a transaction tree. */
-    public List<String> createdOf(TransactionTree tree, Identifier template) {
+    public List<String> createdOf(Transaction tree, Identifier template) {
         List<String> ids = new ArrayList<>();
-        for (TreeEvent ev : tree.getEventsById().values()) {
+        for (Event ev : tree.getEventsById().values()) {
             if (ev instanceof CreatedEvent created && sameTemplate(created.getTemplateId(), template)) {
                 ids.add(created.getContractId());
             }
@@ -458,7 +486,7 @@ public class LedgerService {
         return ids;
     }
 
-    private Optional<String> firstCreatedOf(TransactionTree tree, Identifier template) {
+    private Optional<String> firstCreatedOf(Transaction tree, Identifier template) {
         return createdOf(tree, template).stream().findFirst();
     }
 
@@ -479,13 +507,17 @@ public class LedgerService {
      *
      * <p>Party ids on Canton carry a namespace suffix ({@code Alice::1220ab…}) that
      * changes every allocation, so the desk NEVER hardcodes them — it resolves them
-     * live here for the UI's party picker. A friendly {@code label} is derived from
-     * the display name when present, else the hint prefix before {@code "::"}.
+     * live here for the UI's party picker. This is why the LOCAL build keeps the
+     * admin channel that backend-devnet does without: a local sandbox mints a new
+     * namespace on every run, so a configured roster would go stale immediately.
+     *
+     * <p>Ledger API v2 dropped {@code display_name} from {@code PartyDetails}, so the
+     * friendly {@code label} is the party hint — the prefix before {@code "::"}.
      */
     public List<PartyView> listParties() {
         return withRetry("list parties", () -> {
             var stub = connection.partyManagement();
-            var req = com.daml.ledger.api.v1.admin.PartyManagementServiceOuterClass
+            var req = com.daml.ledger.api.v2.admin.PartyManagementServiceOuterClass
                     .ListKnownPartiesRequest.getDefaultInstance();
             var resp = stub
                     .withDeadlineAfter(30, java.util.concurrent.TimeUnit.SECONDS)
@@ -493,11 +525,9 @@ public class LedgerService {
             List<PartyView> out = new ArrayList<>();
             for (var pd : resp.getPartyDetailsList()) {
                 String party = pd.getParty();
-                String display = pd.getDisplayName();
-                String label = (display != null && !display.isBlank())
-                        ? display
-                        : (party.contains("::") ? party.substring(0, party.indexOf("::")) : party);
-                out.add(new PartyView(party, display == null ? "" : display, label, pd.getIsLocal()));
+                String label = party.contains("::")
+                        ? party.substring(0, party.indexOf("::")) : party;
+                out.add(new PartyView(party, "", label, pd.getIsLocal()));
             }
             return out;
         });
@@ -543,8 +573,8 @@ public class LedgerService {
             DamlLedgerClient client = connection.get();
             ContractFilter<Holding.Contract> filter = ContractFilter.of(Holding.COMPANION);
             List<HoldingView> out = new ArrayList<>();
-            client.getActiveContractSetClient()
-                    .getActiveContracts(filter, Set.of(party), false)
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false, client.getStateClient().getLedgerEnd().blockingGet())
                     .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
                     .blockingForEach(active -> {
                         for (Holding.Contract c : active.activeContracts) {
@@ -639,12 +669,28 @@ public class LedgerService {
             List<String> visibleTo) {
     }
 
-    /** Flat, JSON-friendly view of a ClosingAuction. */
+    /**
+     * Flat, JSON-friendly view of a ClosingAuction.
+     *
+     * <p>{@code referencePrice} is the venue's published ANCHOR, not the price the
+     * cross prints at — RunClose discovers that from the sealed book.
+     *
+     * <p>{@code submittedCount}/{@code cancelledCount} are the ledger's own book
+     * counters (COMPLETE-ORDER COMMITMENT): their difference is exactly how many
+     * orders are live, and RunClose refuses to run unless the supplied book is that
+     * many. {@link #liveOrderCount()} is the number to compare a candidate book against.
+     */
     public record AuctionView(
             String contractId, String operator, String instrumentId, String cashInstrument,
             String session, java.math.BigDecimal referencePrice, List<String> participants,
             String liquidityProvider,   // full party id of the designated DLP, or null
+            long submittedCount, long cancelledCount,
             boolean isOpen) {
+
+        /** Orders RunClose expects to be handed: everything lodged, less everything cancelled. */
+        public long liveOrderCount() {
+            return submittedCount - cancelledCount;
+        }
     }
 
     /** Flat, JSON-friendly view of an ImbalanceDisclosure (the aggregate only). */

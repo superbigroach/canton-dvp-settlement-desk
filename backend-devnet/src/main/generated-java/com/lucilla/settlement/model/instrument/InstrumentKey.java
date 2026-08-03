@@ -13,6 +13,7 @@ import com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders;
 import com.daml.ledger.javaapi.data.codegen.json.JsonLfEncoder;
 import com.daml.ledger.javaapi.data.codegen.json.JsonLfEncoders;
 import com.daml.ledger.javaapi.data.codegen.json.JsonLfReader;
+import java.lang.Deprecated;
 import java.lang.IllegalArgumentException;
 import java.lang.Object;
 import java.lang.Override;
@@ -38,6 +39,14 @@ public class InstrumentKey extends DamlRecord<InstrumentKey> {
     this.depository = depository;
     this.id = id;
     this.version = version;
+  }
+
+  /**
+   * @deprecated since Daml 2.5.0; use {@code valueDecoder} instead
+   */
+  @Deprecated
+  public static InstrumentKey fromValue(Value value$) throws IllegalArgumentException {
+    return valueDecoder().decode(value$);
   }
 
   public static ValueDecoder<InstrumentKey> valueDecoder() throws IllegalArgumentException {

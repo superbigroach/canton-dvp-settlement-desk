@@ -48,9 +48,9 @@ import java.util.Set;
 public final class BasketReceipt extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#canton-dvp-settlement-desk", "Basket", "BasketReceipt");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("f10d37a10d40ff7923e1d7476f49347809a28a7803b3be0c4252b2417f921d12", "Basket", "BasketReceipt");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("cd6202b647482a998c93612fd615750e35250bcfb57272e00d9198ebe014161a", "Basket", "BasketReceipt");
 
-  public static final String PACKAGE_ID = "f10d37a10d40ff7923e1d7476f49347809a28a7803b3be0c4252b2417f921d12";
+  public static final String PACKAGE_ID = "cd6202b647482a998c93612fd615750e35250bcfb57272e00d9198ebe014161a";
 
   public static final String PACKAGE_NAME = "canton-dvp-settlement-desk";
 

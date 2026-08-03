@@ -12,7 +12,6 @@ import com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders;
 import com.daml.ledger.javaapi.data.codegen.json.JsonLfEncoder;
 import com.daml.ledger.javaapi.data.codegen.json.JsonLfEncoders;
 import com.daml.ledger.javaapi.data.codegen.json.JsonLfReader;
-import java.lang.Deprecated;
 import java.lang.IllegalArgumentException;
 import java.lang.Object;
 import java.lang.Override;
@@ -24,20 +23,12 @@ import java.util.List;
 import java.util.Objects;
 
 public class SetReferencePrice extends DamlRecord<SetReferencePrice> {
-  public static final String _packageId = "f10d37a10d40ff7923e1d7476f49347809a28a7803b3be0c4252b2417f921d12";
+  public static final String _packageId = "cd6202b647482a998c93612fd615750e35250bcfb57272e00d9198ebe014161a";
 
   public final BigDecimal newPrice;
 
   public SetReferencePrice(BigDecimal newPrice) {
     this.newPrice = newPrice;
-  }
-
-  /**
-   * @deprecated since Daml 2.5.0; use {@code valueDecoder} instead
-   */
-  @Deprecated
-  public static SetReferencePrice fromValue(Value value$) throws IllegalArgumentException {
-    return valueDecoder().decode(value$);
   }
 
   public static ValueDecoder<SetReferencePrice> valueDecoder() throws IllegalArgumentException {

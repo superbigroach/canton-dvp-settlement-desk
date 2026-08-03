@@ -18,10 +18,17 @@
 --      walking the book — no market impact, no leg risk, instant finality.
 --
 -- MOC IS AN ORDER TYPE, NOT A NEGOTIATED PRICE (the economics that must be right)
---   * The clearing price is EXOGENOUS to the auction: it is the official closing
---     / reference price for the instrument, published on the auction itself
---     (`ClosingAuction.referencePrice`). The operator does NOT get to pick a price
---     per fill — EVERY fill prints at that one uniform price.
+--   * The clearing price is DISCOVERED FROM THE BOOK — it is NOT a number the
+--     operator hands down. `RunClose` UNCROSSES the sealed book and prints the one
+--     price that maximises executable volume (see THE UNCROSS, below). The operator
+--     does not get to pick a price per fill, and does not get to pick the price at
+--     all. EVERY fill prints at that one discovered, uniform price.
+--   * `ClosingAuction.referencePrice` is therefore NOT the answer any more. It is
+--     the venue's published ANCHOR (the prior close / the committee's NAV fix) and
+--     it survives in the algorithm only as (a) one more candidate price and (b) the
+--     tie-breaker of LAST resort when the book itself cannot choose. That demotion
+--     is the whole point: an operator can no longer move the print by moving its
+--     own number — it can only move it to a price the ORDERS already support.
 --   * `matchedQty = min(totalBuyQty, totalSellQty)` crosses. When the two sides
 --     are unequal there is an IMBALANCE: the HEAVY side is rationed PRO-RATA —
 --     each order on it fills `quantity * matchedQty / heavySideTotal` — while the
@@ -44,6 +51,54 @@
 --   cross and settle every matched fill in ONE atomic transaction at the closing
 --   price. Sealed order book + atomic multilateral settlement + instant finality:
 --   a programmable dark pool with none of the leakage of a transparent chain.
+--
+-- THE UNCROSS — HOW THE OFFICIAL PRICE IS DISCOVERED (the headline)
+--   Every real closing cross (Nasdaq, Xetra, the NYSE close) prints the price that
+--   TRADES THE MOST SHARES, and settles ties by a published, mechanical rule. That
+--   is what `discoverPrice` does here, as a PURE function over the sealed book:
+--     1. CANDIDATES — every distinct limit price resting in the book, plus the
+--        auction's reference/anchor price. A uniform-price auction can only ever
+--        print at a price where somebody's limit sits (between two adjacent limits
+--        nothing changes hands), so this candidate set is exhaustive.
+--     2. At each candidate P:  buyVol(P)  = Σ qty of BUYS  with limit >= P
+--                              sellVol(P) = Σ qty of SELLS with limit <= P
+--                              exec(P)    = min(buyVol, sellVol)
+--     3. MAXIMISE exec(P)                       — trade the most shares.
+--     4. TIE → MINIMISE |buyVol − sellVol|      — leave the least stranded interest.
+--     5. TIE → MARKET PRESSURE: if every survivor is buy-heavy, print the HIGHEST
+--        of them; if every survivor is sell-heavy, print the LOWEST. Excess demand
+--        pays up; excess supply gives way. (This is the Xetra rule verbatim.)
+--     6. TIE → nearest the reference/anchor; if STILL tied, the lower price. Rule 6
+--        exists to make the function TOTAL — exactly one answer, always, with no
+--        operator discretion anywhere in the chain.
+--   Away-from-the-cross orders (a buy below the print, a sell above it) simply do
+--   not trade; they are CANCELLED ON CLOSE, exactly as a real MOC book treats them.
+--   `exec == 0` at every candidate means the book does not cross at all: the close
+--   aborts and NOTHING settles.
+--
+-- COMPLETE-ORDER COMMITMENT — why the operator cannot quietly shrink the book
+--   Discovering the price from the book is only worth anything if the book is the
+--   WHOLE book. `RunClose` takes the orders as a list, so on its own nothing stops
+--   a dishonest venue from leaving out the two orders that would have moved the
+--   print. So the auction COUNTS: `submittedCount` goes up on every accepted
+--   submission, `cancelledCount` goes up on every withdrawal/clear, and the close
+--   asserts
+--        length buyOrders + length sellOrders == submittedCount − cancelledCount
+--   plus distinctness (no padding the list with the same order twice). An omitted
+--   order therefore has to be a REAL, on-ledger cancellation — visible to the
+--   trader who placed it, and provable after the fact — instead of a silent gap in
+--   an operator-supplied array.
+--
+--   THE COST, STATED PLAINLY: `SubmitOrder` has to be CONSUMING (archive the
+--   auction, re-create it with the count incremented), which SERIALISES every
+--   submission through one contract. Two traders submitting at the same instant
+--   contend, and one retries. We take that hit deliberately. A closing auction is
+--   not a continuous limit order book — its submissions arrive over minutes and its
+--   value comes from the integrity of ONE print — so paying in contention to be
+--   able to prove the cross ran over the complete book is the right trade. If the
+--   venue ever needed the throughput, the fix is the standard one (shard the
+--   counter into per-participant sub-books and sum them at the close), not to go
+--   back to trusting the operator's array.
 --
 -- HOW THE SETTLEMENT WORKS (the subtle, load-bearing part)
 --   To move a trader's holding you need that trader's authority, and in Daml a
@@ -79,10 +134,133 @@ import Holding
 import Settlement
 import Governance (NavFixing)
 import DA.Optional (optionalToList)
+import DA.List (dedup)
 
 -- Order side. Deriving Eq/Show so choices can compare and reports can print it.
 data Side = Buy | Sell
   deriving (Eq, Show)
+
+-- ===========================================================================
+-- THE UNCROSS — deterministic price discovery, as a PURE function.
+-- ===========================================================================
+-- This is the auction's price formation, lifted OUT of the ledger code so it can
+-- be reasoned about and unit-tested on its own (Test:testPriceDiscoveryUnit calls
+-- it directly, with no ledger, no parties and no holdings). `RunClose` does not
+-- compute a price; it CALLS this, and then settles whatever it says.
+--
+-- The inputs are the anchor and the book. There is no operator input beyond the
+-- anchor, and the anchor can only break a tie the book has already narrowed to a
+-- set of equally-good prices. Same book in, same price out — every time, on every
+-- validator that re-executes the transaction. That determinism is not a nicety on
+-- Canton: every participant re-runs the choice body and must agree on the result.
+-- ---------------------------------------------------------------------------
+
+-- BookOrder — the (side, size, limit) triple the uncross needs, and nothing else.
+-- Deliberately NOT the SealedOrder template: the algorithm must not be able to see
+-- who placed an order, so it is not given the trader.
+data BookOrder = BookOrder
+  with
+    side       : Side
+    quantity   : Decimal
+    limitPrice : Decimal
+  deriving (Eq, Show)
+
+-- CrossResult — what the book would do at ONE candidate price. `imbalance` is
+-- SIGNED (buyVolume − sellVolume): positive is buy-heavy (excess demand), negative
+-- is sell-heavy (excess supply). This is the auction's own scoreboard.
+data CrossResult = CrossResult
+  with
+    price       : Decimal  -- the candidate price
+    executedQty : Decimal  -- min(buyVolume, sellVolume): what would actually trade
+    buyVolume   : Decimal  -- eligible buy interest at this price
+    sellVolume  : Decimal  -- eligible sell interest at this price
+    imbalance   : Decimal  -- buyVolume − sellVolume (signed)
+  deriving (Eq, Show)
+
+-- crossAt — evaluate ONE candidate price against the whole book.
+-- A BUY is eligible at P iff its limit is >= P (it will pay at least P); a SELL is
+-- eligible iff its limit is <= P (it will accept at most... at least P). Note both
+-- volumes are monotone in P — buy interest falls as the price rises, sell interest
+-- rises — which is why exec(P) is single-peaked and the winner is well behaved.
+crossAt : [BookOrder] -> Decimal -> CrossResult
+crossAt book p =
+  let buyVolume  = sum [o.quantity | o <- book, o.side == Buy,  o.limitPrice >= p]
+      sellVolume = sum [o.quantity | o <- book, o.side == Sell, o.limitPrice <= p]
+  in CrossResult with
+       price = p
+       executedQty = min buyVolume sellVolume
+       buyVolume
+       sellVolume
+       imbalance = buyVolume - sellVolume
+
+-- keepAllMaxOn / keepAllMinOn — keep EVERY element whose key is maximal/minimal
+-- (the survivors of one tie-break round). Total: [] in, [] out.
+keepAllMaxOn : Ord k => (a -> k) -> [a] -> [a]
+keepAllMaxOn f xs = case xs of
+  []       -> []
+  (x :: _) -> let best = foldl (\acc y -> max acc (f y)) (f x) xs
+              in filter (\y -> f y == best) xs
+
+keepAllMinOn : Ord k => (a -> k) -> [a] -> [a]
+keepAllMinOn f xs = case xs of
+  []       -> []
+  (x :: _) -> let best = foldl (\acc y -> min acc (f y)) (f x) xs
+              in filter (\y -> f y == best) xs
+
+-- pickMinOn — the single element with the smallest key (first one wins a key tie).
+-- Total: None only for an empty list.
+pickMinOn : Ord k => (a -> k) -> [a] -> Optional a
+pickMinOn f = foldl step None
+  where
+    step acc x = case acc of
+      None   -> Some x
+      Some y -> if f x < f y then Some x else Some y
+
+-- ---------------------------------------------------------------------------
+-- discoverPrice — THE closing/opening cross. Given the anchor (reference) price
+-- and the sealed book, return the uniform price the auction prints at, together
+-- with the volume it trades. `None` means the book does NOT cross at any candidate
+-- (no price trades a single share) — the caller must then abort the close.
+--
+-- TIE-BREAK ORDER (each stage only ever sees the survivors of the last):
+--   1. maximum executable volume        — trade the most shares
+--   2. minimum |imbalance|              — strand the least interest
+--   3. market pressure                  — all buy-heavy: print the HIGHEST survivor
+--                                         all sell-heavy: print the LOWEST
+--   4. nearest the anchor, then lower   — totality guarantee
+-- Rule 4 is a backstop, not a market rule: because the anchor is itself in the
+-- candidate set and exec(P) is single-peaked, a well-formed book that crosses on
+-- both sides of the anchor keeps the anchor itself alive through stages 1–3, so an
+-- exact distance tie cannot arise. It is written anyway so the function is TOTAL
+-- and never has to "pick one" arbitrarily.
+-- ---------------------------------------------------------------------------
+discoverPrice : Decimal -> [BookOrder] -> Optional CrossResult
+discoverPrice referencePrice book =
+  let
+    -- 1. CANDIDATES: every limit resting in the book, plus the anchor. `dedup`
+    --    keeps first occurrences, so the candidate list is order-deterministic.
+    candidates = dedup (referencePrice :: map (\o -> o.limitPrice) book)
+    -- 2. Score every candidate; keep only the ones that actually trade something.
+    crossable  = filter (\c -> c.executedQty > 0.0) (map (crossAt book) candidates)
+    -- 3. MAXIMUM VOLUME — the primary rule of every real closing cross.
+    maxVolume  = keepAllMaxOn (\c -> c.executedQty) crossable
+    -- 4. MINIMUM IMBALANCE — of the equally-liquid prices, the one that leaves the
+    --    least unfilled interest behind.
+    minImb     = keepAllMinOn (\c -> abs c.imbalance) maxVolume
+  in case minImb of
+       [] -> None      -- nothing crosses anywhere: there is no auction price
+       _  ->
+         let
+           -- 5. MARKET PRESSURE — if the residual imbalance points the same way at
+           --    every survivor, the side with the excess sets the direction: excess
+           --    demand prints at the top of the range, excess supply at the bottom.
+           pressured
+             | all (\c -> c.imbalance > 0.0) minImb = keepAllMaxOn (\c -> c.price) minImb
+             | all (\c -> c.imbalance < 0.0) minImb = keepAllMinOn (\c -> c.price) minImb
+             | otherwise                            = minImb
+         -- 6. NEAREST THE ANCHOR, then the lower price. The reference price's last
+         --    and only remaining job.
+         in pickMinOn (\c -> (abs (c.price - referencePrice), c.price)) pressured
 
 -- ---------------------------------------------------------------------------
 -- ClosingAuction — the venue's call auction for one instrument.
@@ -97,7 +275,14 @@ template ClosingAuction
                               -- Purely a LABEL: the crossing/matching logic is IDENTICAL for
                               -- both. It only determines whether the printed uniform price is
                               -- reported as the OFFICIAL OPEN or the OFFICIAL CLOSE / NAV.
-    referencePrice : Decimal  -- the official OPEN/CLOSE price every fill prints at
+    -- THE ANCHOR, NOT THE ANSWER. Before price discovery this field WAS the print.
+    -- Now `RunClose` uncrosses the book and prints the volume-maximising price; this
+    -- number survives as the venue's published anchor (the prior close, or the
+    -- committee's attested NAV when `fixingRef` is set): one more candidate price,
+    -- and the tie-breaker of last resort. It also sizes the indicative imbalance the
+    -- DLP is shown. An operator moving THIS no longer moves the print unless the
+    -- ORDERS agree.
+    referencePrice : Decimal  -- the published reference / anchor price
     participants   : [Party]  -- traders permitted to submit sealed orders
     -- LIQUIDITY WITHOUT LEAKAGE. Optionally, the venue designates ONE party as the
     -- auction's Designated Liquidity Provider (DLP). The DLP — and ONLY the DLP
@@ -116,6 +301,17 @@ template ClosingAuction
     -- committee fix, not one venue's opinion. `None` = a venue-set price (unchanged
     -- behaviour); the crossing/settlement logic is IDENTICAL either way.
     fixingRef      : Optional (ContractId NavFixing)
+    -- COMPLETE-ORDER COMMITMENT (the trust hole `RunClose` used to have).
+    -- The venue supplies the order lists to the close, so the ledger must be able to
+    -- tell whether that list IS the book. These two counters are that ledger fact:
+    --   submittedCount — incremented by EVERY accepted SubmitOrder;
+    --   cancelledCount — incremented by EVERY withdrawal (WithdrawOrder) or venue
+    --                    clear (ClearOrder), each of which archives a live order.
+    -- `RunClose` then asserts the supplied lists number exactly the live book. An
+    -- order can only leave the book by being CANCELLED ON THE LEDGER, where the
+    -- trader who placed it can see it happen.
+    submittedCount : Int      -- sealed orders accepted into this book, ever
+    cancelledCount : Int      -- of those, how many were withdrawn or cleared
     isOpen         : Bool     -- True while the sealed-order window accepts orders
   where
     signatory operator
@@ -125,12 +321,34 @@ template ClosingAuction
     -- can see the auction it is providing liquidity into.
     observer (auditor :: participants) ++ optionalToList liquidityProvider
 
-    ensure referencePrice > 0.0 && (session == "Open" || session == "Close")
+    ensure referencePrice > 0.0
+        && (session == "Open" || session == "Close")
+        -- The book can never have been un-submitted, and you cannot cancel an order
+        -- that was never lodged: 0 <= cancelledCount <= submittedCount, always.
+        && submittedCount >= 0
+        && cancelledCount >= 0
+        && cancelledCount <= submittedCount
 
     -- SUBMIT ORDER — a participant lodges a SEALED order and pre-commits the
-    -- holding it will deliver (cash for a buy, the asset for a sell). Nonconsuming
-    -- so many traders submit against the same auction.
-    nonconsuming choice SubmitOrder : ContractId SealedOrder
+    -- holding it will deliver (cash for a buy, the asset for a sell).
+    --
+    -- CONSUMING, AND WHY (the deliberate trade-off — say it out loud).
+    -- This used to be nonconsuming, so every trader could submit against the same
+    -- auction contract in parallel. It is now CONSUMING: it archives the auction and
+    -- re-creates it with `submittedCount` incremented, and hands the caller back the
+    -- NEW auction cid alongside their order. The price of that is CONTENTION —
+    -- submissions to one book now serialise through one contract, and two traders
+    -- racing means one of them re-reads the auction and retries.
+    -- We accept it knowingly. Without an on-ledger count of what was lodged, the
+    -- close is a promise that the operator handed over every order; with it, the
+    -- close is a PROOF. A call auction collects interest over minutes and produces a
+    -- single print — it is not a continuous matching engine — so integrity of the
+    -- print is worth far more here than submission throughput. (If a venue ever did
+    -- outgrow it, the answer is to shard the counter per participant and sum the
+    -- shards at the close; the answer is NOT to trust the operator's array again.)
+    --
+    -- Returns (new auction cid, sealed order cid).
+    choice SubmitOrder : (ContractId ClosingAuction, ContractId SealedOrder)
       with
         trader     : Party              -- the submitting participant
         side       : Side               -- Buy or Sell
@@ -154,17 +372,89 @@ template ClosingAuction
         -- later order, split/merge, or re-submission can consume or re-create the
         -- holding this order pinned — so the cross always finds valid backing.
         --   * a SELL reserves `quantity` of the ASSET it will deliver;
-        --   * a BUY reserves `quantity * referencePrice` of CASH — the most it can
-        --     ever owe, since every fill prints at the uniform `referencePrice`
-        --     (an eligible buy has limitPrice >= referencePrice, so this covers it).
+        --   * a BUY reserves `quantity * limitPrice` of CASH.
+        -- BUYING POWER IS CHECKED AGAINST THE LIMIT, NOT THE REFERENCE — this is a
+        -- direct consequence of price discovery, and it is how a real desk does it.
+        -- The print is no longer pinned to `referencePrice`, so reserving at the
+        -- reference would leave a buyer short the moment the cross uncrossed above
+        -- it. A buy can only ever execute at a price <= its own limit, so
+        -- `quantity * limitPrice` is the exact worst case: enough at every price the
+        -- order can trade at, and never more. Any unspent cash comes straight back
+        -- to the buyer as change in the settlement transaction.
         let reserveAmount = case side of
               Sell -> quantity
-              Buy  -> quantity * referencePrice
+              Buy  -> quantity * limitPrice
         reserved <- reserveExact holdingCid reserveAmount operator
-        create SealedOrder with
+        orderCid <- create SealedOrder with
           operator; auditor; trader
           instrumentId; cashInstrument; session
           side; quantity; limitPrice; holdingCid = reserved
+        -- Re-create the auction with the book count incremented: the ledger now
+        -- records that one more order was lodged, and the close cannot pretend
+        -- otherwise.
+        auctionCid <- create this with submittedCount = submittedCount + 1
+        pure (auctionCid, orderCid)
+
+    -- WITHDRAW ORDER — a trader pulls their OWN resting order, THROUGH the auction.
+    -- ------------------------------------------------------------------------
+    -- Cancellation has to be routed through the auction, because that is the only
+    -- contract that carries the book count. `SealedOrder.Cancel` is therefore
+    -- controlled by `trader, operator` — a trader cannot archive their order behind
+    -- the venue's back, and this choice is where the two authorities meet: the
+    -- trader controls it, and the operator's authority arrives because the operator
+    -- signs the auction being exercised. The order is archived, the reserved backing
+    -- is unlocked back to the trader, and `cancelledCount` goes up in the SAME
+    -- transaction — the count can never drift from the live book.
+    --
+    -- NO-CANCEL PERIOD: withdrawal is only allowed while the window is OPEN. Once
+    -- the venue seals the book, resting interest is committed — you cannot see the
+    -- cross coming and pull out of it. That is the rule on every real closing
+    -- auction, and here it is enforced by the ledger rather than by a rulebook.
+    --
+    -- Returns (new auction cid, the unlocked holding).
+    choice WithdrawOrder : (ContractId ClosingAuction, ContractId Holding)
+      with
+        trader   : Party                   -- the order's owner (the controller)
+        orderCid : ContractId SealedOrder   -- their resting order
+      controller trader
+      do
+        assertMsg "orders can only be withdrawn while the window is open" isOpen
+        o <- fetch orderCid
+        assertMsg "you may only withdraw your OWN order"      (o.trader == trader)
+        assertMsg "order rests in a different venue's book"    (o.operator == operator)
+        assertMsg "order is for a different instrument"        (o.instrumentId == instrumentId)
+        assertMsg "order uses a different cash instrument"     (o.cashInstrument == cashInstrument)
+        assertMsg "order rests in a different session"         (o.session == session)
+        unlocked   <- exercise orderCid Cancel
+        auctionCid <- create this with cancelledCount = cancelledCount + 1
+        pure (auctionCid, unlocked)
+
+    -- CLEAR ORDER — the venue drops a resting order off the book, on the record.
+    -- ------------------------------------------------------------------------
+    -- The venue's legitimate "clear the book" power, now ACCOUNTED FOR. This is the
+    -- ONLY way the operator can shrink the book before a close, and it costs the
+    -- operator something: the order is archived on the ledger, its trader sees it
+    -- gone, and `cancelledCount` records that the venue did it. A silent omission
+    -- from `RunClose`'s array is no longer available — it has become a signed,
+    -- visible act.
+    --
+    -- (A venue that instead exercises `SealedOrder.VenueCancel` DIRECTLY, bypassing
+    -- this choice, does not gain anything: the count then over-states the live book,
+    -- and `RunClose` demands more orders than exist, so the close simply cannot run
+    -- until the venue reconciles. The bypass is fail-SAFE — it can stop a print, it
+    -- can never manufacture one over a truncated book.)
+    choice ClearOrder : ContractId ClosingAuction
+      with
+        orderCid : ContractId SealedOrder
+      controller operator
+      do
+        o <- fetch orderCid
+        assertMsg "order rests in a different venue's book"    (o.operator == operator)
+        assertMsg "order is for a different instrument"        (o.instrumentId == instrumentId)
+        assertMsg "order uses a different cash instrument"     (o.cashInstrument == cashInstrument)
+        assertMsg "order rests in a different session"         (o.session == session)
+        exercise orderCid VenueCancel
+        create this with cancelledCount = cancelledCount + 1
 
     -- PUBLISH IMBALANCE — SELECTIVE NET-IMBALANCE DISCLOSURE (the DLP feature).
     -- The operator computes the NET imbalance of the resting sealed book — the
@@ -180,6 +470,16 @@ template ClosingAuction
     -- copied onto the disclosure. The DLP learns "the book is net long/short N units
     -- of this instrument", nothing more. It offsets by lodging an ordinary
     -- SealedOrder on the opposite side; that order is as private as any other.
+    --
+    -- SCOPE, STATED HONESTLY: this is the GROSS net of the resting book — every
+    -- order counted, regardless of where its limit sits — quoted against the
+    -- published anchor. It is deliberately NOT the uncross. A real venue publishes
+    -- the indicative equilibrium price and the imbalance AT it (Nasdaq's NOII), and
+    -- `discoverPrice` is right there to compute exactly that on the same inputs; the
+    -- reason it is not wired in here is that the indicative price is itself an
+    -- information leak — it tells the DLP where the cross is heading, which is a
+    -- policy decision for the venue, not a mechanical one. The aggregate below
+    -- leaks strictly less.
     nonconsuming choice PublishImbalance : ContractId ImbalanceDisclosure
       with
         restingOrders : [ContractId SealedOrder]  -- every resting order for THIS book
@@ -219,48 +519,52 @@ template ClosingAuction
       controller operator
       do create this with isOpen = False
 
-    -- RUN CLOSE — the headline. The operator supplies the sealed buy and sell
-    -- orders; the auction crosses `min(totalBuy, totalSell)` at the ONE published
-    -- closing price, pro-rating the heavy side. Every fill settles in THIS single
-    -- transaction. All-or-nothing: if any leg fails a check, the WHOLE close rolls
-    -- back — no partial print.
+    -- RUN CLOSE — the headline. The operator supplies the WHOLE sealed book; the
+    -- auction UNCROSSES it, prints the volume-maximising price, and crosses
+    -- `min(buyVol, sellVol)` at that one price, pro-rating the heavy side. Every
+    -- fill settles in THIS single transaction. All-or-nothing: if any leg fails a
+    -- check, the WHOLE close rolls back — no partial print.
+    --
+    -- The operator supplies the ORDERS. It does not supply the PRICE, and it cannot
+    -- supply a subset of the orders (see the completeness assertion below).
     choice RunClose : ContractId SettlementBatch
       with
-        buyOrders  : [ContractId SealedOrder]  -- every eligible sealed BUY order
-        sellOrders : [ContractId SealedOrder]  -- every eligible sealed SELL order
+        buyOrders  : [ContractId SealedOrder]  -- EVERY live sealed BUY in this book
+        sellOrders : [ContractId SealedOrder]  -- EVERY live sealed SELL in this book
       controller operator
       do
         assertMsg "close only runs on a sealed window" (not isOpen)
-        -- ONE uniform clearing price for the entire cross: the published close.
-        let closingPrice = referencePrice
 
-        -- COMMITTEE-ATTESTED CLOSE. If this auction is bound to a governance fixing,
-        -- prove the price is a genuine K-of-N attestation for THIS book before any
-        -- leg moves: the fix must be for the same instrument/cash/session, its price
-        -- must equal the price we are about to print, and it must carry at least its
-        -- own threshold of distinct member signatures. A mismatch aborts the WHOLE
-        -- close (atomic: nothing settles). A plain venue-priced auction (None) skips
-        -- this and behaves exactly as before.
-        case fixingRef of
-          None -> pure ()
-          Some fCid -> do
-            f <- fetch fCid
-            assertMsg "attested fix is for a different instrument" (f.instrumentId == instrumentId)
-            assertMsg "attested fix uses a different cash unit"     (f.cashInstrument == cashInstrument)
-            assertMsg "attested fix is for a different session"     (f.session == session)
-            assertMsg "close price does not match the attested NAV" (f.price == closingPrice)
-            assertMsg "fix does not carry enough member attestations"
-              (length f.attestors >= f.threshold)
+        -- ------------------------------------------------------------------
+        -- COMPLETE-ORDER COMMITMENT — the book, the whole book, nothing but it.
+        -- ------------------------------------------------------------------
+        -- The counters were written by the SUBMISSIONS and the CANCELLATIONS, not by
+        -- this choice, so the operator cannot tune them here. Omit an order and the
+        -- arithmetic fails; the only way to make it balance again is to genuinely
+        -- CANCEL that order on the ledger, where its trader can see it.
+        -- Distinctness closes the obvious dodge — padding the list with the same
+        -- order twice to make the count work. (Residual assumption, stated honestly:
+        -- one live auction per (operator, instrument, cash unit, session). The book
+        -- checks below identify an order's book by exactly those four fields.)
+        assertMsg "the close must run over the COMPLETE book"
+          (length buyOrders + length sellOrders == submittedCount - cancelledCount)
+        let allOrderCids = buyOrders ++ sellOrders
+        assertMsg "the same order was supplied more than once"
+          (length (dedup allOrderCids) == length allOrderCids)
 
-        -- Fetch AND validate every order (side, instrument, venue, cash unit, and
-        -- price eligibility). An ineligible order aborts the whole close.
+        -- Fetch AND validate every order (side, instrument, venue, cash unit). NOTE
+        -- what is deliberately NOT asserted any more: price eligibility. Before
+        -- discovery the operator declared the price, so any order that did not cross
+        -- it was an error. Now the price comes OUT of the book, so orders away from
+        -- the eventual print are normal, expected, and must be present for the
+        -- uncross to be computed over the true book — they simply do not trade.
         buys <- forA buyOrders (\cid -> do
           o <- fetch cid
           assertMsg "buy list contains a non-buy order"          (o.side == Buy)
           assertMsg "buy order is for a different instrument"     (o.instrumentId == instrumentId)
           assertMsg "buy order belongs to a different operator"   (o.operator == operator)
           assertMsg "buy order uses a different cash instrument"  (o.cashInstrument == cashInstrument)
-          assertMsg "buy limit is below the closing price"        (o.limitPrice >= closingPrice)
+          assertMsg "buy order rests in a different session"      (o.session == session)
           pure (cid, o))
         sells <- forA sellOrders (\cid -> do
           o <- fetch cid
@@ -268,21 +572,77 @@ template ClosingAuction
           assertMsg "sell order is for a different instrument"     (o.instrumentId == instrumentId)
           assertMsg "sell order belongs to a different operator"   (o.operator == operator)
           assertMsg "sell order uses a different cash instrument"  (o.cashInstrument == cashInstrument)
-          assertMsg "sell limit is above the closing price"        (o.limitPrice <= closingPrice)
+          assertMsg "sell order rests in a different session"      (o.session == session)
           pure (cid, o))
 
-        let totalBuy  = sum [o.quantity | (_, o) <- buys]
-        let totalSell = sum [o.quantity | (_, o) <- sells]
-        let matched   = min totalBuy totalSell
+        -- ------------------------------------------------------------------
+        -- THE UNCROSS — price discovery. This is where the close gets its price.
+        -- ------------------------------------------------------------------
+        -- The book goes in stripped to (side, size, limit): the algorithm cannot see
+        -- WHO placed anything, so it cannot favour anyone. Out comes the one price
+        -- that trades the most, with the published tie-breaks doing the rest and the
+        -- reference/anchor demoted to the last of them. If nothing crosses anywhere,
+        -- there is no auction price and the whole close aborts.
+        let book = [ BookOrder with side = o.side; quantity = o.quantity; limitPrice = o.limitPrice
+                   | (_, o) <- buys ++ sells ]
+        cross <- case discoverPrice referencePrice book of
+          Some c -> pure c
+          None   -> abort "there is no crossing volume"
+        let closingPrice = cross.price
+        let matched      = cross.executedQty
         assertMsg "there is no crossing volume" (matched > 0.0)
+
+        -- COMMITTEE-ATTESTED CLOSE. If this auction is bound to a governance fixing,
+        -- prove the ANCHOR is a genuine K-of-N attestation for THIS book before any
+        -- leg moves: the fix must be for the same instrument/cash/session, its price
+        -- must equal the auction's published `referencePrice`, and it must carry at
+        -- least its own threshold of distinct member signatures. A mismatch aborts
+        -- the WHOLE close (atomic: nothing settles).
+        --
+        -- WHAT THIS MEANS NOW, PRECISELY. The committee no longer dictates the
+        -- print — the BOOK does. What the committee attests is the anchor the
+        -- auction is allowed to run against: the number that enters the candidate
+        -- set and breaks a tie the orders could not. So a venue cannot slip its own
+        -- reference into a governed auction, and equally cannot hide behind the fix
+        -- to print away from the book. Both halves are ledger-enforced, and
+        -- Test:testCommitteeAttestedClose proves the print can legitimately land
+        -- AWAY from the attested number when the book says so.
+        case fixingRef of
+          None -> pure ()
+          Some fCid -> do
+            f <- fetch fCid
+            assertMsg "attested fix is for a different instrument" (f.instrumentId == instrumentId)
+            assertMsg "attested fix uses a different cash unit"     (f.cashInstrument == cashInstrument)
+            assertMsg "attested fix is for a different session"     (f.session == session)
+            assertMsg "auction anchor does not match the attested NAV" (f.price == referencePrice)
+            assertMsg "fix does not carry enough member attestations"
+              (length f.attestors >= f.threshold)
+
+        -- ELIGIBILITY AT THE DISCOVERED PRICE. A buy trades iff its limit is >= the
+        -- print; a sell iff its limit is <= it. Everything else is away from the
+        -- cross and is cancelled on close further down.
+        let eligibleBuys  = filter (\(_, o) -> o.limitPrice >= closingPrice) buys
+        let eligibleSells = filter (\(_, o) -> o.limitPrice <= closingPrice) sells
+        let awayFromCross = filter (\(_, o) -> o.limitPrice <  closingPrice) buys
+                         ++ filter (\(_, o) -> o.limitPrice >  closingPrice) sells
+
+        let totalBuy  = sum [o.quantity | (_, o) <- eligibleBuys]
+        let totalSell = sum [o.quantity | (_, o) <- eligibleSells]
+        -- Belt and braces: the volumes the settlement is about to move MUST be the
+        -- volumes the uncross scored this price on. If these ever disagreed, the
+        -- print and the fills would be describing two different books.
+        assertMsg "settled buy volume does not match the discovered cross"
+          (totalBuy == cross.buyVolume)
+        assertMsg "settled sell volume does not match the discovered cross"
+          (totalSell == cross.sellVolume)
 
         -- PRO-RATA the heavy side to `matched`; the light side fills in full.
         -- (quantity * matched) is formed BEFORE dividing to stay exact when the
         -- ration divides evenly.)
         let buyFillOf  q = if totalBuy  > totalSell then (q * matched) / totalBuy  else q
         let sellFillOf q = if totalSell > totalBuy then (q * matched) / totalSell else q
-        let buyFills  = [(cid, o, buyFillOf  o.quantity) | (cid, o) <- buys]
-        let sellFills = [(cid, o, sellFillOf o.quantity) | (cid, o) <- sells]
+        let buyFills  = [(cid, o, buyFillOf  o.quantity) | (cid, o) <- eligibleBuys]
+        let sellFills = [(cid, o, sellFillOf o.quantity) | (cid, o) <- eligibleSells]
 
         -- 1. PLEDGE each pro-rated leg to the venue (moves inside each order's own
         --    choice, so the trader's authority is present); 2. POOL by merging.
@@ -298,6 +658,16 @@ template ClosingAuction
         --    guarantees each pool drains exactly (bought == sold == matched).
         distribute assetPool [(o.trader, q)                | (_, o, q) <- buyFills]
         distribute cashPool  [(o.trader, q * closingPrice) | (_, o, q) <- sellFills]
+
+        -- 4. CANCEL ON CLOSE — the orders that sat away from the print never traded,
+        --    so they are cleared off the book here, in the same transaction as the
+        --    cross. This is the standard MOC treatment (a closing order that does
+        --    not cross does not rest into the next session), and it matters
+        --    mechanically now that the auction itself is consumed by this choice:
+        --    an order left alive would have no auction left to be withdrawn
+        --    through. Nobody loses anything — the archive touches the ORDER, never
+        --    the balance, so the reserved holding stays the trader's, free to spend.
+        _ <- forA awayFromCross (\(cid, _) -> exercise cid VenueCancel)
 
         -- AUDIT — one venue-signed receipt per filled order (the exchange confirm),
         -- then the immutable batch record of the whole close.
@@ -381,16 +751,35 @@ template SealedOrder
     -- backing is UNLOCKED — transferring the reserved slice back to the trader
     -- re-creates it PRIVATE (disclosedTo reset to []), so the balance is freely
     -- theirs again to spend or re-commit and the venue no longer observes it.
-    -- Only the order owner may withdraw it. Returns the unlocked holding.
+    -- Returns the unlocked holding.
+    --
+    -- CONTROLLED BY trader AND operator — not the trader alone, which is a change
+    -- forced by the complete-order commitment. The book count lives on the
+    -- ClosingAuction, so an order that vanished without the auction knowing would
+    -- leave the count over-stating the live book and no close could ever run. The
+    -- two authorities meet in exactly one place: `ClosingAuction.WithdrawOrder`,
+    -- where the trader is the controller and the operator's authority comes from
+    -- signing the auction. So the trader keeps the right to withdraw — it is still
+    -- the trader who initiates, and the venue cannot cancel for them — but the
+    -- withdrawal and the count now move together or not at all. Go through
+    -- `WithdrawOrder`; this choice is the mechanism, not the entry point.
     choice Cancel : ContractId Holding
-      controller trader
+      controller trader, operator
       do exercise holdingCid Transfer with newOwner = trader
 
     -- VENUE CANCEL / CLEAR BOOK — the operator clears a resting order from the
-    -- book (e.g. a "clear the book" for an instrument, or dropping a stale order
-    -- so the cross is not aborted by it). The operator signs this order, so it has
+    -- book (a "clear the book" for an instrument, or the cancel-on-close of an
+    -- order that sat away from the print). The operator signs this order, so it has
     -- the authority to archive it. The trader's reserved holding is left intact and
     -- remains the trader's — clearing the book cancels the ORDER, not the balance.
+    --
+    -- USE `ClosingAuction.ClearOrder`, which wraps this and books the cancellation
+    -- into `cancelledCount`. Exercising this choice directly is possible (the venue
+    -- is a signatory and we cannot take that away) but it is self-defeating rather
+    -- than exploitable: the count would then over-state the live book, `RunClose`
+    -- would demand more orders than exist, and the venue's own close would be
+    -- unable to run. It buys an operator nothing — there is no path from here to
+    -- printing a cross over a book with orders quietly missing from it.
     choice VenueCancel : ()
       controller operator
       do pure ()

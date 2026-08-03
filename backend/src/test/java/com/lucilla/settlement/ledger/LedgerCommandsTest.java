@@ -80,8 +80,49 @@ class LedgerCommandsTest {
 
         assertThat(cmd.getTemplateId().getEntityName()).isEqualTo("ClosingAuction");
         // operator, auditor, instrumentId, cashInstrument, session, referencePrice,
-        // participants, liquidityProvider, fixingRef, isOpen
-        assertThat(cmd.getCreateArguments().getFields()).hasSize(10);
+        // participants, liquidityProvider, fixingRef, submittedCount, cancelledCount, isOpen
+        assertThat(cmd.getCreateArguments().getFields()).hasSize(12);
+    }
+
+    /**
+     * COMPLETE-ORDER COMMITMENT: a brand-new book starts with both counters at zero.
+     * These are ledger-maintained (SubmitOrder / WithdrawOrder / ClearOrder move them)
+     * and RunClose asserts the supplied book equals their difference, so opening an
+     * auction with anything other than 0/0 would let the venue pre-cook the count.
+     */
+    @Test
+    void createAuction_startsBookCountersAtZero() {
+        var cmd = asCreate(LedgerCommands.createAuction(
+                "Venue", "Auditor", "DEMO:AAPL", "USD",
+                "Close", new BigDecimal("255.0"), List.of("Alice", "Bob"),
+                Optional.empty(), Optional.empty()));
+
+        var fields = cmd.getCreateArguments().getFieldsMap();
+        assertThat(fields.get("submittedCount").asInt64().orElseThrow().getValue()).isZero();
+        assertThat(fields.get("cancelledCount").asInt64().orElseThrow().getValue()).isZero();
+    }
+
+    /**
+     * A trader's withdrawal must go THROUGH the auction, not through
+     * {@code SealedOrder.Cancel}: only the auction choice books the cancellation into
+     * {@code cancelledCount} in the same transaction, keeping the count and the live
+     * book in step so a later RunClose can still satisfy its completeness assertion.
+     */
+    @Test
+    void withdrawOrder_exercisesWithdrawOrderOnTheAuction() {
+        var cmd = asExercise(LedgerCommands.withdrawOrder("auction#1", "Alice", "order#9"));
+        assertThat(cmd.getChoice()).isEqualTo("WithdrawOrder");
+        assertThat(cmd.getContractId()).isEqualTo("auction#1");
+        assertThat(cmd.getTemplateId().getEntityName()).isEqualTo("ClosingAuction");
+    }
+
+    /** The venue's clear likewise routes through the auction so cancelledCount moves with it. */
+    @Test
+    void clearOrder_exercisesClearOrderOnTheAuction() {
+        var cmd = asExercise(LedgerCommands.clearOrder("auction#1", "order#9"));
+        assertThat(cmd.getChoice()).isEqualTo("ClearOrder");
+        assertThat(cmd.getContractId()).isEqualTo("auction#1");
+        assertThat(cmd.getTemplateId().getEntityName()).isEqualTo("ClosingAuction");
     }
 
     @Test

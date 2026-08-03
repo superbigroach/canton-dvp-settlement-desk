@@ -116,6 +116,13 @@ public final class LedgerCommands {
                 // RunClose proves the price is a committee attestation, not the venue's
                 // unilateral number. Empty = a plain venue-priced close (unchanged).
                 fixingRefCid.map(NavFixing.ContractId::new),
+                // COMPLETE-ORDER COMMITMENT — a brand-new book has had nothing lodged
+                // and nothing cancelled. The ledger maintains both counters from here
+                // (SubmitOrder increments the first, WithdrawOrder/ClearOrder the
+                // second) and RunClose asserts the supplied book numbers exactly
+                // submittedCount - cancelledCount, so neither may be set by the client.
+                /* submittedCount = */ 0L,
+                /* cancelledCount = */ 0L,
                 /* isOpen = */ Boolean.TRUE)
                 .create();
     }
@@ -133,6 +140,23 @@ public final class LedgerCommands {
         };
     }
 
+    /**
+     * Lodge a sealed order into the book.
+     *
+     * <p><b>CONSUMING.</b> {@code SubmitOrder} archives the auction and re-creates it
+     * with {@code submittedCount} incremented, returning
+     * {@code (new ClosingAuction cid, SealedOrder cid)}. The auction cid passed in is
+     * therefore <b>dead</b> once this succeeds: callers submitting several orders MUST
+     * thread the NEW auction cid (read it out of the transaction with
+     * {@code closingAuctionTemplateId()}) into the next call, or they will exercise a
+     * consumed contract.
+     *
+     * <p>The trader's backing is reserved by the ledger at
+     * {@code quantity * limitPrice} for a BUY (never {@code referencePrice} — the
+     * cross is discovered from the book and can print above the anchor) and at
+     * {@code quantity} of the asset for a SELL. Fund the committed holding
+     * accordingly.
+     */
     public static Update<?> submitOrder(
             String auctionCid, String trader, Side side,
             BigDecimal quantity, BigDecimal limitPrice, String holdingCid) {
@@ -146,17 +170,53 @@ public final class LedgerCommands {
         return new ClosingAuction.ContractId(auctionCid).exerciseCloseBidding();
     }
 
-    /** Trader withdraws their OWN resting order; unlocks the reserved holding. */
-    public static Update<?> cancelOrder(String orderCid) {
-        return new SealedOrder.ContractId(orderCid).exerciseCancel();
+    /**
+     * Trader withdraws their OWN resting order; unlocks the reserved holding.
+     *
+     * <p>Routed THROUGH the auction ({@code ClosingAuction.WithdrawOrder}), not through
+     * {@code SealedOrder.Cancel} directly. Cancellation has to book itself into the
+     * auction's {@code cancelledCount} in the SAME transaction, otherwise the count
+     * over-states the live book and {@code RunClose} — which asserts
+     * {@code buys + sells == submittedCount - cancelledCount} — can never run again.
+     * {@code SealedOrder.Cancel} is now controlled by {@code trader, operator}
+     * jointly, and this choice is the only place those two authorities meet.
+     *
+     * <p><b>CONSUMING on the auction</b>: returns
+     * {@code (new ClosingAuction cid, unlocked Holding cid)} — thread the new auction
+     * cid forward. Actor is the trader.
+     */
+    public static Update<?> withdrawOrder(String auctionCid, String trader, String orderCid) {
+        return new ClosingAuction.ContractId(auctionCid)
+                .exerciseWithdrawOrder(trader, new SealedOrder.ContractId(orderCid));
     }
 
-    /** Venue clears a resting order off the book (operator-controlled). */
-    public static Update<?> venueCancelOrder(String orderCid) {
-        return new SealedOrder.ContractId(orderCid).exerciseVenueCancel();
+    /**
+     * Venue clears a resting order off the book (operator-controlled).
+     *
+     * <p>Routed THROUGH the auction ({@code ClosingAuction.ClearOrder}) for the same
+     * reason as {@link #withdrawOrder}: it archives the order AND increments
+     * {@code cancelledCount} atomically. Exercising {@code SealedOrder.VenueCancel}
+     * directly is fail-safe but self-defeating — the count would then demand more
+     * orders than exist and no close could run.
+     *
+     * <p><b>CONSUMING on the auction</b>: returns the new ClosingAuction cid, which
+     * must be threaded into the next clear. Actor is the operator.
+     */
+    public static Update<?> clearOrder(String auctionCid, String orderCid) {
+        return new ClosingAuction.ContractId(auctionCid)
+                .exerciseClearOrder(new SealedOrder.ContractId(orderCid));
     }
 
-    /** Run the uniform-price cross over the sealed book → a SettlementBatch. */
+    /**
+     * Run the uniform-price cross over the sealed book → a SettlementBatch.
+     *
+     * <p><b>THE LISTS MUST BE THE COMPLETE BOOK.</b> {@code RunClose} asserts
+     * {@code length buys + length sells == submittedCount - cancelledCount} and
+     * rejects duplicates, so passing a price-filtered subset ALWAYS aborts the close.
+     * Pass every live order for this (operator, instrument, cash unit, session); the
+     * ledger discovers the clearing price from the whole book and simply does not
+     * trade the orders that sit away from the print (it cancels them on close).
+     */
     public static Update<?> runClose(
             String sealedAuctionCid, List<String> buyOrderCids, List<String> sellOrderCids) {
         List<SealedOrder.ContractId> buys = buyOrderCids.stream()

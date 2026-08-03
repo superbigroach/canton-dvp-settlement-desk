@@ -1,6 +1,6 @@
 package com.lucilla.settlement.web;
 
-import com.daml.ledger.javaapi.data.TransactionTree;
+import com.daml.ledger.javaapi.data.Transaction;
 import com.lucilla.settlement.ledger.LedgerCommands;
 import com.lucilla.settlement.ledger.LedgerService;
 import jakarta.validation.Valid;
@@ -151,7 +151,7 @@ public class SettlementController {
     public Dtos.SettleResponse settle(
             @PathVariable String cid, @Valid @RequestBody Dtos.SettleDvpRequest req) {
         var cmd = LedgerCommands.settleAgreement(cid);
-        TransactionTree tree = ledger.submit(req.proposer(), cmd);
+        Transaction tree = ledger.submit(req.proposer(), cmd);
         List<String> receipts = ledger.createdOf(tree, LedgerCommands.settlementReceiptTemplateId());
         List<String> holdings = ledger.createdOf(tree, LedgerCommands.holdingTemplateId());
         return new Dtos.SettleResponse(receipts.isEmpty() ? null : receipts.get(0), holdings);
@@ -187,7 +187,7 @@ public class SettlementController {
         String agreementCid = ledger.submitForCreated(buyer,
                 LedgerCommands.acceptProposal(proposalCid),
                 LedgerCommands.dvpAgreementTemplateId());
-        TransactionTree tree = ledger.submit(seller, LedgerCommands.settleAgreement(agreementCid));
+        Transaction tree = ledger.submit(seller, LedgerCommands.settleAgreement(agreementCid));
         List<String> receipts = ledger.createdOf(tree, LedgerCommands.settlementReceiptTemplateId());
 
         BigDecimal unitPrice = req.cashAmount()
@@ -220,9 +220,11 @@ public class SettlementController {
 
         // Find an open auction for this instrument/cash/session, else open a fresh one
         // whose participant set is every known trader (so anyone in the picker can join).
-        // The cross price is NEVER supplied by the trader: it is the instrument's
-        // published reference price ("price is what it is at the open/close"). Opening
-        // (MOO) and closing (MOC) sessions rest in SEPARATE books.
+        // The auction's referencePrice is the venue's published ANCHOR (the prior close
+        // / the committee's NAV fix) — it is NOT the price the cross prints at. RunClose
+        // DISCOVERS the clearing price from the sealed book (volume-maximising uncross)
+        // and the anchor survives only as one more candidate and the last tie-break.
+        // Opening (MOO) and closing (MOC) sessions rest in SEPARATE books.
         var open = ledger.auctionsVisibleTo(venue).stream()
                 .filter(a -> a.isOpen()
                         && a.instrumentId().equals(req.instrumentId())
@@ -256,21 +258,38 @@ public class SettlementController {
             opened = true;
         }
 
-        // The trader sets no price; the order's limit is pinned to the close so it
-        // always crosses (Buy limit >= close, Sell limit <= close are both met).
-        BigDecimal limitPrice = closingPrice;
+        // The trader may name a limit; absent one it is pinned to the anchor so the
+        // order is certain to cross. A limit AWAY from the anchor is what lets the
+        // uncross print somewhere other than the reference — the whole point of price
+        // discovery — so it is accepted here and honoured by the ledger.
+        BigDecimal limitPrice = req.limitPrice() != null ? req.limitPrice() : closingPrice;
 
-        // Pre-commit the trader's holding: cash worth qty*close for a Buy, else the asset.
+        // Pre-commit the trader's holding.
+        //
+        // BUY SIDE: THE LEDGER RESERVES quantity * LIMIT, NOT quantity * reference.
+        // RunClose discovers the clearing price from the book and it can print ABOVE
+        // the anchor, so funding at the reference leaves the buyer short and
+        // SubmitOrder aborts with "committed holding is too small to back this
+        // order". A buy can never execute above its own limit, so quantity * limit is
+        // the exact worst case; any unspent cash returns as change at settlement.
         String holdingCid = isBuy
                 ? ledger.provisionAtLeastHolding(trader, cashInstrument,
-                        req.quantity().multiply(closingPrice))
+                        req.quantity().multiply(limitPrice))
                 : ledger.provisionAtLeastHolding(trader, req.instrumentId(), req.quantity());
 
-        String orderCid = ledger.submitForCreated(trader,
+        // SubmitOrder is CONSUMING: it archives the auction and re-creates it with
+        // submittedCount incremented. Read BOTH new contracts out of the one
+        // transaction — the order to hand back, and the successor auction, because the
+        // cid we just exercised is now dead and the next order must target the new one.
+        Transaction tree = ledger.submit(trader,
                 LedgerCommands.submitOrder(auctionCid, trader, sideEnum,
-                        req.quantity(), limitPrice, holdingCid),
-                LedgerCommands.sealedOrderTemplateId());
-        return created(new Dtos.MocOrderResponse(orderCid, auctionCid, opened, closingPrice));
+                        req.quantity(), limitPrice, holdingCid));
+        String orderCid = ledger.createdOf(tree, LedgerCommands.sealedOrderTemplateId())
+                .stream().findFirst().orElseThrow(() ->
+                        new IllegalStateException("submit produced no sealed order"));
+        String newAuctionCid = ledger.createdOf(tree, LedgerCommands.closingAuctionTemplateId())
+                .stream().findFirst().orElse(auctionCid);
+        return created(new Dtos.MocOrderResponse(orderCid, newAuctionCid, opened, closingPrice));
     }
 
     /**
@@ -338,14 +357,41 @@ public class SettlementController {
 
     /**
      * Withdraw a resting sealed order — a trader pulls their OWN order before the
-     * close (exercise Cancel, actAs the trader). The reserved backing is unlocked
-     * back to a free, private holding. Only the order's owner may withdraw it.
+     * close. The reserved backing is unlocked back to a free, private holding. Only
+     * the order's owner may withdraw it.
+     *
+     * <p>Goes through {@code ClosingAuction.WithdrawOrder} rather than
+     * {@code SealedOrder.Cancel}: the archive and the {@code cancelledCount} bump
+     * must land in ONE transaction, or the book count would over-state the live book
+     * and no subsequent close could ever satisfy RunClose's completeness assertion.
+     * (Cancel is now controlled by trader AND operator jointly for exactly this
+     * reason; the auction choice is where both authorities meet.)
      */
     @PostMapping("/moc/order/{orderCid}/withdraw")
     public ResponseEntity<Dtos.CidResponse> withdrawOrder(
             @PathVariable String orderCid, @Valid @RequestBody Dtos.WithdrawOrderRequest req) {
         String trader = ledger.resolveParty(req.trader());
-        TransactionTree tree = ledger.submit(trader, LedgerCommands.cancelOrder(orderCid));
+        // Locate the order's own book, then the OPEN auction carrying its count. The
+        // trader is a registered participant, so both are on the trader's own stream.
+        var order = ledger.sealedOrdersVisibleTo(trader).stream()
+                .filter(o -> o.contractId().equals(orderCid))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "no resting order " + orderCid + " is visible to "
+                                + LedgerService.labelOf(trader)));
+        String auctionCid = ledger.auctionsVisibleTo(trader).stream()
+                .filter(a -> a.isOpen()
+                        && a.operator().equals(order.operator())
+                        && a.instrumentId().equals(order.instrumentId())
+                        && a.cashInstrument().equals(order.cashInstrument())
+                        && a.session().equals(order.session()))
+                .findFirst()
+                .map(LedgerService.AuctionView::contractId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "the book for " + order.instrumentId() + " is already sealed — "
+                                + "orders can only be withdrawn while the window is open"));
+        Transaction tree = ledger.submit(trader,
+                LedgerCommands.withdrawOrder(auctionCid, trader, orderCid));
         List<String> unlocked = ledger.createdOf(tree, LedgerCommands.holdingTemplateId());
         return created(new Dtos.CidResponse(unlocked.isEmpty() ? orderCid : unlocked.get(0)));
     }
@@ -367,14 +413,32 @@ public class SettlementController {
                         && o.cashInstrument().equals(cashInstrument)
                         && o.session().equals(sess))
                 .toList();
+        // Each clear goes through ClosingAuction.ClearOrder so the archive and the
+        // cancelledCount bump are atomic. That choice is CONSUMING on the auction, so
+        // the successor cid must be threaded into the next iteration — clearing N
+        // orders walks the auction through N successive contracts.
+        var auction = ledger.auctionsVisibleTo(venue).stream()
+                .filter(a -> a.isOpen()
+                        && a.operator().equals(venue)
+                        && a.instrumentId().equals(req.instrumentId())
+                        && a.cashInstrument().equals(cashInstrument)
+                        && a.session().equals(sess))
+                .findFirst();
+        if (auction.isEmpty()) {
+            return new Dtos.ClearBookResponse(0);
+        }
+        String auctionCid = auction.get().contractId();
         int cleared = 0;
         for (var o : orders) {
             try {
-                ledger.submit(venue, LedgerCommands.venueCancelOrder(o.contractId()));
+                auctionCid = ledger.submitForCreated(venue,
+                        LedgerCommands.clearOrder(auctionCid, o.contractId()),
+                        LedgerCommands.closingAuctionTemplateId());
                 cleared++;
             } catch (RuntimeException e) {
                 // A concurrently-consumed order is already gone — skip it cleanly
-                // rather than failing the whole clear.
+                // rather than failing the whole clear. The auction cid is unchanged
+                // when the exercise failed, so the loop can carry on with it.
                 log.warn("skip clearing order {}: {}", o.contractId(), e.getMessage());
             }
         }
@@ -382,9 +446,12 @@ public class SettlementController {
     }
 
     /**
-     * Run the close as the venue: auto-discover the eligible sealed orders for this
-     * auction, seal the window, and cross them at the uniform closing price. Returns
-     * the batch id and the fills.
+     * Run the close as the venue: gather the COMPLETE sealed book for this auction,
+     * seal the window, and uncross it. Returns the batch id and the fills.
+     *
+     * <p>The returned {@code closingPrice} is <b>DISCOVERED</b> — the volume-maximising
+     * uniform price the ledger derived from the sealed book — not the auction's
+     * reference/anchor price, which it may legitimately print above or below.
      */
     @PostMapping("/moc/{auctionCid}/close")
     public Dtos.MocCloseResponse mocClose(@PathVariable String auctionCid) {
@@ -393,30 +460,50 @@ public class SettlementController {
                 .filter(a -> a.contractId().equals(auctionCid))
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("no such auction: " + auctionCid));
-        BigDecimal close = auction.referencePrice();
-
+        // THE COMPLETE BOOK, NOT A FILTERED SUBSET. RunClose asserts
+        //   length buys + length sells == submittedCount - cancelledCount
+        // so every live order for this book must be supplied. It used to be correct to
+        // pass only the orders in-the-money at the reference price; now the price is
+        // DISCOVERED from the book, so pre-filtering would (a) hide the very orders
+        // that set the price and (b) fail the completeness assertion outright. Orders
+        // away from the eventual print are expected — the ledger cancels them on close.
         var orders = ledger.sealedOrdersVisibleTo(venue).stream()
                 .filter(o -> o.operator().equals(venue)
                         && o.instrumentId().equals(auction.instrumentId())
                         && o.cashInstrument().equals(auction.cashInstrument())
                         && o.session().equals(auction.session()))
                 .toList();
-        // Only orders that are in-the-money at the close cross; the rest would abort it.
         List<String> buyCids = orders.stream()
-                .filter(o -> o.side().equalsIgnoreCase("Buy") && o.limitPrice().compareTo(close) >= 0)
+                .filter(o -> o.side().equalsIgnoreCase("Buy"))
                 .map(com.lucilla.settlement.ledger.LedgerService.OrderView::contractId).toList();
         List<String> sellCids = orders.stream()
-                .filter(o -> o.side().equalsIgnoreCase("Sell") && o.limitPrice().compareTo(close) <= 0)
+                .filter(o -> o.side().equalsIgnoreCase("Sell"))
                 .map(com.lucilla.settlement.ledger.LedgerService.OrderView::contractId).toList();
+        // A cross needs interest on both sides; the ledger decides at WHAT price they
+        // meet (and aborts with "there is no crossing volume" if they never do).
         if (buyCids.isEmpty() || sellCids.isEmpty()) {
-            throw new IllegalArgumentException("the close needs at least one eligible buy AND one "
-                    + "eligible sell at the closing price " + close.stripTrailingZeros().toPlainString()
-                    + " (have " + buyCids.size() + " buys, " + sellCids.size() + " sells)");
+            throw new IllegalArgumentException("the close needs at least one resting buy AND one "
+                    + "resting sell (have " + buyCids.size() + " buys, " + sellCids.size()
+                    + " sells)");
+        }
+        // Fail EARLY and legibly if what we can see is not the whole book. RunClose
+        // would reject this too, but as an opaque Daml assertion; here we can say which
+        // way it is out. A mismatch means an order was archived without going through
+        // WithdrawOrder/ClearOrder (so the count over-states the book), or the ACS read
+        // raced an in-flight submission.
+        long expected = auction.liveOrderCount();
+        long supplied = (long) buyCids.size() + sellCids.size();
+        if (supplied != expected) {
+            throw new IllegalStateException("the close must run over the COMPLETE book: the"
+                    + " ledger counts " + expected + " live order(s) (" + auction.submittedCount()
+                    + " submitted − " + auction.cancelledCount() + " cancelled) but " + supplied
+                    + " are visible. Re-run the close once the book settles, or clear it"
+                    + " (POST /api/moc/clear) and re-seed.");
         }
 
         String sealedCid = ledger.submitForCreated(venue,
                 LedgerCommands.closeBidding(auctionCid), LedgerCommands.closingAuctionTemplateId());
-        TransactionTree tree = ledger.submit(venue,
+        Transaction tree = ledger.submit(venue,
                 LedgerCommands.runClose(sealedCid, buyCids, sellCids));
         var batch = ledger.batchOf(tree).orElseThrow(() ->
                 new IllegalStateException("close produced no settlement batch"));
@@ -559,6 +646,12 @@ public class SettlementController {
      * Seal the window (CloseBidding) then run the uniform-price cross (RunClose)
      * over the supplied sealed orders. Two exercises submitted by the operator;
      * returns the sealed auction handle and the resulting SettlementBatch.
+     *
+     * <p><b>The caller must supply the COMPLETE book</b> — every live buy and sell for
+     * this auction, with no duplicates. RunClose asserts the lists number exactly
+     * {@code submittedCount - cancelledCount}, so a price-filtered subset aborts the
+     * close. Prefer {@code POST /api/moc/{auctionCid}/close}, which assembles the book
+     * for you.
      */
     @PostMapping("/auction/{cid}/close")
     public Dtos.CloseResponse close(
@@ -695,7 +788,7 @@ public class SettlementController {
         String agreementCid = ledger.submitForCreated(admin,
                 LedgerCommands.approveCreation(orderCid),
                 LedgerCommands.creationAgreementTemplateId());
-        TransactionTree tree = ledger.submit(admin, LedgerCommands.processCreation(agreementCid));
+        Transaction tree = ledger.submit(admin, LedgerCommands.processCreation(agreementCid));
 
         List<String> receipts = ledger.createdOf(tree, LedgerCommands.basketReceiptTemplateId());
         String mintedCid = ledger.createdHoldingsOf(tree).stream()
@@ -735,7 +828,7 @@ public class SettlementController {
         String agreementCid = ledger.submitForCreated(admin,
                 LedgerCommands.approveRedemption(orderCid, custodyCids),
                 LedgerCommands.redemptionAgreementTemplateId());
-        TransactionTree tree = ledger.submit(admin, LedgerCommands.processRedemption(agreementCid));
+        Transaction tree = ledger.submit(admin, LedgerCommands.processRedemption(agreementCid));
 
         List<String> receipts = ledger.createdOf(tree, LedgerCommands.basketReceiptTemplateId());
         List<String> returned = ledger.createdHoldingsOf(tree).stream()

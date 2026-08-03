@@ -1,0 +1,352 @@
+-- TokenStandardTest.daml
+-- ===========================================================================
+-- ONE REAL TOKEN-STANDARD DvP, END TO END.
+-- ===========================================================================
+-- Alice delivers 4.0 cETH to Bob. Bob delivers 0.25 cBTC to Alice. Both legs
+-- move in a SINGLE Daml transaction, over the official CIP-56 interfaces —
+-- `HoldingV1.Holding`, `AllocationInstructionV1.AllocationFactory`,
+-- `AllocationV1.Allocation`, `AllocationRequestV1.AllocationRequest` — with no
+-- bespoke choice on either asset and no custody at the venue.
+--
+-- The scripts below are ordered as a story:
+--   1. testTokenStandardDvp                       — the happy path, atomic.
+--   2. testDvpRejectsMissingLeg                   — no delivery without payment.
+--   3. testDvpRejectsForeignAllocation            — an allocation earmarked for
+--                                                   another settlement is refused.
+--   4. testDvpRejectsUnauthorisedExecution        — no single party can pull a
+--                                                   leg on its own.
+--   5. testTokenStandardTransfer                  — the standard's plain
+--                                                   two-step transfer path.
+-- ===========================================================================
+
+module TokenStandardTest where
+
+import DA.Assert ((===))
+import DA.Optional (fromSome, isNone, isSome)
+import DA.TextMap qualified as TextMap
+import DA.Time (addRelTime, hours)
+
+import Daml.Script
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV1 qualified as TS
+import Splice.Api.Token.TransferInstructionV1 qualified as TS
+import Splice.Api.Token.AllocationV1 qualified as TS
+import Splice.Api.Token.AllocationInstructionV1 qualified as TS
+import Splice.Api.Token.AllocationRequestV1 qualified as TS
+
+import TokenStandardDvp
+
+
+-- ---------------------------------------------------------------------------
+-- Fixture.
+-- ---------------------------------------------------------------------------
+
+data Env = Env with
+    registry : Party   -- ^ onRails: the instrument admin for cETH and cBTC
+    venue : Party      -- ^ the settlement desk: executor, never a custodian
+    alice : Party
+    bob : Party
+    cETH : TS.InstrumentId
+    cBTC : TS.InstrumentId
+    registryCid : ContractId TokenStandardRegistry
+    registryDisclosure : Disclosure
+      -- ^ The registry's factory contract, handed to wallets as an explicitly
+      -- disclosed contract. This is how the Canton Network Registry API works
+      -- in production, so the tests exercise the real mechanism rather than
+      -- making the factory a public contract.
+    now : Time
+
+setupEnv : Script Env
+setupEnv = do
+  registry <- allocateParty "onRails"
+  venue <- allocateParty "SettlementDesk"
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  -- cETH and cBTC as CIP-56 instrument identifiers: {admin, id}. This is the
+  -- identity the whole Canton Network uses for them — not a bare Text symbol.
+  let cETH = TS.InstrumentId with admin = registry, id = "cETH"
+      cBTC = TS.InstrumentId with admin = registry, id = "cBTC"
+
+  registryCid <- submit registry $ createCmd TokenStandardRegistry with admin = registry
+  registryDisclosure <- fromSome <$> queryDisclosure registry registryCid
+  now <- getTime
+  pure Env with ..
+
+-- | Issue a free holding. Note that CIP-56 v1 deliberately does NOT standardise
+-- issuance — each registry mints its own way — so this is the one step that is
+-- registry-specific by design, not by omission.
+issueHolding : Env -> Party -> TS.InstrumentId -> Decimal -> Script (ContractId TS.Holding)
+issueHolding env owner instrumentId amount =
+  toInterfaceContractId <$>
+    submit (actAs [env.registry, owner]) (createCmd TokenStandardHolding with
+      admin = env.registry
+      owner
+      instrumentId
+      amount
+      lock = None)
+
+-- | Sum of a party's FREE (unlocked) holdings of an instrument.
+unlockedBalance : Party -> TS.InstrumentId -> Script Decimal
+unlockedBalance p instrumentId = do
+  hs <- query @TokenStandardHolding p
+  pure $ sum [h.amount | (_, h) <- hs, h.owner == p, h.instrumentId == instrumentId, isNone h.lock]
+
+-- | Sum of a party's LOCKED holdings of an instrument — i.e. funds committed to
+-- a settlement and no longer spendable.
+lockedBalance : Party -> TS.InstrumentId -> Script Decimal
+lockedBalance p instrumentId = do
+  hs <- query @TokenStandardHolding p
+  pure $ sum [h.amount | (_, h) <- hs, h.owner == p, h.instrumentId == instrumentId, isSome h.lock]
+
+-- | Drive `AllocationFactory_Allocate` on the registry's factory as a sender's
+-- wallet would: with the factory supplied as a disclosed contract.
+allocateLeg
+  : Env -> Party -> TS.AllocationSpecification -> [ContractId TS.Holding]
+  -> Script (ContractId TS.Allocation)
+allocateLeg env sender spec inputHoldingCids = do
+  res <- submit (actAs sender <> disclose env.registryDisclosure) $
+    exerciseCmd (toInterfaceContractId @TS.AllocationFactory env.registryCid)
+      TS.AllocationFactory_Allocate with
+        expectedAdmin = env.registry
+        allocation = spec
+        requestedAt = env.now
+        inputHoldingCids
+        extraArgs = emptyExtraArgs
+  case res.output of
+    TS.AllocationInstructionResult_Completed allocationCid -> pure allocationCid
+    _ -> abort "the registry was expected to create the allocation in a single step"
+
+-- | The two legs of the trade: 4.0 cETH against 0.25 cBTC.
+tradeLegs : Env -> TextMap.TextMap TS.TransferLeg
+tradeLegs env = TextMap.fromList
+  [ ( "cETH-delivery"
+    , TS.TransferLeg with
+        sender = env.alice
+        receiver = env.bob
+        amount = 4.0
+        instrumentId = env.cETH
+        meta = emptyMetadata
+    )
+  , ( "cBTC-payment"
+    , TS.TransferLeg with
+        sender = env.bob
+        receiver = env.alice
+        amount = 0.25
+        instrumentId = env.cBTC
+        meta = emptyMetadata
+    )
+  ]
+
+-- | Propose the trade, have both sides accept, and put it into settlement.
+-- Returns the live DvP and the exact allocation each sender must now produce.
+openDvp : Env -> Text -> Script (ContractId TokenStandardDvp, TextMap.TextMap TS.AllocationSpecification)
+openDvp env dvpId = do
+  let legs = tradeLegs env
+  proposalCid <- submit env.venue $ createCmd TokenStandardDvpProposal with
+    venue = env.venue
+    dvpId
+    legs
+    approvers = []
+  p1 <- submit env.alice $
+    exerciseCmd proposalCid TokenStandardDvpProposal_Accept with approver = env.alice
+  p2 <- submit env.bob $
+    exerciseCmd p1 TokenStandardDvpProposal_Accept with approver = env.bob
+  dvpCid <- submit env.venue $
+    exerciseCmd p2 TokenStandardDvpProposal_InitiateSettlement with
+      allocateBefore = addRelTime env.now (hours 1)
+      settleBefore = addRelTime env.now (hours 2)
+  dvp <- fromSome <$> queryContractId env.venue dvpCid
+  pure (dvpCid, dvpAllocationSpecs dvp)
+
+
+-- ---------------------------------------------------------------------------
+-- 1. THE DvP. Two token-standard instruments, both legs, one transaction.
+-- ---------------------------------------------------------------------------
+testTokenStandardDvp : Script ()
+testTokenStandardDvp = do
+  env@Env{..} <- setupEnv
+
+  aliceEth <- issueHolding env alice cETH 10.0
+  bobBtc <- issueHolding env bob cBTC 1.0
+
+  (dvpCid, specs) <- openDvp env "DVP-CETH-CBTC-001"
+
+  -- Each sender learns what they owe through the STANDARD interface. No app
+  -- specific API, no off-ledger message: a CIP-56 wallet sees this by itself.
+  aliceRequests <- queryInterface @TS.AllocationRequest alice
+  case aliceRequests of
+    [(_, Some reqView)] -> do
+      reqView.settlement.settlementRef.id === "DVP-CETH-CBTC-001"
+      reqView.settlement.executor === venue
+      TextMap.size reqView.transferLegs === 2
+    _ -> abort "Alice's wallet should see exactly one AllocationRequest"
+
+  -- Both senders allocate. The registry locks exactly the traded amount and
+  -- returns the change as a fresh free holding.
+  aliceAlloc <- allocateLeg env alice (fromSome (TextMap.lookup "cETH-delivery" specs)) [aliceEth]
+  bobAlloc <- allocateLeg env bob (fromSome (TextMap.lookup "cBTC-payment" specs)) [bobBtc]
+
+  -- The lock is real and visible in the standard's `HoldingView.lock`: the
+  -- committed funds are no longer spendable, but they have NOT changed owner.
+  unlockedBalance alice cETH >>= (=== 6.0)
+  lockedBalance alice cETH >>= (=== 4.0)
+  unlockedBalance bob cBTC >>= (=== 0.75)
+  lockedBalance bob cBTC >>= (=== 0.25)
+  -- Nothing has crossed yet.
+  unlockedBalance bob cETH >>= (=== 0.0)
+  unlockedBalance alice cBTC >>= (=== 0.0)
+
+  -- ---- SETTLE. One submission, one transaction, both legs. ----
+  results <- submit venue $ exerciseCmd dvpCid TokenStandardDvp_Settle with
+    allocations = TextMap.fromList
+      [ ("cETH-delivery", aliceAlloc)
+      , ("cBTC-payment", bobAlloc)
+      ]
+  TextMap.size results === 2
+
+  -- Delivery versus payment: both sides changed hands, nothing is left locked.
+  unlockedBalance bob cETH >>= (=== 4.0)
+  unlockedBalance alice cBTC >>= (=== 0.25)
+  unlockedBalance alice cETH >>= (=== 6.0)
+  unlockedBalance bob cBTC >>= (=== 0.75)
+  lockedBalance alice cETH >>= (=== 0.0)
+  lockedBalance bob cBTC >>= (=== 0.0)
+
+
+-- ---------------------------------------------------------------------------
+-- 2. NO DELIVERY WITHOUT PAYMENT.
+-- ---------------------------------------------------------------------------
+-- Alice allocates her cETH; Bob never allocates the cash leg. The venue tries
+-- to settle anyway with the one leg it has. The whole transaction is rejected,
+-- so Alice's cETH stays locked in her own name — it does NOT reach Bob.
+testDvpRejectsMissingLeg : Script ()
+testDvpRejectsMissingLeg = do
+  env@Env{..} <- setupEnv
+
+  aliceEth <- issueHolding env alice cETH 10.0
+  _ <- issueHolding env bob cBTC 1.0
+
+  (dvpCid, specs) <- openDvp env "DVP-CETH-CBTC-002"
+  aliceAlloc <- allocateLeg env alice (fromSome (TextMap.lookup "cETH-delivery" specs)) [aliceEth]
+
+  submitMustFail venue $ exerciseCmd dvpCid TokenStandardDvp_Settle with
+    allocations = TextMap.fromList [("cETH-delivery", aliceAlloc)]
+
+  -- Alice's asset never moved.
+  unlockedBalance bob cETH >>= (=== 0.0)
+  lockedBalance alice cETH >>= (=== 4.0)
+  unlockedBalance alice cBTC >>= (=== 0.0)
+
+
+-- ---------------------------------------------------------------------------
+-- 3. AN ALLOCATION IS BOUND TO EXACTLY ONE SETTLEMENT.
+-- ---------------------------------------------------------------------------
+-- Bob allocates his cBTC — but to a DIFFERENT settlement (a second DvP with the
+-- same parties, same instruments and the same amounts, differing only in its
+-- `settlementRef`). The venue then tries to use that allocation to settle the
+-- first DvP. Rejected: the venue cannot recycle a commitment made elsewhere,
+-- because `Allocation_ExecuteTransfer` is only reachable through a check that
+-- the entire `AllocationSpecification` matches what THIS DvP requested.
+testDvpRejectsForeignAllocation : Script ()
+testDvpRejectsForeignAllocation = do
+  env@Env{..} <- setupEnv
+
+  aliceEth <- issueHolding env alice cETH 10.0
+  bobBtc <- issueHolding env bob cBTC 1.0
+
+  (realDvpCid, realSpecs) <- openDvp env "DVP-CETH-CBTC-003-REAL"
+  (_decoyDvpCid, decoySpecs) <- openDvp env "DVP-CETH-CBTC-003-DECOY"
+
+  aliceAlloc <- allocateLeg env alice (fromSome (TextMap.lookup "cETH-delivery" realSpecs)) [aliceEth]
+  bobDecoyAlloc <- allocateLeg env bob (fromSome (TextMap.lookup "cBTC-payment" decoySpecs)) [bobBtc]
+
+  submitMustFail venue $ exerciseCmd realDvpCid TokenStandardDvp_Settle with
+    allocations = TextMap.fromList
+      [ ("cETH-delivery", aliceAlloc)
+      , ("cBTC-payment", bobDecoyAlloc)
+      ]
+
+  unlockedBalance bob cETH >>= (=== 0.0)
+  unlockedBalance alice cBTC >>= (=== 0.0)
+
+
+-- ---------------------------------------------------------------------------
+-- 4. NO ONE CAN PULL A LEG ON THEIR OWN.
+-- ---------------------------------------------------------------------------
+-- `Allocation_ExecuteTransfer` is controlled by the standard's
+-- `allocationControllers` = executor + sender + receiver. The receiver cannot
+-- help themselves to the delivery, and even sender + receiver together cannot
+-- settle behind the venue's back.
+testDvpRejectsUnauthorisedExecution : Script ()
+testDvpRejectsUnauthorisedExecution = do
+  env@Env{..} <- setupEnv
+
+  aliceEth <- issueHolding env alice cETH 10.0
+  _ <- issueHolding env bob cBTC 1.0
+
+  (_dvpCid, specs) <- openDvp env "DVP-CETH-CBTC-004"
+  aliceAlloc <- allocateLeg env alice (fromSome (TextMap.lookup "cETH-delivery" specs)) [aliceEth]
+
+  -- Bob is the receiver of the cETH leg. Alone, he is not enough.
+  submitMustFail bob $
+    exerciseCmd aliceAlloc TS.Allocation_ExecuteTransfer with extraArgs = emptyExtraArgs
+
+  -- Nor are the two counterparties together, without the executor.
+  submitMustFail (actAs [alice, bob]) $
+    exerciseCmd aliceAlloc TS.Allocation_ExecuteTransfer with extraArgs = emptyExtraArgs
+
+  unlockedBalance bob cETH >>= (=== 0.0)
+
+  -- The sender CAN take her own commitment back — that is the standard's
+  -- `Allocation_Withdraw`, controlled by the sender alone.
+  _ <- submit alice $
+    exerciseCmd aliceAlloc TS.Allocation_Withdraw with extraArgs = emptyExtraArgs
+  unlockedBalance alice cETH >>= (=== 10.0)
+  lockedBalance alice cETH >>= (=== 0.0)
+
+
+-- ---------------------------------------------------------------------------
+-- 5. THE PLAIN TRANSFER PATH.
+-- ---------------------------------------------------------------------------
+-- Not part of the DvP, but it is what makes cETH a usable CIP-56 token rather
+-- than a DvP-only construct: any standard wallet can move it via
+-- `TransferFactory_Transfer` and `TransferInstruction_Accept`, with the funds
+-- locked in between and the change returned.
+testTokenStandardTransfer : Script ()
+testTokenStandardTransfer = do
+  env@Env{..} <- setupEnv
+  aliceEth <- issueHolding env alice cETH 10.0
+
+  res <- submit (actAs alice <> disclose registryDisclosure) $
+    exerciseCmd (toInterfaceContractId @TS.TransferFactory registryCid)
+      TS.TransferFactory_Transfer with
+        expectedAdmin = registry
+        transfer = TS.Transfer with
+          sender = alice
+          receiver = bob
+          amount = 3.0
+          instrumentId = cETH
+          requestedAt = now
+          executeBefore = addRelTime now (hours 1)
+          inputHoldingCids = [aliceEth]
+          meta = emptyMetadata
+        extraArgs = emptyExtraArgs
+
+  instructionCid <- case res.output of
+    TS.TransferInstructionResult_Pending transferInstructionCid -> pure transferInstructionCid
+    _ -> abort "the transfer should be pending the receiver's acceptance"
+
+  -- Funds locked, change returned, nothing delivered yet.
+  unlockedBalance alice cETH >>= (=== 7.0)
+  lockedBalance alice cETH >>= (=== 3.0)
+  unlockedBalance bob cETH >>= (=== 0.0)
+
+  -- The receiver accepts through the standard interface.
+  _ <- submit bob $
+    exerciseCmd instructionCid TS.TransferInstruction_Accept with extraArgs = emptyExtraArgs
+
+  unlockedBalance bob cETH >>= (=== 3.0)
+  unlockedBalance alice cETH >>= (=== 7.0)
+  lockedBalance alice cETH >>= (=== 0.0)
