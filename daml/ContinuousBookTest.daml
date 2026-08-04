@@ -1,0 +1,953 @@
+-- ContinuousBookTest.daml
+-- ===========================================================================
+-- DAML SCRIPT SCENARIOS FOR THE CONTINUOUS SESSION (ContinuousBook.daml).
+-- ===========================================================================
+-- A SEPARATE test module on purpose. `Test.daml` is the auction's suite and is being
+-- worked on concurrently; this module imports NOTHING from it, and nothing from
+-- `MarketOnClose`, so the continuous book can be broken, fixed and reviewed on its own.
+-- Its only dependencies are `Holding` and the standard library — the same isolation
+-- `ContinuousBook.daml` itself keeps.
+--
+-- WHAT THESE SCENARIOS ARE FOR. A market-structure claim is worth nothing unless the
+-- ledger enforces it, so each script below pins ONE claim from `ContinuousBook.daml`
+-- and either proves it or — just as importantly — proves its BOUNDARY. Two of them
+-- (`testPriorityViolationIsPermittedButThePrintBetraysIt` and
+-- `testVenueMayUnderFill...`) exist specifically to demonstrate what the ledger CANNOT
+-- enforce, because a test suite that only shows the happy path is marketing.
+--
+-- THE SESSION USED THROUGHOUT: cETH against USDC, anchor 100.0, band ±10% → every
+-- legal print sits in [90.0, 110.0].
+-- ===========================================================================
+
+module ContinuousBookTest where
+
+import Daml.Script
+import DA.Assert ((===))
+import DA.List (head)
+import DA.Optional (isNone, isSome)
+
+import Holding
+import ContinuousBook
+
+ceth : Text
+ceth = "cETH"
+
+usdc : Text
+usdc = "USDC"
+
+-- ---------------------------------------------------------------------------
+-- The desk. `eve` is party to NOTHING — she is the privacy control, and every
+-- disclosure test below checks that she still sees nothing afterwards.
+-- ---------------------------------------------------------------------------
+data Desk = Desk
+  with
+    issuer  : Party   -- registrar/obligor; signs every Holding, so it sees every balance
+    venue   : Party   -- the continuous-book operator
+    auditor : Party   -- compliance: sees the session and the tape, NOT the book
+    alice   : Party   -- trader
+    bob     : Party   -- trader
+    carol   : Party   -- trader
+    eve     : Party   -- OUTSIDER: not a participant, party to nothing
+
+deskSetup : Script Desk
+deskSetup = do
+  issuer  <- allocatePartyByHint (PartyIdHint "Issuer")
+  venue   <- allocatePartyByHint (PartyIdHint "Venue")
+  auditor <- allocatePartyByHint (PartyIdHint "Auditor")
+  alice   <- allocatePartyByHint (PartyIdHint "Alice")
+  bob     <- allocatePartyByHint (PartyIdHint "Bob")
+  carol   <- allocatePartyByHint (PartyIdHint "Carol")
+  eve     <- allocatePartyByHint (PartyIdHint "Eve")
+  pure (Desk issuer venue auditor alice bob carol eve)
+
+-- Open a fresh continuous session: cETH/USDC, anchor 100, band ±10%.
+openBook : Party -> Party -> [Party] -> Script (ContractId ContinuousBook)
+openBook venue auditor participants =
+  submit venue do
+    createCmd ContinuousBook with
+      operator = venue; auditor; participants
+      instrumentId = ceth; cashInstrument = usdc
+      referencePrice = 100.0
+      bandFraction   = 0.10
+      nextSeq = 0; liveCount = 0; isOpen = True
+
+-- Mint a holding (only the issuer signs — see Holding.daml's authorisation header).
+mint : Party -> Text -> Party -> Decimal -> Script (ContractId Holding)
+mint issuer instrumentId owner amount =
+  submit issuer do createCmd Holding with issuer; instrumentId; owner; amount; disclosedTo = []
+
+-- Place an order and THREAD THE BOOK FORWARD. Every choice on the book is consuming
+-- (see CONTENTION in ContinuousBook.daml), so every caller pays this — these helpers
+-- make the cost visible rather than hiding it.
+place :
+     ContractId ContinuousBook -> Party -> BookSide -> Decimal -> Optional Decimal
+  -> TimeInForce -> ContractId Holding
+  -> Script (ContractId ContinuousBook, ContractId RestingOrder)
+place bookCid trader side quantity limitPrice timeInForce holdingCid =
+  submit trader do
+    exerciseCmd bookCid PlaceOrder with
+      trader; side; quantity; limitPrice; timeInForce; holdingCid
+
+-- An ordinary resting limit order.
+placeLimit :
+     ContractId ContinuousBook -> Party -> BookSide -> Decimal -> Decimal
+  -> ContractId Holding
+  -> Script (ContractId ContinuousBook, ContractId RestingOrder)
+placeLimit bookCid trader side quantity limitPrice holdingCid =
+  place bookCid trader side quantity (Some limitPrice) GTC holdingCid
+
+runMatch :
+     Party -> ContractId ContinuousBook -> ContractId RestingOrder
+  -> [ContractId RestingOrder] -> Script MatchResult
+runMatch venue bookCid aggressorCid contraCids =
+  submit venue do exerciseCmd bookCid MatchOrder with aggressorCid; contraCids
+
+-- Units of `inst` that `p` actually OWNS (query returns everything p can see, which
+-- includes slices merely disclosed to it — the owner filter is the point).
+ownedAmount : Party -> Text -> Script Decimal
+ownedAmount p inst = do
+  hs <- query @Holding p
+  pure $ foldl
+    (\acc (_, h) -> if h.instrumentId == inst && h.owner == p then acc + h.amount else acc)
+    0.0 hs
+
+-- Every unit of `inst` in existence. Read through the ISSUER, which signs every
+-- Holding and therefore sees all of them — the only vantage point from which
+-- conservation can be checked at all.
+totalSupply : Party -> Text -> Script Decimal
+totalSupply issuer inst = do
+  hs <- query @Holding issuer
+  pure $ foldl
+    (\acc (_, h) -> if h.instrumentId == inst then acc + h.amount else acc)
+    0.0 hs
+
+-- ===========================================================================
+-- 1. PRIVACY — a resting order is dark to everyone but the venue and its owner.
+-- ===========================================================================
+-- The property the auction has and a transparent chain cannot buy: while it rests,
+-- Alice's offer is invisible to the other participants, to the AUDITOR, and to the
+-- outside world. Its size and limit leak to nobody. This is the whole reason a limit
+-- order is safe to post here — on a public mempool it is a free option.
+testRestingOrderIsDark : Script ()
+testRestingOrderIsDark = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+  aliceAsset <- mint issuer ceth alice 10.0
+  (_book1, _order) <- placeLimit book0 alice Ask 10.0 101.0 aliceAsset
+
+  -- The two parties to the order see it...
+  venueOrders <- query @RestingOrder venue
+  length venueOrders === 1
+  aliceOrders <- query @RestingOrder alice
+  length aliceOrders === 1
+
+  -- ...and NOBODY else does. Not the other participants in the same session:
+  bobOrders <- query @RestingOrder bob
+  length bobOrders === 0
+  carolOrders <- query @RestingOrder carol
+  length carolOrders === 0
+  -- not the auditor (compliance sees settlements, never the live book):
+  auditorOrders <- query @RestingOrder auditor
+  length auditorOrders === 0
+  -- and not the outside world:
+  eveOrders <- query @RestingOrder eve
+  length eveOrders === 0
+
+  -- The RESERVED BACKING is equally dark: Eve cannot see the holding either, and the
+  -- auditor cannot infer the order's size from the collateral behind it.
+  eveHoldings <- query @Holding eve
+  length eveHoldings === 0
+  auditorHoldings <- query @Holding auditor
+  length auditorHoldings === 0
+  pure ()
+
+-- ===========================================================================
+-- 2. PRICE PRIORITY — the better price trades, even though it arrived LATER.
+-- ===========================================================================
+-- Bob offers at 101 first; Carol undercuts at 100 second. A price-priority book fills
+-- Carol. And the taker pays the MAKER's price — Alice bid up to 101 and pays 100, with
+-- the difference returned in the same transaction. That is price improvement, and it
+-- is the reason a taker is willing to cross at all.
+testPricePriorityBeatsArrivalOrder : Script ()
+testPricePriorityBeatsArrivalOrder = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  bobAsset   <- mint issuer ceth bob   5.0
+  (book1, _bobAsk101) <- placeLimit book0 bob Ask 5.0 101.0 bobAsset      -- seq 0
+  carolAsset <- mint issuer ceth carol 5.0
+  (book2, carolAsk100) <- placeLimit book1 carol Ask 5.0 100.0 carolAsset -- seq 1
+
+  aliceCash <- mint issuer usdc alice 505.0                                -- 5 * 101
+  (book3, aliceBid) <- placeLimit book2 alice Bid 5.0 101.0 aliceCash      -- seq 2
+
+  r <- runMatch venue book3 aliceBid [carolAsk100]
+
+  length r.executions === 1
+  let e = head r.executions
+  e.price    === 100.0     -- the MAKER's posted price...
+  e.maker    === carol     -- ...and the better-priced maker is the one who trades
+  e.quantity === 5.0
+  e.aggressor === alice
+
+  -- The money: Alice has the asset, Carol has the proceeds, and Alice's unspent
+  -- 5.0 of funded limit (5 * (101 − 100)) came straight back.
+  aliceAsset <- ownedAmount alice ceth
+  aliceAsset === 5.0
+  carolCash <- ownedAmount carol usdc
+  carolCash === 500.0
+  aliceLeftover <- ownedAmount alice usdc
+  aliceLeftover === 5.0
+
+  -- THE VENUE IS FLAT. It was the counterparty to both legs for the duration of one
+  -- transaction and holds nothing when it commits — a momentary CCP, not a custodian.
+  venueAsset <- ownedAmount venue ceth
+  venueAsset === 0.0
+  venueCash <- ownedAmount venue usdc
+  venueCash === 0.0
+  pure ()
+
+-- ===========================================================================
+-- 3. TIME PRIORITY — at the same price, the earlier order fills first.
+-- ===========================================================================
+-- Bob and Carol both offer 5 at 100; Bob is stamped first. Alice takes 10, which needs
+-- both. The fills come out in queue order, and the venue is NOT ABLE to reverse them:
+-- the same match with the list flipped is rejected by the ledger.
+testTimePriorityWithinAPriceLevel : Script ()
+testTimePriorityWithinAPriceLevel = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  bobAsset   <- mint issuer ceth bob   5.0
+  (book1, bobAsk)   <- placeLimit book0 bob   Ask 5.0 100.0 bobAsset      -- seq 0
+  carolAsset <- mint issuer ceth carol 5.0
+  (book2, carolAsk) <- placeLimit book1 carol Ask 5.0 100.0 carolAsset    -- seq 1
+
+  aliceCash <- mint issuer usdc alice 1000.0
+  (book3, aliceBid) <- placeLimit book2 alice Bid 10.0 100.0 aliceCash    -- seq 2
+
+  -- QUEUE ORDER REVERSED — rejected. Time priority is a ledger check, not a promise.
+  submitMustFail venue do
+    exerciseCmd book3 MatchOrder with aggressorCid = aliceBid; contraCids = [carolAsk, bobAsk]
+
+  -- In queue order it settles, and the EXECUTION ORDER is the queue order.
+  r <- runMatch venue book3 aliceBid [bobAsk, carolAsk]
+  length r.executions === 2
+  (head r.executions).maker === bob
+  map (.maker) r.executions === [bob, carol]
+
+  bobCash <- ownedAmount bob usdc
+  bobCash === 500.0
+  carolCash <- ownedAmount carol usdc
+  carolCash === 500.0
+  aliceAsset <- ownedAmount alice ceth
+  aliceAsset === 10.0
+  pure ()
+
+-- ===========================================================================
+-- 4. PARTIAL FILL OF A MAKER — the residual rests and KEEPS its queue position.
+-- ===========================================================================
+-- The rule that makes posting liquidity survivable: being hit for part of your size
+-- must not send you to the back of the queue. Bob is stamped first, gets partially
+-- filled, and his residual still trades AHEAD of Carol — who was never touched.
+testPartialFillKeepsQueuePosition : Script ()
+testPartialFillKeepsQueuePosition = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  bobAsset   <- mint issuer ceth bob   10.0
+  (book1, bobAsk)   <- placeLimit book0 bob   Ask 10.0 100.0 bobAsset     -- seq 0
+  carolAsset <- mint issuer ceth carol 10.0
+  (book2, carolAsk) <- placeLimit book1 carol Ask 10.0 100.0 carolAsset   -- seq 1
+
+  -- Alice takes 4. Bob is filled 4 and 6 remain working.
+  aliceCash1 <- mint issuer usdc alice 400.0
+  (book3, aliceBid1) <- placeLimit book2 alice Bid 4.0 100.0 aliceCash1   -- seq 2
+  r1 <- runMatch venue book3 aliceBid1 [bobAsk]
+  length r1.executions === 1
+  (head r1.executions).quantity === 4.0
+  isNone r1.residualAggressor === True     -- Alice was fully filled
+  length r1.residualContra === 1           -- Bob's remainder rests
+  let bobResidual = head r1.residualContra
+
+  -- THE RESIDUAL KEPT BOB'S ARRIVAL STAMP (seq 0), not a fresh one.
+  bobResidualOrder <- queryContractId venue bobResidual
+  case bobResidualOrder of
+    None   -> abort "Bob's residual order should still be resting"
+    Some o -> do
+      o.seqNo    === 0
+      o.quantity === 6.0
+
+  -- Alice comes back for 10. Bob's residual (seq 0) MUST fill before Carol (seq 1),
+  -- and the ledger enforces it: the reversed ladder is rejected.
+  aliceCash2 <- mint issuer usdc alice 1000.0
+  (book4, aliceBid2) <- placeLimit r1.book alice Bid 10.0 100.0 aliceCash2
+  submitMustFail venue do
+    exerciseCmd book4 MatchOrder with
+      aggressorCid = aliceBid2; contraCids = [carolAsk, bobResidual]
+  r2 <- runMatch venue book4 aliceBid2 [bobResidual, carolAsk]
+  map (.maker)   r2.executions === [bob, carol]
+  map (.quantity) r2.executions === [6.0, 4.0]
+
+  bobCash <- ownedAmount bob usdc
+  bobCash === 1000.0        -- 4 @100 then 6 @100
+  carolCash <- ownedAmount carol usdc
+  carolCash === 400.0
+  aliceAsset <- ownedAmount alice ceth
+  aliceAsset === 14.0
+  pure ()
+
+-- ===========================================================================
+-- 5. PARTIAL FILL OF THE AGGRESSOR — a GTC remainder rests and is matchable again.
+-- ===========================================================================
+-- The other half of a partial fill, and the harder half mechanically: the aggressor's
+-- leftover reservation has to be re-split and RE-DISCLOSED to the venue, or the
+-- residual order would be backed by a holding the venue can no longer see and could
+-- never be matched again. This scenario matches that residual as a MAKER to prove the
+-- backing survived (`fillFromReserve`'s change path).
+testAggressorRemainderRestsAndIsMatchableAgain : Script ()
+testAggressorRemainderRestsAndIsMatchableAgain = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  bobAsset <- mint issuer ceth bob 4.0
+  (book1, bobAsk) <- placeLimit book0 bob Ask 4.0 100.0 bobAsset          -- seq 0
+
+  aliceCash <- mint issuer usdc alice 1000.0
+  (book2, aliceBid) <- placeLimit book1 alice Bid 10.0 100.0 aliceCash    -- seq 1
+
+  r1 <- runMatch venue book2 aliceBid [bobAsk]
+  length r1.executions === 1
+  (head r1.executions).quantity === 4.0
+  isSome r1.residualAggressor === True
+  let aliceResidual = case r1.residualAggressor of Some c -> c; None -> error "no residual"
+
+  aliceResidualOrder <- queryContractId venue aliceResidual
+  case aliceResidualOrder of
+    None   -> abort "Alice's GTC remainder should be resting"
+    Some o -> do
+      o.seqNo    === 1        -- same stamp: a partial fill costs no queue position
+      o.quantity === 6.0
+      o.side     === Bid
+
+  -- Alice's residual is now the RESTING side. Carol crosses it, and the trade prints
+  -- at ALICE's posted 100 — she is the maker now, and the maker's price is the price.
+  carolAsset <- mint issuer ceth carol 6.0
+  (book3, carolAsk) <- placeLimit r1.book carol Ask 6.0 100.0 carolAsset  -- seq 2
+  r2 <- runMatch venue book3 carolAsk [aliceResidual]
+  length r2.executions === 1
+  let e2 = head r2.executions
+  e2.maker     === alice
+  e2.aggressor === carol
+  e2.price     === 100.0
+  e2.quantity  === 6.0
+
+  aliceAsset <- ownedAmount alice ceth
+  aliceAsset === 10.0
+  aliceCashLeft <- ownedAmount alice usdc
+  aliceCashLeft === 0.0      -- 1000 funded, 400 + 600 paid
+  carolCash <- ownedAmount carol usdc
+  carolCash === 600.0
+  pure ()
+
+-- ===========================================================================
+-- 6. WALKING THE LADDER — one taker sweeps two price levels in ONE transaction.
+-- ===========================================================================
+-- Each level prints at its OWN maker's price (100, then 102) — a continuous book has
+-- no uniform clearing price, which is exactly the difference from the auction. And the
+-- taker's over-funded limit comes back: 10 @103 was reserved, 1010 was paid, 20 returns.
+testSweepTwoLevelsAtEachMakersPrice : Script ()
+testSweepTwoLevelsAtEachMakersPrice = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  bobAsset   <- mint issuer ceth bob   5.0
+  (book1, bobAsk)   <- placeLimit book0 bob   Ask 5.0 100.0 bobAsset      -- seq 0
+  carolAsset <- mint issuer ceth carol 5.0
+  (book2, carolAsk) <- placeLimit book1 carol Ask 5.0 102.0 carolAsset    -- seq 1
+
+  aliceCash <- mint issuer usdc alice 1030.0                              -- 10 * 103
+  (book3, aliceBid) <- placeLimit book2 alice Bid 10.0 103.0 aliceCash    -- seq 2
+
+  r <- runMatch venue book3 aliceBid [bobAsk, carolAsk]
+  map (.price)      r.executions === [100.0, 102.0]
+  map (.cashAmount) r.executions === [500.0, 510.0]
+  length r.prints === 2
+
+  bobCash <- ownedAmount bob usdc
+  bobCash === 500.0
+  carolCash <- ownedAmount carol usdc
+  carolCash === 510.0
+  aliceAsset <- ownedAmount alice ceth
+  aliceAsset === 10.0
+  aliceChange <- ownedAmount alice usdc
+  aliceChange === 20.0       -- 1030 funded − 1010 paid, returned in the same tx
+  pure ()
+
+-- ===========================================================================
+-- 7. CANCEL — the order goes, the backing comes home, and the venue stops watching.
+-- ===========================================================================
+-- Un-reserving and un-disclosing are the same operation: transferring the slice back
+-- re-creates it private, so the venue can no longer even SEE the balance it was
+-- allowed to move a moment earlier.
+testCancelReturnsBackingAndUndiscloses : Script ()
+testCancelReturnsBackingAndUndiscloses = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  aliceAsset <- mint issuer ceth alice 10.0
+  (book1, aliceAsk) <- placeLimit book0 alice Ask 10.0 101.0 aliceAsset
+
+  -- While it rests, the venue observes the reserved slice (it has to, to move it).
+  venueVisible <- query @Holding venue
+  length venueVisible === 1
+
+  (book2, _released) <- submit alice do
+    exerciseCmd book1 CancelOrder with trader = alice; orderCid = aliceAsk
+
+  -- The balance is whole and Alice's again...
+  aliceBack <- ownedAmount alice ceth
+  aliceBack === 10.0
+  -- ...the order is gone...
+  venueOrders <- query @RestingOrder venue
+  length venueOrders === 0
+  -- ...and the venue no longer sees the money at all.
+  venueVisibleAfter <- query @Holding venue
+  length venueVisibleAfter === 0
+  -- The book's live count is back to zero: cancellation and the count move together.
+  bookAfter <- queryContractId venue book2
+  case bookAfter of
+    None   -> abort "the book should still be live"
+    Some b -> b.liveCount === 0
+  pure ()
+
+-- ===========================================================================
+-- 8. THE MARKET ORDER — unpriced, funded by the BAND, surplus returned.
+-- ===========================================================================
+-- An unpriced bid has no limit, so it has no natural bound on what it may owe — which
+-- is why it cannot be funded on an unbounded-print venue. The band supplies the bound:
+-- the highest price this session can print is 110, so 5 units reserve exactly 550, and
+-- that is sufficient BY CONSTRUCTION. Alice is minted precisely her reservation, fills
+-- at 100, and gets the unspent 50 back.
+testMarketOrderIsFundedByTheBand : Script ()
+testMarketOrderIsFundedByTheBand = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  bobAsset <- mint issuer ceth bob 5.0
+  (book1, bobAsk) <- placeLimit book0 bob Ask 5.0 100.0 bobAsset          -- seq 0
+
+  -- 5 * (100 * 1.10) = 550.0 — one cent less and the order cannot be lodged.
+  aliceShort <- mint issuer usdc alice 549.0
+  submitMustFail alice do
+    exerciseCmd book1 PlaceOrder with
+      trader = alice; side = Bid; quantity = 5.0
+      limitPrice = None; timeInForce = IOC; holdingCid = aliceShort
+
+  aliceCash <- mint issuer usdc alice 550.0
+  (book2, aliceMkt) <- place book1 alice Bid 5.0 None IOC aliceCash       -- seq 1
+
+  r <- runMatch venue book2 aliceMkt [bobAsk]
+  length r.executions === 1
+  (head r.executions).price === 100.0
+  isNone r.residualAggressor === True
+
+  aliceAsset <- ownedAmount alice ceth
+  aliceAsset === 5.0
+  bobCash <- ownedAmount bob usdc
+  bobCash === 500.0
+  -- The surplus over the band-sized reservation is returned, not swept: she still has
+  -- the 549 she could not lodge, plus the 50 the fill did not need.
+  aliceCashLeft <- ownedAmount alice usdc
+  aliceCashLeft === 599.0
+  pure ()
+
+-- ===========================================================================
+-- 9. AN UNPRICED ORDER MAY NOT REST.
+-- ===========================================================================
+-- A resting market order is a standing promise to trade at any price at any future
+-- time — a free option handed to whoever crosses it next. No venue permits one and
+-- neither does this one: unpriced implies immediate-or-cancel, checked at the door.
+testUnpricedOrderCannotRest : Script ()
+testUnpricedOrderCannotRest = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+  aliceCash <- mint issuer usdc alice 1000.0
+  submitMustFail alice do
+    exerciseCmd book0 PlaceOrder with
+      trader = alice; side = Bid; quantity = 5.0
+      limitPrice = None; timeInForce = GTC; holdingCid = aliceCash
+  pure ()
+
+-- ===========================================================================
+-- 10. IOC — the unfilled remainder is killed and the backing returned, same tx.
+-- ===========================================================================
+testIocRemainderIsKilledAndFunded : Script ()
+testIocRemainderIsKilledAndFunded = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  bobAsset <- mint issuer ceth bob 3.0
+  (book1, bobAsk) <- placeLimit book0 bob Ask 3.0 100.0 bobAsset          -- seq 0
+
+  aliceCash <- mint issuer usdc alice 550.0                               -- 5 * 110
+  (book2, aliceMkt) <- place book1 alice Bid 5.0 None IOC aliceCash       -- seq 1
+
+  r <- runMatch venue book2 aliceMkt [bobAsk]
+  (head r.executions).quantity === 3.0
+  -- The 2 unfilled units do NOT rest — an IOC remainder is cancelled in the same
+  -- transaction as its fills.
+  isNone r.residualAggressor === True
+  venueOrders <- query @RestingOrder venue
+  length venueOrders === 0
+
+  aliceAsset <- ownedAmount alice ceth
+  aliceAsset === 3.0
+  aliceCashLeft <- ownedAmount alice usdc
+  aliceCashLeft === 250.0     -- 550 reserved − 300 paid, all of the rest returned
+  -- ...and it is PRIVATE again: the venue no longer observes a cent of it.
+  venueVisible <- query @Holding venue
+  length venueVisible === 0
+  pure ()
+
+-- ===========================================================================
+-- 11. SELF-MATCH PREVENTION.
+-- ===========================================================================
+-- A trader crossing its own resting order prints a trade with no change of beneficial
+-- ownership: wash volume that inflates the tape and — since the tape is what audits
+-- priority here — corrupts the very record this venue is policed by.
+testSelfMatchingIsRejected : Script ()
+testSelfMatchingIsRejected = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  aliceAsset <- mint issuer ceth alice 5.0
+  (book1, aliceAsk) <- placeLimit book0 alice Ask 5.0 100.0 aliceAsset
+  aliceCash  <- mint issuer usdc alice 500.0
+  (book2, aliceBid) <- placeLimit book1 alice Bid 5.0 100.0 aliceCash
+
+  submitMustFail venue do
+    exerciseCmd book2 MatchOrder with aggressorCid = aliceBid; contraCids = [aliceAsk]
+  pure ()
+
+-- ===========================================================================
+-- 12. THE AGGRESSOR MUST BE THE LATEST ARRIVAL.
+-- ===========================================================================
+-- Without this the venue could nominate an OLD resting order as the "taker" and let a
+-- newly arrived one collect maker priority it never earned — queue-jumping in the one
+-- direction the price checks cannot see.
+testAggressorMustBeTheNewestOrder : Script ()
+testAggressorMustBeTheNewestOrder = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  bobAsset <- mint issuer ceth bob 5.0
+  (book1, bobAsk) <- placeLimit book0 bob Ask 5.0 100.0 bobAsset          -- seq 0
+  aliceCash <- mint issuer usdc alice 500.0
+  (book2, aliceBid) <- placeLimit book1 alice Bid 5.0 100.0 aliceCash     -- seq 1
+
+  -- Bob arrived FIRST, so Bob cannot be the aggressor against Alice.
+  submitMustFail venue do
+    exerciseCmd book2 MatchOrder with aggressorCid = bobAsk; contraCids = [aliceBid]
+  -- The right way round settles.
+  r <- runMatch venue book2 aliceBid [bobAsk]
+  length r.executions === 1
+  (head r.executions).maker === bob
+  pure ()
+
+-- ===========================================================================
+-- 13. NO PADDING, NO NIBBLING — and ATOMICITY when the venue gets it wrong.
+-- ===========================================================================
+-- Two structural checks in one scenario:
+--   * the contra list may not run PAST the end of the fill (padding it with orders
+--     that trade nothing);
+--   * and when a match is rejected, NOTHING moves. The whole match is one transaction,
+--     so a bad ladder does not half-settle — the balances, the orders and the book are
+--     exactly as they were, and the correct match then runs against the same state.
+testBadLadderIsRejectedAndNothingMoves : Script ()
+testBadLadderIsRejectedAndNothingMoves = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  bobAsset   <- mint issuer ceth bob   5.0
+  (book1, bobAsk)   <- placeLimit book0 bob   Ask 5.0 100.0 bobAsset      -- seq 0
+  carolAsset <- mint issuer ceth carol 5.0
+  (book2, carolAsk) <- placeLimit book1 carol Ask 5.0 100.0 carolAsset    -- seq 1
+
+  aliceCash <- mint issuer usdc alice 500.0
+  (book3, aliceBid) <- placeLimit book2 alice Bid 5.0 100.0 aliceCash     -- seq 2
+
+  -- Alice needs 5 and Bob alone supplies them. Carol is padding.
+  submitMustFail venue do
+    exerciseCmd book3 MatchOrder with
+      aggressorCid = aliceBid; contraCids = [bobAsk, carolAsk]
+
+  -- ATOMICITY: after the rejected match, nothing has moved anywhere.
+  aliceAssetAfter <- ownedAmount alice ceth
+  aliceAssetAfter === 0.0
+  bobAssetAfter <- ownedAmount bob ceth
+  bobAssetAfter === 5.0        -- still Bob's, still reserved behind his order
+  carolAssetAfter <- ownedAmount carol ceth
+  carolAssetAfter === 5.0
+  aliceCashAfter <- ownedAmount alice usdc
+  aliceCashAfter === 500.0
+  venueOrdersAfter <- query @RestingOrder venue
+  length venueOrdersAfter === 3
+
+  -- ...and the same state settles correctly the moment the ladder is right.
+  r <- runMatch venue book3 aliceBid [bobAsk]
+  length r.executions === 1
+  aliceAssetFinal <- ownedAmount alice ceth
+  aliceAssetFinal === 5.0
+  pure ()
+
+-- ===========================================================================
+-- 14. NO NIBBLING — a better-priced maker cannot be part-filled and skipped.
+-- ===========================================================================
+-- If the aggressor still has size after a fill, the maker it just traded with MUST
+-- have been exhausted. Otherwise a venue could take one unit out of the best offer,
+-- move on to a worse one, and call it price priority.
+testCannotNibbleABetterMakerAndMoveOn : Script ()
+testCannotNibbleABetterMakerAndMoveOn = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  bobAsset   <- mint issuer ceth bob   10.0
+  (book1, bobAsk)   <- placeLimit book0 bob   Ask 10.0 100.0 bobAsset     -- seq 0
+  carolAsset <- mint issuer ceth carol 10.0
+  (book2, carolAsk) <- placeLimit book1 carol Ask 10.0 102.0 carolAsset   -- seq 1
+
+  -- Alice wants 12 and would pay up to 102. Bob's 10 at 100 must be fully consumed
+  -- before Carol's 102 is touched — which the walk does — so a ladder that expects
+  -- Bob to give up only part of his size cannot be constructed at all: the only lever
+  -- the venue has is the LIST, and every check below is on the list.
+  aliceCash <- mint issuer usdc alice 1224.0                              -- 12 * 102
+  (book3, aliceBid) <- placeLimit book2 alice Bid 12.0 102.0 aliceCash    -- seq 2
+
+  -- Skipping the better maker entirely and going straight to the worse one is the
+  -- under-fill case — permitted by the ledger, caught by the tape (see test 16).
+  -- What is NOT permitted is presenting the worse price FIRST:
+  submitMustFail venue do
+    exerciseCmd book3 MatchOrder with
+      aggressorCid = aliceBid; contraCids = [carolAsk, bobAsk]
+
+  -- Correct ladder: Bob's 10 in full at 100, then 2 of Carol's at 102.
+  r <- runMatch venue book3 aliceBid [bobAsk, carolAsk]
+  map (.quantity) r.executions === [10.0, 2.0]
+  map (.price)    r.executions === [100.0, 102.0]
+  -- Carol's untouched 8 rests, still hers, still stamped seq 1.
+  length r.residualContra === 1
+  carolResidual <- queryContractId venue (head r.residualContra)
+  case carolResidual of
+    None   -> abort "Carol's remainder should still be resting"
+    Some o -> do
+      o.quantity === 8.0
+      o.seqNo    === 1
+  aliceAsset <- ownedAmount alice ceth
+  aliceAsset === 12.0
+  aliceChange <- ownedAmount alice usdc
+  aliceChange === 20.0        -- 1224 funded − (1000 + 204) paid
+  pure ()
+
+-- ===========================================================================
+-- 15. THE PRICE BAND — no fill prints outside the session collar.
+-- ===========================================================================
+-- The control that stops a market order sweeping into a stale far-away offer — stub
+-- quotes in the 2010 flash crash, Knight Capital in 2012 — and the same bound that
+-- makes an unpriced bid fundable at all.
+testPriceBandRejectsOrdersOutsideTheCollar : Script ()
+testPriceBandRejectsOrdersOutsideTheCollar = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+  -- Anchor 100, band ±10% → [90, 110]. An offer at 120 could never legally print, so
+  -- it is refused at placement rather than left to lock up Bob's inventory.
+  bobAsset <- mint issuer ceth bob 5.0
+  submitMustFail bob do
+    exerciseCmd book0 PlaceOrder with
+      trader = bob; side = Ask; quantity = 5.0
+      limitPrice = Some 120.0; timeInForce = GTC; holdingCid = bobAsset
+  -- ...and a bid below the floor is refused the same way.
+  aliceCash <- mint issuer usdc alice 1000.0
+  submitMustFail alice do
+    exerciseCmd book0 PlaceOrder with
+      trader = alice; side = Bid; quantity = 5.0
+      limitPrice = Some 80.0; timeInForce = GTC; holdingCid = aliceCash
+  -- The boundary itself is legal — the band clamps, it does not shave.
+  (_book1, _ask) <- placeLimit book0 bob Ask 5.0 110.0 bobAsset
+  pure ()
+
+-- ===========================================================================
+-- 16. 🔴 THE LIMIT OF ENFORCEMENT — an under-fill is PERMITTED, and the tape betrays it.
+-- ===========================================================================
+-- THE MOST IMPORTANT SCENARIO IN THIS FILE, because it documents what the ledger
+-- CANNOT do. Carol rests the best offer at 100. The venue fills Alice against Bob at
+-- 101 instead and simply does not mention Carol's order — which is private to Carol
+-- and the venue, so no assertion inside `MatchOrder` can reach it and no validator
+-- re-executing the transaction ever sees it. THE MATCH SUCCEEDS.
+--
+-- What catches it is post-trade, not pre-trade. `TapePrint` is observed by every
+-- participant, so Carol — whose 100 offer is demonstrably still resting — can read a
+-- venue-signed print at 101 and hold evidence that a trade went THROUGH her order.
+-- Pre-trade dark, post-trade lit; the lit half is what polices the dark half.
+testPriorityViolationIsPermittedButThePrintBetraysIt : Script ()
+testPriorityViolationIsPermittedButThePrintBetraysIt = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  carolAsset <- mint issuer ceth carol 5.0
+  (book1, carolAsk100) <- placeLimit book0 carol Ask 5.0 100.0 carolAsset -- best offer
+  bobAsset   <- mint issuer ceth bob   5.0
+  (book2, bobAsk101)   <- placeLimit book1 bob   Ask 5.0 101.0 bobAsset   -- worse offer
+
+  aliceCash <- mint issuer usdc alice 505.0
+  (book3, aliceBid) <- placeLimit book2 alice Bid 5.0 101.0 aliceCash
+
+  -- The venue simply omits Carol. The ledger has no way to know she exists.
+  r <- runMatch venue book3 aliceBid [bobAsk101]
+  (head r.executions).price === 101.0
+  (head r.executions).maker === bob
+
+  -- Carol's better offer is still sitting there, untouched.
+  carolOrders <- query @RestingOrder carol
+  length carolOrders === 1
+
+  -- ...AND CAROL CAN SEE THE PRINT. A trade at 101 while her 100 offer rested is a
+  -- priority violation she can prove from a contract the venue signed.
+  carolTape <- query @TapePrint carol
+  length carolTape === 1
+  map (\(_, p) -> p.price) carolTape === [101.0]
+  pure ()
+
+-- ===========================================================================
+-- 17. THE TAPE IS PUBLIC; THE CONFIRMS ARE NOT; NEITHER NAMES A COUNTERPARTY.
+-- ===========================================================================
+-- Post-trade transparency without post-trade identity — what MiFID II RTS 1 actually
+-- requires and what a central counterparty exists to provide. Bob, who had no part in
+-- the trade, sees the print. Alice sees her own confirm and Carol's is invisible to
+-- her, so neither learns who they traded with. Eve, outside the session, sees nothing
+-- at all.
+testTapeIsPublicAndAnonymous : Script ()
+testTapeIsPublicAndAnonymous = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  carolAsset <- mint issuer ceth carol 5.0
+  (book1, carolAsk) <- placeLimit book0 carol Ask 5.0 100.0 carolAsset
+  aliceCash <- mint issuer usdc alice 500.0
+  (book2, aliceBid) <- placeLimit book1 alice Bid 5.0 100.0 aliceCash
+  _r <- runMatch venue book2 aliceBid [carolAsk]
+
+  -- THE PRINT IS PUBLIC to the session — including to Bob, who traded nothing.
+  bobTape <- query @TapePrint bob
+  length bobTape === 1
+  auditorTape <- query @TapePrint auditor
+  length auditorTape === 1
+  -- ...but not to the outside world.
+  eveTape <- query @TapePrint eve
+  length eveTape === 0
+
+  -- THE CONFIRMS ARE BILATERAL. Each trader sees exactly its own, the auditor sees
+  -- both, and Bob — a participant who was not party to the trade — sees neither.
+  aliceConfirms <- query @TradeConfirm alice
+  length aliceConfirms === 1
+  map (\(_, c) -> c.liquidity) aliceConfirms === ["Taker"]
+  carolConfirms <- query @TradeConfirm carol
+  length carolConfirms === 1
+  map (\(_, c) -> c.liquidity) carolConfirms === ["Maker"]
+  bobConfirms <- query @TradeConfirm bob
+  length bobConfirms === 0
+  auditorConfirms <- query @TradeConfirm auditor
+  length auditorConfirms === 2
+  eveConfirms <- query @TradeConfirm eve
+  length eveConfirms === 0
+  pure ()
+
+-- ===========================================================================
+-- 18. CONSERVATION — a match creates and destroys nothing.
+-- ===========================================================================
+-- Every unit of cETH and USDC in existence before the trade is in existence after it,
+-- and none of it is left sitting with the venue. Read through the ISSUER, which signs
+-- every Holding and is therefore the only party who can see the whole supply.
+testMatchConservesEveryUnit : Script ()
+testMatchConservesEveryUnit = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  bobAsset   <- mint issuer ceth bob   5.0
+  carolAsset <- mint issuer ceth carol 5.0
+  aliceCash  <- mint issuer usdc alice 1030.0
+
+  assetBefore <- totalSupply issuer ceth
+  cashBefore  <- totalSupply issuer usdc
+  assetBefore === 10.0
+  cashBefore  === 1030.0
+
+  (book1, bobAsk)   <- placeLimit book0 bob   Ask 5.0 100.0 bobAsset
+  (book2, carolAsk) <- placeLimit book1 carol Ask 5.0 102.0 carolAsset
+  (book3, aliceBid) <- placeLimit book2 alice Bid 10.0 103.0 aliceCash
+  _r <- runMatch venue book3 aliceBid [bobAsk, carolAsk]
+
+  assetAfter <- totalSupply issuer ceth
+  cashAfter  <- totalSupply issuer usdc
+  assetAfter === assetBefore
+  cashAfter  === cashBefore
+
+  -- Nothing stranded at the venue: it held both legs for zero ledger time.
+  venueAsset <- ownedAmount venue ceth
+  venueAsset === 0.0
+  venueCash <- ownedAmount venue usdc
+  venueCash === 0.0
+  pure ()
+
+-- ===========================================================================
+-- 19. SESSION CONTROL — a closed session stops trading but NEVER traps collateral.
+-- ===========================================================================
+-- Locking a trader's money inside an order it cannot pull because the venue halted is
+-- not a risk control, it is a hostage. Real venues accept cancels during halts, and so
+-- does this one.
+testClosedSessionStillAllowsCancellation : Script ()
+testClosedSessionStillAllowsCancellation = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  bobAsset <- mint issuer ceth bob 5.0
+  (book1, bobAsk) <- placeLimit book0 bob Ask 5.0 100.0 bobAsset
+  book2 <- submit venue do exerciseCmd book1 CloseSession
+
+  -- No new orders while the session is closed...
+  aliceCash <- mint issuer usdc alice 500.0
+  submitMustFail alice do
+    exerciseCmd book2 PlaceOrder with
+      trader = alice; side = Bid; quantity = 5.0
+      limitPrice = Some 100.0; timeInForce = GTC; holdingCid = aliceCash
+
+  -- ...but Bob can always get his inventory back.
+  (book3, _released) <- submit bob do
+    exerciseCmd book2 CancelOrder with trader = bob; orderCid = bobAsk
+  bobBack <- ownedAmount bob ceth
+  bobBack === 5.0
+
+  -- Re-opening resumes trading. GTC interest would have survived the close, which is
+  -- what "good till cancelled" means — and is the ladder a closing auction ought to
+  -- inherit. That handover is NOT built: see ContinuousBook.daml's header.
+  book4 <- submit venue do exerciseCmd book3 OpenSession
+  bobAsset2 <- mint issuer ceth bob 5.0
+  (_book5, _ask) <- placeLimit book4 bob Ask 5.0 100.0 bobAsset2
+  pure ()
+
+-- ===========================================================================
+-- 20. THE VENUE'S CANCEL RETURNS THE MONEY — a kill is not a seizure.
+-- ===========================================================================
+-- `KillOrder` is the exchange's cancel (erroneous order, halt, an IOC that found
+-- nothing). The operator can do it because it signs the resting order, and that power
+-- cannot be taken away — but `VenueRelease` moves the slice to the TRADER and nowhere
+-- else, so what it confers is the power to refuse service, not a path to the money.
+testVenueKillReturnsTheBacking : Script ()
+testVenueKillReturnsTheBacking = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  bobAsset <- mint issuer ceth bob 5.0
+  (book1, bobAsk) <- placeLimit book0 bob Ask 5.0 100.0 bobAsset
+
+  (book2, _released) <- submit venue do exerciseCmd book1 KillOrder with orderCid = bobAsk
+
+  bobBack <- ownedAmount bob ceth
+  bobBack === 5.0
+  venueAsset <- ownedAmount venue ceth
+  venueAsset === 0.0
+  -- The venue cannot even see the balance any more — the kill un-disclosed it too.
+  venueVisible <- query @Holding venue
+  length venueVisible === 0
+  bookAfter <- queryContractId venue book2
+  case bookAfter of
+    None   -> abort "the book should still be live"
+    Some b -> b.liveCount === 0
+  pure ()
+
+-- ===========================================================================
+-- 21. ORDER HYGIENE AT THE DOOR — wrong instrument, wrong owner, wrong party.
+-- ===========================================================================
+-- The auction learned this the expensive way: a mis-instrumented order that is allowed
+-- to REST detonates later, deep inside settlement, in a message that names neither the
+-- order nor the book — one bad order, and nobody trades. Reject at the door, where it
+-- costs one trader one rejected placement.
+testPlacementRejectsMalformedOrders : Script ()
+testPlacementRejectsMalformedOrders = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  bobAsset <- mint issuer ceth bob 5.0
+  bobCash  <- mint issuer usdc bob 5000.0
+
+  -- An ASK must commit the ASSET, not cash.
+  submitMustFail bob do
+    exerciseCmd book0 PlaceOrder with
+      trader = bob; side = Ask; quantity = 5.0
+      limitPrice = Some 100.0; timeInForce = GTC; holdingCid = bobCash
+  -- A BID must commit the CASH leg, not the asset.
+  submitMustFail bob do
+    exerciseCmd book0 PlaceOrder with
+      trader = bob; side = Bid; quantity = 5.0
+      limitPrice = Some 100.0; timeInForce = GTC; holdingCid = bobAsset
+  -- You cannot commit somebody else's holding...
+  submitMustFail alice do
+    exerciseCmd book0 PlaceOrder with
+      trader = alice; side = Ask; quantity = 5.0
+      limitPrice = Some 100.0; timeInForce = GTC; holdingCid = bobAsset
+  -- ...and a party who is not a registered participant cannot trade here at all.
+  eveAsset <- mint issuer ceth eve 5.0
+  submitMustFail eve do
+    exerciseCmd book0 PlaceOrder with
+      trader = eve; side = Ask; quantity = 5.0
+      limitPrice = Some 100.0; timeInForce = GTC; holdingCid = eveAsset
+  pure ()
+
+-- ===========================================================================
+-- 22. THE SEQUENCE NUMBER IS MONOTONIC AND NEVER REUSED.
+-- ===========================================================================
+-- Time priority is only a priority if every order gets a distinct stamp in arrival
+-- order. This is the property that forces `PlaceOrder` to be CONSUMING, and therefore
+-- the single source of the contention documented at the top of ContinuousBook.daml —
+-- so it is worth a scenario of its own. Note that cancelling does NOT recycle a stamp:
+-- `nextSeq` only ever goes up.
+testArrivalStampsAreMonotonicAndNeverRecycled : Script ()
+testArrivalStampsAreMonotonicAndNeverRecycled = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  bobAsset   <- mint issuer ceth bob   5.0
+  (book1, bobAsk)   <- placeLimit book0 bob   Ask 5.0 100.0 bobAsset
+  carolAsset <- mint issuer ceth carol 5.0
+  (book2, _carolAsk) <- placeLimit book1 carol Ask 5.0 100.0 carolAsset
+
+  bobOrder <- queryContractId venue bobAsk
+  case bobOrder of
+    None   -> abort "Bob's order should be resting"
+    Some o -> o.seqNo === 0
+
+  bookMid <- queryContractId venue book2
+  case bookMid of
+    None   -> abort "the book should be live"
+    Some b -> do
+      b.nextSeq   === 2
+      b.liveCount === 2
+
+  -- Cancel Bob. The live count falls; the stamp counter does NOT.
+  (book3, _released) <- submit bob do
+    exerciseCmd book2 CancelOrder with trader = bob; orderCid = bobAsk
+  bookAfter <- queryContractId venue book3
+  case bookAfter of
+    None   -> abort "the book should be live"
+    Some b -> do
+      b.nextSeq   === 2      -- never rewound: a reused stamp is a corrupted queue
+      b.liveCount === 1
+
+  -- The next order gets 2, not Bob's vacated 0.
+  aliceCash <- mint issuer usdc alice 500.0
+  (_book4, aliceBid) <- placeLimit book3 alice Bid 5.0 100.0 aliceCash
+  aliceOrder <- queryContractId venue aliceBid
+  case aliceOrder of
+    None   -> abort "Alice's order should be resting"
+    Some o -> o.seqNo === 2
+  pure ()

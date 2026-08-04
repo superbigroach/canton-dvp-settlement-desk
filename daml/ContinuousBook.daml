@@ -1,0 +1,1071 @@
+-- ContinuousBook.daml
+-- ===========================================================================
+-- THE CONTINUOUS SESSION — a price-time-priority limit order book on Canton.
+-- ===========================================================================
+-- WHY THIS FILE EXISTS. `docs/HOW_IT_WORKS.md` lists it as a known limitation, in
+-- these words: "A real closing cross inherits the whole resting day book — that is
+-- the limit ladder MOC flow walks into. There is no continuous session here, so the
+-- ladder must come from LOC orders submitted directly into the auction."
+--
+-- That is the honest description of a structural hole, and it is worth spelling out
+-- WHY it is structural rather than cosmetic. A closing auction does not manufacture
+-- a price out of nothing. It inherits one. All day, resting limit orders accumulate
+-- on the continuous book — a bid at 99.98, an offer at 100.02, size stacked behind
+-- both — and every one of them is a standing, funded, cancellable statement about
+-- value. At the close, unpriced market-on-close flow (index trackers, rebalancers,
+-- ETF creations: buyers of THE PRINT, with no view on price) walks INTO that ladder.
+-- The ladder is what turns "I will buy 400,000 shares at whatever it costs" into a
+-- number. Take the ladder away and unpriced flow has nothing to price against: the
+-- MOC-vs-MOC book has no price information in it at all, which is exactly why Xetra
+-- §11.1.1 step 5 and Euronext Trading Manual §3.1 both fall back to the venue's
+-- reference price — an answer, but not a DISCOVERED one.
+--
+-- A venue with only an auction is therefore a venue whose price comes entirely from
+-- limit-on-close orders lodged directly into the cross. That is a real order type and
+-- real venues have it, but it is the thin end of the book. This module builds the
+-- other end: a continuous session where limit interest RESTS, is matched by price
+-- then time, and settles bilaterally at the maker's price the instant it is crossed.
+--
+-- ---------------------------------------------------------------------------
+-- WHAT THIS IS, IN ONE PARAGRAPH
+-- ---------------------------------------------------------------------------
+-- `ContinuousBook` is one instrument's book. Traders `PlaceOrder` — a limit order
+-- that rests, or an unpriced market order that must fill immediately — and the
+-- backing is reserved at that moment, exactly as `MarketOnClose.reserveExact` does
+-- for a sealed order. Each order is stamped with a monotonic `seqNo` from the book:
+-- that stamp IS time priority. The venue then runs `MatchOrder`, naming an aggressor
+-- and the contra orders it crosses. The choice body checks price-time priority,
+-- self-match prevention, the price band and arrival order, walks the ladder, and
+-- settles every fill in ONE atomic transaction with the venue as momentary
+-- counterparty. Each fill prints to a public `TapePrint` (price, size, time — no
+-- identities) and produces a `TradeConfirm` to each side naming the venue as its CCP.
+--
+-- ---------------------------------------------------------------------------
+-- THE PRIVACY PROPERTY IS THE SAME ONE THE AUCTION HAS, AND IT IS PRE-TRADE ONLY
+-- ---------------------------------------------------------------------------
+-- A `RestingOrder` is signed by operator + trader and observed by NOBODY else. While
+-- it rests, no other participant — and not even the auditor — can see that it exists,
+-- let alone its side, size or limit. That is the dark-pool property, and on a public
+-- EVM chain it is unobtainable: the mempool IS the book, so every resting order is a
+-- free option written to the fastest reader.
+--
+-- BUT A DARK POOL IS DARK PRE-TRADE, NOT POST-TRADE, AND THAT DISTINCTION IS THE
+-- WHOLE OF MiFID II. The pre-trade transparency waivers (MiFIR Art. 4 — reference
+-- price, negotiated trade, large-in-scale, order-management-facility) are waivers
+-- from PRE-trade publication only. Post-trade publication — MiFIR Arts. 6 and 10 for
+-- trading venues, Arts. 20 and 21 for investment firms, with the field list in RTS 1 —
+-- is mandatory for every venue including dark ones, "as close to real time as is
+-- technically possible", and it carries price, volume and time — NOT counterparty
+-- identity. `TapePrint` is exactly that record, and it is not decoration:
+--
+--   IT IS THE ONLY THING THAT MAKES THIS VENUE'S PRIORITY CLAIMS AUDITABLE. The
+--   assertions below prove the venue matched correctly ACROSS THE ORDERS IT SUPPLIED.
+--   They cannot prove it did not WITHHOLD a better-priced resting order, because that
+--   order is private to the venue and its owner, and a validator re-executing this
+--   transaction never sees it. The tape closes that loop from the other side: a
+--   trader whose bid at 100.02 sat unfilled while the tape printed a trade at 100.05
+--   is holding ledger-signed evidence of a priority violation. Pre-trade dark,
+--   post-trade lit, and the lit half is what polices the dark half.
+--
+-- ---------------------------------------------------------------------------
+-- 🔴 CONTENTION — THE HARD PART, STATED BEFORE ANYTHING ELSE IN THIS FILE
+-- ---------------------------------------------------------------------------
+-- A continuous book has a problem the auction does not have, it is not a detail, and
+-- no amount of Daml makes it go away.
+--
+-- EVERY CHOICE ON `ContinuousBook` IS CONSUMING. `PlaceOrder` must be, because it
+-- stamps `seqNo` and a sequence number that is not allocated exactly once is not a
+-- time priority. `MatchOrder` must be, because it moves `liveCount`. `CancelOrder`
+-- and `KillOrder` must be, for the same reason. So the book contract is a LOCK on the
+-- instrument: Canton's conflict detection serialises any two transactions that touch
+-- the same contract, and every order and every match touches this one. Two traders
+-- placing orders in the same instant means one of them loses the race, re-reads the
+-- book cid and retries.
+--
+-- THE THROUGHPUT ASSUMPTION THIS DESIGN MAKES, SAID AS A NUMBER: one book commit per
+-- Canton confirmation round. Order arrivals and matches on ONE instrument are capped
+-- at roughly the domain's sequencing/confirmation rate — order tens per second on a
+-- healthy deployment, not the hundreds of thousands per second a colocated matching
+-- engine does on one symbol. Anyone claiming otherwise has not read this paragraph.
+--
+-- WHY THE AUCTION ESCAPES IT, AND WHY THAT IS NOT A CHEAP SHOT AT THIS MODULE. A call
+-- auction is a BATCH. It collects interest over minutes and produces exactly ONE
+-- crossing transaction. `ClosingAuction.SubmitOrder` is consuming too and has exactly
+-- the same contention on submission — the difference is that a batch auction only has
+-- to survive it on the collection path, once per session, whereas a continuous book
+-- eats it on the HOT path, on every single match. The contention is not new. Its
+-- position on the critical path is.
+--
+-- WHAT WOULD HAVE TO CHANGE TO SCALE IT — three answers, in increasing difficulty.
+--
+--   1. SHARD BY INSTRUMENT. Already true here and it costs nothing: one
+--      `ContinuousBook` per (instrument, cash leg). Two instruments never touch the
+--      same contract, so they never conflict and they scale linearly with the number
+--      of instruments. This is not a workaround; it is what real exchanges do. Nasdaq
+--      and every other major venue distribute symbols across matching engines but keep
+--      each symbol on exactly ONE engine, for precisely the reason this module is
+--      serialised: price-time priority is a TOTAL ORDER over one book, and you cannot
+--      shard a total order without weakening the guarantee it exists to provide. The
+--      ledger's constraint here is the same constraint physical venues already live
+--      with. What the ledger costs is the constant factor, not the shape.
+--
+--   2. SPLIT THE SEQUENCER FROM THE BOOK. `PlaceOrder` conflicts with `MatchOrder`
+--      today only because both mutate one contract. Move `nextSeq` onto a per-trader
+--      `ArrivalStamp` contract (each trader's own stamp, conflicting only with itself)
+--      and derive the global order from (stamp value, ledger time). Placement then
+--      stops conflicting with matching, and the lock shrinks to the matching path
+--      alone. Costs: a heavier order-entry protocol, and a global order that is now
+--      DERIVED rather than stamped, so it must be re-validated inside `MatchOrder`.
+--      This is the same "shard the counter per participant and sum the shards"
+--      escape hatch the auction's `SubmitOrder` header already names.
+--
+--   3. BATCH THE MATCHES. Nothing forces one match per transaction. `MatchOrder`
+--      generalises to a LIST of (aggressor, contras) applied in arrival order inside
+--      one commit, which amortises the single book write over N crossings — the
+--      throughput of a batch with the semantics of a continuous book, at the cost of
+--      latency equal to the batch window. Note where that lands you: a continuous book
+--      matched in short batches IS a frequent batch auction (Budish, Cramton & Shim,
+--      QJE 2015), which is a defensible market design in its own right and arguably
+--      the RIGHT one for a ledger. This module deliberately implements the harder,
+--      more conventional thing first so the trade-off can be measured rather than
+--      assumed.
+--
+-- ---------------------------------------------------------------------------
+-- 🔴 WHAT THIS IS NOT: IT IS NOT CONNECTED TO THE AUCTION
+-- ---------------------------------------------------------------------------
+-- Say it plainly. This module compiles standalone against `Holding` and the standard
+-- library. It does not import `MarketOnClose`, and `MarketOnClose` does not import it.
+-- Closing a continuous session here does NOT hand the resting book to a
+-- `ClosingAuction`, so the limitation quoted at the top of this file is NARROWED, not
+-- yet closed: the venue now HAS a resting day book; the closing cross still does not
+-- inherit it.
+--
+-- WHAT CONNECTING THEM WOULD TAKE — the honest scope, not a hand-wave:
+--
+--   a. A HANDOVER CHOICE. `ContinuousBook.HandOverToAuction`, controller operator,
+--      taking a `ContractId ClosingAuction` and the live `RestingOrder` cids. For each
+--      one it archives the resting order and lodges the equivalent `SealedOrder`
+--      through `ClosingAuction.SubmitOrder` — so the auction's `submittedCount` moves
+--      with it and the close stays provably complete.
+--
+--   b. THE BACKING HAS TO MIGRATE, NOT BE RE-RESERVED. A resting order's slice is
+--      already carved out and disclosed to the venue. `SubmitOrder` calls
+--      `reserveExact` on a holding the TRADER owns, which the reserved slice still is,
+--      so the slice can be handed straight in — but the AMOUNTS differ and that is the
+--      real work. A resting bid reserves `quantity * limit`; the auction wants the
+--      same for an LOC, so a limit order ports one-for-one. An unpriced order does not
+--      port at all: it is IOC here by construction, so there is nothing unpriced left
+--      resting at the close. The genuinely awkward case is a resting bid whose limit
+--      sits outside the AUCTION's collar — it is fundable here and not there.
+--
+--   c. A DIRECTION FOR THE DEPENDENCY. `MarketOnClose` must not import this module
+--      and this module must not import `MarketOnClose`; a handover that names both is
+--      a third module (`SessionSchedule`) that imports each, exactly as
+--      `MarketOnClose -> LiquidityMandate` runs one way today. Anything else makes the
+--      auction unreadable on its own.
+--
+--   d. THE PRICE LINK, WHICH IS THE ACTUAL PRIZE. Once the ladder is inherited, the
+--      auction's `referencePrice` should stop being a venue-set anchor and become the
+--      LAST CONTINUOUS PRINT — which is what `TapePrint` already records, and what
+--      NYSE Rule 7.35B calls the Continuous Book Clearing Price. That is the single
+--      highest-value follow-up in this repo: it is the step at which the closing price
+--      stops being anchored on a number the venue supplied and starts being anchored
+--      on trades that actually happened.
+--
+-- ---------------------------------------------------------------------------
+-- DELIBERATE DUPLICATION, DECLARED
+-- ---------------------------------------------------------------------------
+-- `reserveBacking` here is `MarketOnClose.reserveExact` re-written, and `TradeConfirm`
+-- overlaps `Settlement.SettlementReceipt`. That is not an oversight. This module is
+-- required to compile standalone against `Holding` + stdlib so the auction and the
+-- continuous session can be reviewed, and broken, independently. The merge — one
+-- shared `reserveBacking` in `Holding`, one shared receipt in `Settlement` — belongs
+-- in the same change as (c) above, where the dependency direction gets decided once.
+-- ===========================================================================
+
+module ContinuousBook where
+
+import Holding
+import DA.List (dedup)
+import DA.Optional (isNone, optionalToList)
+
+-- ---------------------------------------------------------------------------
+-- BookSide — which side of the market an order is on.
+-- ---------------------------------------------------------------------------
+-- Deliberately NOT `Buy`/`Sell`. A continuous book is described from the book's point
+-- of view, not the order's: interest to buy rests on the BID and interest to sell
+-- rests on the ASK (the offer). An aggressor carries a side too — a taker on the Bid
+-- is buying, and it takes from the Ask side. `opposite` is the only mapping needed.
+-- (The auction's `Side` type is a separate declaration in a separate module and the
+-- two never meet, which is exactly the isolation this module was asked for.)
+data BookSide = Bid | Ask
+  deriving (Eq, Show)
+
+opposite : BookSide -> BookSide
+opposite Bid = Ask
+opposite Ask = Bid
+
+-- ---------------------------------------------------------------------------
+-- TimeInForce — how long the order lives if it is not filled.
+-- ---------------------------------------------------------------------------
+--   GTC — good till cancelled: the unfilled remainder RESTS and keeps its queue
+--         position (see `RestingOrder.Fill`). The ordinary limit order.
+--   IOC — immediate or cancel: fill what you can right now, cancel the rest. The only
+--         legal instruction for an unpriced order, because an unpriced order that
+--         rested would be a free option on the whole future of the market.
+--
+-- 🔴 AN HONEST LIMIT ON "IMMEDIATE". On a real venue, arrival and matching happen
+-- inside one pass of the matching engine, so an IOC never rests for any observable
+-- time. Here every order round-trips through the ledger: `PlaceOrder` is one
+-- transaction and `MatchOrder` is the next, so an IOC is resting — and cancellable,
+-- and (to the venue) visible — for one commit in between. There is no way to fuse
+-- them, because the taker cannot name its own contras: it cannot see them. So "IOC"
+-- here means "the venue must fill or `KillOrder` it in the next transaction", and the
+-- window is one ledger round trip, not zero. That is a property of order lifecycle on
+-- a ledger, not of this module.
+data TimeInForce = GTC | IOC
+  deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- crossesAt — THE ONE DEFINITION of "would this order trade at this price".
+-- ---------------------------------------------------------------------------
+-- Used by `MatchOrder`'s eligibility gate and again inside `RestingOrder.Fill`, so
+-- the match and the settlement leg can never drift into disagreeing about whether an
+-- order crosses. Same shape as `MarketOnClose.eligibleAt`, same reason.
+--   * A limited BID trades iff its limit is >= the price (it will pay at least P).
+--   * A limited ASK trades iff its limit is <= the price (it will accept P).
+--   * An UNPRICED order trades at any price. That is the definition of a market order.
+crossesAt : BookSide -> Decimal -> Optional Decimal -> Bool
+crossesAt _   _ None       = True
+crossesAt Bid p (Some lim) = lim >= p
+crossesAt Ask p (Some lim) = lim <= p
+
+-- ---------------------------------------------------------------------------
+-- The session price band — the collar, borrowed wholesale from the auction.
+-- ---------------------------------------------------------------------------
+-- `bandFraction` of the session anchor, either side. Two jobs, and the second is the
+-- one that makes market orders possible at all:
+--   1. NO FILL PRINTS OUTSIDE IT. A market order that sweeps a book with a stale
+--      far-away offer in it is the classic disaster — stub quotes in the 6 May 2010
+--      flash crash, Knight Capital in 2012. A band is what every real venue answers it
+--      with (US LULD, Xetra volatility interruptions, Euronext collars).
+--   2. IT BOUNDS WHAT AN UNPRICED BID CAN OWE. A limited bid can be funded because its
+--      own limit is the bound on what it may pay. An unpriced bid has no limit, so it
+--      has no natural bound — and you cannot reserve infinity. The band supplies one:
+--      the highest price this book can legally print is `bandHigh`, exactly, so a
+--      market bid reserving `quantity * bandHigh` is sufficient BY CONSTRUCTION, not
+--      by estimate. Unspent cash comes back as change in the settlement transaction.
+--      This is `MarketOnClose`'s collar argument, applied to the same problem.
+--
+-- 🔴 STATIC BY DESIGN, AND HERE IS THE COST. `referencePrice` is never rewritten by
+-- any choice on this template, which is what makes the reservation above sound: the
+-- number the reservation was sized against at placement is the number the band is
+-- still centred on at the match. A real venue's band moves with the last trade. A
+-- moving band on a PRE-FUNDED order would silently invalidate every reservation taken
+-- against the old one, so moving it needs a re-reservation protocol per resting order,
+-- which is a much larger change than one mutable field.
+bandLowOf : Decimal -> Decimal -> Decimal
+bandLowOf ref frac = ref * (1.0 - frac)
+
+bandHighOf : Decimal -> Decimal -> Decimal
+bandHighOf ref frac = ref * (1.0 + frac)
+
+-- ---------------------------------------------------------------------------
+-- priorityKey / aheadOf / inPriorityOrder — PRICE PRIORITY, THEN TIME PRIORITY.
+-- ---------------------------------------------------------------------------
+-- The rule every lit venue in the world runs on, and the reason a resting order is
+-- worth placing at all: better price wins; at the same price, earlier arrival wins.
+-- If a venue could serve a later order at the same price first, posting liquidity
+-- would be a mug's game and nobody would post any.
+--
+--   * On the ASK side (offers) the BEST price is the LOWEST — a buyer wants the
+--     cheapest offer — so the key ascends with price.
+--   * On the BID side the BEST price is the HIGHEST, so the key ascends with the
+--     NEGATED price. One function, two sides, no duplicated comparison logic.
+--   * Ties break on `seqNo`, which the book stamps monotonically at placement. Lower
+--     seqNo arrived first and is served first.
+--
+-- These are PURE functions over the order record on purpose: `MatchOrder` asserts the
+-- venue's supplied contra list satisfies them, so the priority rule is a checkable
+-- fact in the transaction rather than a promise in a document.
+priorityKey : BookSide -> RestingOrder -> (Decimal, Int)
+priorityKey side o =
+  -- A resting order is always priced — `PlaceOrder` refuses to rest an unpriced one
+  -- and `MatchOrder` re-checks it before this is ever called. The 0.0 is unreachable.
+  let p = case o.limitPrice of Some l -> l; None -> 0.0
+  in case side of
+       Ask -> (p, o.seqNo)
+       Bid -> (negate p, o.seqNo)
+
+-- Strict, because two distinct orders can never share a seqNo: the book allocates it
+-- once and never reuses it. A non-strict comparison would let a duplicated order pass.
+aheadOf : BookSide -> RestingOrder -> RestingOrder -> Bool
+aheadOf side a b =
+  let (pa, sa) = priorityKey side a
+      (pb, sb) = priorityKey side b
+  in pa < pb || (pa == pb && sa < sb)
+
+inPriorityOrder : BookSide -> [RestingOrder] -> Bool
+inPriorityOrder _    []              = True
+inPriorityOrder _    [_]             = True
+inPriorityOrder side (a :: b :: rest) = aheadOf side a b && inPriorityOrder side (b :: rest)
+
+-- ---------------------------------------------------------------------------
+-- Execution — one bilateral fill. What `walkBook` produces and the paperwork consumes.
+-- ---------------------------------------------------------------------------
+-- NOTE WHAT IS ABSENT: a continuous book has no pro-rata allocation and no pooled
+-- rounding residual. Every fill is ONE buyer against ONE seller at ONE price, so
+-- `cashAmount` is computed exactly once and used both for the delivery and for the
+-- proceeds. The auction needs `settleResidual` and `distribute` precisely because it
+-- rations a marginal price level across many orders and the products do not sum in
+-- fixed-precision Decimal. Here there is nothing to ration, so there is nothing to
+-- reconcile — the ledger movement and the confirm are literally the same number.
+data Execution = Execution
+  with
+    price      : Decimal  -- the MAKER's limit: the resting order's posted price
+    quantity   : Decimal  -- units of the asset that changed hands
+    cashAmount : Decimal  -- quantity * price, computed once
+    buyer      : Party    -- received the asset
+    seller     : Party    -- received the cash
+    aggressor  : Party    -- the taker on this fill (fee-tier: "Taker")
+    maker      : Party    -- the resting side (fee-tier: "Maker")
+  deriving (Eq, Show)
+
+-- MatchResult — everything `MatchOrder` hands back. The book cid must be threaded
+-- forward by the caller (every choice on the book is consuming — see CONTENTION).
+data MatchResult = MatchResult
+  with
+    book              : ContractId ContinuousBook          -- the successor book
+    executions        : [Execution]                        -- the fills, in walk order
+    prints            : [ContractId TapePrint]             -- the public tape
+    residualAggressor : Optional (ContractId RestingOrder) -- unfilled remainder, if it rests
+    residualContra    : [ContractId RestingOrder]          -- partially filled maker, if any
+  deriving (Eq, Show)
+
+-- ===========================================================================
+-- ContinuousBook — one instrument's continuous session.
+-- ===========================================================================
+-- Signed by the operator; observed by the auditor and the registered participants, so
+-- they can see that a session exists and place into it. They CANNOT see each other's
+-- orders: those live on `RestingOrder`, whose observer line is empty.
+template ContinuousBook
+  with
+    operator       : Party    -- the venue
+    auditor        : Party    -- compliance; sees the session and the tape, not the book
+    participants   : [Party]  -- who may place orders here
+    instrumentId   : Text     -- the asset being traded ("DEMO:AAPL" | "cETH" | ...)
+    cashInstrument : Text     -- the cash leg ("USDC")
+    -- THE SESSION ANCHOR. Never rewritten by any choice — see `bandLowOf`/`bandHighOf`
+    -- for why that immutability is load-bearing for market-order funding.
+    referencePrice : Decimal
+    bandFraction   : Decimal  -- 0.10 = ±10%. No fill prints outside the band.
+    -- TIME PRIORITY, AS A LEDGER FACT. Stamped onto every order at placement and never
+    -- reused. `MatchOrder` reads it to prove the aggressor really is the latest arrival
+    -- and that the contra list is in queue order. This is the continuous-book
+    -- equivalent of `ClosingAuction.submittedCount` — a monotonic counter the venue
+    -- cannot rewind, which is what turns "we matched fairly" into something a
+    -- validator re-executes.
+    nextSeq        : Int
+    -- HOW MANY ORDERS ARE RESTING RIGHT NOW. Moved by placement (+1), by cancellation
+    -- (−1) and by every order a match consumes in full. Combined with `ensure
+    -- liveCount >= 0` it is a tripwire: an accounting bug that loses an order takes the
+    -- next transaction down instead of quietly under-stating the book.
+    liveCount      : Int
+    isOpen         : Bool     -- False = session closed: no new orders, no matching.
+                              -- Cancellation stays open, as it does in a real halt.
+  where
+    signatory operator
+    observer auditor :: participants
+
+    ensure referencePrice > 0.0
+        && bandFraction > 0.0 && bandFraction < 1.0
+        && nextSeq >= 0
+        && liveCount >= 0
+
+    -- =====================================================================
+    -- PLACE ORDER — a participant lodges an order and pre-commits its backing.
+    -- =====================================================================
+    -- CONSUMING, and the reason is `nextSeq`. A time priority is only a priority if
+    -- every order gets a distinct stamp and the stamps reflect arrival order; a
+    -- counter that two concurrent transactions can both read as 7 is not a queue. So
+    -- placement serialises through this contract. That is the contention cost, paid
+    -- knowingly and documented at the top of this file. Returns the NEW book cid
+    -- alongside the order — every caller must thread it forward.
+    choice PlaceOrder : (ContractId ContinuousBook, ContractId RestingOrder)
+      with
+        trader      : Party
+        side        : BookSide
+        quantity    : Decimal
+        -- `Some p` — a LIMIT order: it rests at p and never trades worse than p.
+        -- `None`   — a MARKET order: takes whatever the book shows, must be IOC.
+        limitPrice  : Optional Decimal
+        timeInForce : TimeInForce
+        holdingCid  : ContractId Holding  -- cash (Bid) or the asset (Ask)
+      controller trader
+      do
+        assertMsg "the continuous session is closed"  isOpen
+        assertMsg "quantity must be positive"         (quantity > 0.0)
+        assertMsg "submitter must be a registered participant" (trader `elem` participants)
+        assertMsg "a stated limit must be positive (omit it entirely for a market order)"
+          (case limitPrice of None -> True; Some p -> p > 0.0)
+        -- AN UNPRICED ORDER MAY NOT REST. A resting market order is a standing promise
+        -- to trade at any price at any future time — a free option handed to whoever
+        -- next crosses it, and the reason no venue lets one sit on the book. It may
+        -- TAKE (that is what a market order is for) and its remainder is cancelled.
+        assertMsg "an unpriced (market) order must be immediate-or-cancel — it cannot rest"
+          (case limitPrice of None -> timeInForce == IOC; Some _ -> True)
+        let lo = bandLowOf  referencePrice bandFraction
+            hi = bandHighOf referencePrice bandFraction
+        -- A limit outside the band could never legally print here, so accepting it
+        -- would be accepting an order the venue knows can never trade — and, worse,
+        -- locking up the trader's backing behind it. Reject at the door.
+        assertMsg "a limit outside the session price band could never trade here"
+          (case limitPrice of None -> True; Some p -> p >= lo && p <= hi)
+        h <- fetch holdingCid
+        assertMsg "committed holding must belong to the trader" (h.owner == trader)
+        -- ...AND IT MUST BE THE RIGHT TOKEN. An ask delivers the ASSET, a bid delivers
+        -- the CASH leg; those are the only two instruments an order here can commit.
+        -- The auction learned this the expensive way: a mis-instrumented order that
+        -- rests is a denial of service on everyone, because it detonates deep inside
+        -- settlement where the failure names neither the order nor the book.
+        let expectedInstrument = case side of
+              Ask -> instrumentId
+              Bid -> cashInstrument
+        assertMsg "committed holding is the wrong instrument for this side of the book"
+          (h.instrumentId == expectedInstrument)
+        -- RESERVE THE EXACT BACKING. Carve off exactly what this order can ever owe
+        -- into a dedicated slice only this order references, disclosed to the venue so
+        -- the match can move it. Change returns to the trader immediately and stays
+        -- private. Because the slice belongs to this order alone, no later order,
+        -- split, merge or re-placement can consume it and make the pinned cid go
+        -- stale — the match always finds valid backing.
+        --   ASK          — `quantity` of the asset. Price-independent: an ask delivers
+        --                  the units it offered whatever it prints at.
+        --   LIMITED BID  — `quantity * limit`. A bid can only ever execute at or inside
+        --                  its own limit, so its limit IS the exact worst case.
+        --   MARKET BID   — `quantity * bandHigh`. No limit, so the BAND is the bound;
+        --                  sufficient by construction, not by estimate.
+        let reserveAmount = case (side, limitPrice) of
+              (Ask, _)      -> quantity
+              (Bid, Some l) -> quantity * l
+              (Bid, None)   -> quantity * hi
+        reserved <- reserveBacking holdingCid reserveAmount operator
+        orderCid <- create RestingOrder with
+          operator; auditor; trader
+          instrumentId; cashInstrument
+          side; quantity; limitPrice; timeInForce
+          seqNo = nextSeq
+          holdingCid = reserved
+        bookCid <- create this with
+          nextSeq   = nextSeq + 1
+          liveCount = liveCount + 1
+        pure (bookCid, orderCid)
+
+    -- =====================================================================
+    -- MATCH ORDER — the matching engine. One aggressor, the contra ladder it crosses,
+    -- every fill settled in ONE atomic transaction.
+    -- =====================================================================
+    -- WHY THE VENUE SUPPLIES THE CONTRA LIST AND THE TAKER DOES NOT. The taker cannot
+    -- name its counterparties because it cannot SEE them — a `RestingOrder` is private
+    -- to the venue and its owner, which is the entire dark-pool property. So the shape
+    -- is the one every real market has: the taker sends an order, the VENUE's engine
+    -- matches it. The taker's authority to move its own money is nonetheless present
+    -- at the moment it moves, because the money moves inside a choice on a contract the
+    -- taker SIGNED (`RestingOrder.Fill`). Same authority trick the auction's close uses,
+    -- and the reason multi-party settlement composes into one transaction here at all.
+    --
+    -- WHAT THIS CHOICE PROVES, AND WHAT IT CANNOT — READ BOTH.
+    --   PROVEN, by assertion, re-executed by every validator:
+    --     * the aggressor is the LATEST arrival (every contra's seqNo is lower), so a
+    --       resting order can never be turned into a taker after the fact;
+    --     * the contra list is in strict price-then-time priority;
+    --     * every contra genuinely crosses the aggressor's limit;
+    --     * every contra prices inside the session band;
+    --     * no self-matching;
+    --     * no duplicates, and the list does not run past the end of the fill, so the
+    --       venue cannot pad it with orders that fill nothing;
+    --     * every contra ahead of the last one fills IN FULL — the venue cannot take a
+    --       nibble out of a better-priced maker and move on to a worse one. This one is
+    --       structural rather than merely asserted: `walkBook` fills
+    --       `min(aggressor, contra)` and the operator supplies no quantity at all, so
+    --       only the LAST order touched can end up partially filled. The assertion in
+    --       `walkBook` is the tripwire that keeps it true if that ever changes;
+    --     * the trade price is the MAKER's posted limit, COMPUTED here, never supplied.
+    --       The operator has no price discretion anywhere in this choice.
+    --   NOT PROVEN: that the venue did not WITHHOLD a better-priced resting order. That
+    --   order is private to the venue and its owner and a validator re-executing this
+    --   transaction never sees it, so no assertion in this body can reach it. The
+    --   answer is post-trade, not pre-trade: see `TapePrint`. Do not claim otherwise.
+    choice MatchOrder : MatchResult
+      with
+        aggressorCid : ContractId RestingOrder
+        -- The contra ladder, BEST FIRST. Order is not a hint — it is asserted.
+        contraCids   : [ContractId RestingOrder]
+      controller operator
+      do
+        assertMsg "the continuous session is closed" isOpen
+        assertMsg "a match needs at least one contra order" (not (null contraCids))
+        assertMsg "the same resting order cannot appear twice in one match"
+          (length (dedup contraCids) == length contraCids)
+        assertMsg "the aggressor cannot match against itself"
+          (aggressorCid `notElem` contraCids)
+
+        aggr    <- fetch aggressorCid
+        contras <- forA contraCids fetch
+
+        -- SAME BOOK. An order from another venue, instrument or cash leg is not
+        -- matchable here — and pooling the wrong token is how a settlement blows up
+        -- with a message that names nothing.
+        let sameBook o = o.operator       == operator
+                      && o.instrumentId   == instrumentId
+                      && o.cashInstrument == cashInstrument
+        assertMsg "the aggressor is not an order in this book"   (sameBook aggr)
+        assertMsg "a contra order is not an order in this book"  (all sameBook contras)
+        assertMsg "every contra must be on the opposite side of the book"
+          (all (\o -> o.side == opposite aggr.side) contras)
+
+        -- SELF-MATCH PREVENTION. A trader crossing its own resting order prints a
+        -- trade with no change of beneficial ownership: wash volume that inflates the
+        -- tape, distorts the price, and — since the tape is what audits priority here —
+        -- corrupts the very record that polices this venue. Real venues run it as a
+        -- named service (Nasdaq STP, CME Self-Match Prevention), and MiFID II RTS 6
+        -- requires an investment firm's algorithmic trading systems to prevent its own
+        -- orders from executing against each other.
+        assertMsg "self-matching is not permitted"
+          (all (\o -> o.trader /= aggr.trader) contras)
+
+        -- ARRIVAL ORDER. The aggressor is by definition the order that arrived LAST;
+        -- everything it crosses was already resting. Without this a venue could
+        -- nominate an OLD order as the aggressor and let a newly arrived one collect
+        -- maker priority it never earned — jumping the queue in the one direction the
+        -- price checks below would not catch.
+        assertMsg "the aggressor must be the most recently arrived order in the match"
+          (all (\o -> o.seqNo < aggr.seqNo) contras)
+
+        -- PRICE PRIORITY, THEN TIME PRIORITY, over the whole supplied ladder.
+        assertMsg "the contra list is not in price-then-time priority order"
+          (inPriorityOrder (opposite aggr.side) contras)
+
+        -- Every contra must be PRICED (nothing unpriced can rest) and must actually
+        -- cross the aggressor's limit. A market aggressor (`limitPrice = None`) crosses
+        -- everything, which is what makes it a market order.
+        assertMsg "a contra order does not cross the aggressor's limit"
+          (all (\o -> case o.limitPrice of
+                        None   -> False
+                        Some p -> crossesAt aggr.side p aggr.limitPrice) contras)
+
+        -- THE BAND. Every trade price here is a maker's limit, so checking the makers
+        -- checks every print — and it is what makes the market-bid reservation sound.
+        let lo = bandLowOf  referencePrice bandFraction
+            hi = bandHighOf referencePrice bandFraction
+        assertMsg "a contra order prices outside the session price band"
+          (all (\o -> case o.limitPrice of
+                        None   -> False
+                        Some p -> p >= lo && p <= hi) contras)
+
+        -- WALK THE LADDER AND SETTLE. Every leg of every fill moves inside this one
+        -- transaction: all of it commits or none of it does. There is no leg risk, no
+        -- partially-settled trade, and no window in which the venue is holding one side.
+        (execs, aggrResidual, contraResiduals) <- walkBook aggressorCid contraCids
+
+        -- TIME IN FORCE. A GTC remainder RESTS (keeping its seqNo — see `Fill`). An IOC
+        -- remainder is cancelled here, in the same transaction as the fills, with its
+        -- backing returned to the trader and un-disclosed.
+        killed <- case (aggrResidual, aggr.timeInForce) of
+          (Some rc, IOC) -> do
+            _ <- exercise rc VenueRelease
+            pure True
+          _ -> pure False
+        let restingAggr = if killed then None else aggrResidual
+
+        now <- getTime
+
+        -- THE PUBLIC TAPE. One print per fill: price, size, time — and NO identities.
+        -- Post-trade transparency, which is mandatory even for a dark venue, and which
+        -- is the only mechanism by which a trader can ever detect that its better-priced
+        -- order was passed over. See the header.
+        prints <- forA execs (\e -> create TapePrint with
+          operator; auditor; participants
+          instrumentId; cashInstrument
+          price = e.price; quantity = e.quantity
+          printedAt = now; matchSeq = aggr.seqNo)
+
+        -- THE BILATERAL CONFIRMS. Two per fill, each naming the trader and the VENUE —
+        -- never the other trader. The venue is the momentary counterparty on both legs,
+        -- so neither side learns who it traded with, which is the anonymity a central
+        -- counterparty exists to provide. `liquidity` is the maker/taker flag every
+        -- real fee schedule is built on, and it lets a maker verify it was paid its own
+        -- posted price rather than the taker's.
+        _ <- forA execs (\e -> do
+          _ <- create TradeConfirm with
+                 operator; auditor; trader = e.aggressor
+                 instrumentId; cashInstrument
+                 side = if e.aggressor == e.buyer then Bid else Ask
+                 quantity = e.quantity; price = e.price; cashAmount = e.cashAmount
+                 liquidity = "Taker"; tradedAt = now
+          create TradeConfirm with
+                 operator; auditor; trader = e.maker
+                 instrumentId; cashInstrument
+                 side = if e.maker == e.buyer then Bid else Ask
+                 quantity = e.quantity; price = e.price; cashAmount = e.cashAmount
+                 liquidity = "Maker"; tradedAt = now)
+
+        -- BOOK ACCOUNTING. Every order in this match is consumed; the ones that left a
+        -- residual are back on the book. `ensure liveCount >= 0` is the tripwire if this
+        -- arithmetic is ever wrong.
+        let stillResting = length (optionalToList restingAggr) + length contraResiduals
+        let consumed     = 1 + length contraCids - stillResting
+        bookCid <- create this with liveCount = liveCount - consumed
+
+        pure MatchResult with
+          book              = bookCid
+          executions        = execs
+          prints
+          residualAggressor = restingAggr
+          residualContra    = contraResiduals
+
+    -- =====================================================================
+    -- CANCEL ORDER — the trader pulls its OWN resting order.
+    -- =====================================================================
+    -- Routed THROUGH the book, for the same reason the auction routes withdrawals
+    -- through the auction: `liveCount` lives here, and an order that vanished without
+    -- the book knowing would leave the count over-stating the live book forever.
+    -- `RestingOrder.Release` is controlled by `trader, operator`; this is the one place
+    -- both authorities are in scope — the trader controls this choice, and the
+    -- operator's authority arrives because it signs the book being exercised. So the
+    -- trader keeps the unilateral right to cancel (the venue cannot cancel for them
+    -- through this door) and the count moves in the same transaction or not at all.
+    --
+    -- ALLOWED WHILE THE SESSION IS CLOSED, deliberately. Locking a trader's collateral
+    -- inside an order it cannot pull because the venue halted is not a risk control, it
+    -- is a hostage. Real venues accept cancels during halts for exactly this reason.
+    choice CancelOrder : (ContractId ContinuousBook, ContractId Holding)
+      with
+        trader   : Party
+        orderCid : ContractId RestingOrder
+      controller trader
+      do
+        o <- fetch orderCid
+        assertMsg "only the trader who placed an order can pull it" (o.trader == trader)
+        assertMsg "that order does not belong to this book"
+          (o.operator == operator && o.instrumentId == instrumentId
+             && o.cashInstrument == cashInstrument)
+        released <- exercise orderCid Release
+        bookCid  <- create this with liveCount = liveCount - 1
+        pure (bookCid, released)
+
+    -- =====================================================================
+    -- KILL ORDER — the venue clears an order off the book.
+    -- =====================================================================
+    -- The exchange's cancel: an unmatched IOC, an erroneous order, a symbol halt. The
+    -- backing goes straight back to the trader, privately — this cancels the ORDER,
+    -- never the balance. The operator can do this because it signs the resting order;
+    -- taking that away is not possible and would not help, since the power it confers
+    -- is the power to REFUSE service, which no venue design can remove from an operator.
+    -- What it emphatically is NOT is a path to the trader's money: `VenueRelease` moves
+    -- the slice to the trader and nowhere else.
+    choice KillOrder : (ContractId ContinuousBook, ContractId Holding)
+      with
+        orderCid : ContractId RestingOrder
+      controller operator
+      do
+        o <- fetch orderCid
+        assertMsg "that order does not belong to this book"
+          (o.operator == operator && o.instrumentId == instrumentId
+             && o.cashInstrument == cashInstrument)
+        released <- exercise orderCid VenueRelease
+        bookCid  <- create this with liveCount = liveCount - 1
+        pure (bookCid, released)
+
+    -- =====================================================================
+    -- OPEN / CLOSE SESSION — the trading day.
+    -- =====================================================================
+    -- Closing the continuous session stops new orders and stops matching. GTC orders
+    -- KEEP RESTING across it, which is what "good till cancelled" means and how a real
+    -- day book carries over.
+    --
+    -- 🔴 THIS IS WHERE THE AUCTION HANDOVER WOULD GO, AND IT IS NOT HERE. On a real
+    -- venue, the end of continuous trading is the moment the resting book is handed to
+    -- the closing call. `CloseSession` deliberately does nothing but flip the flag —
+    -- see "WHAT THIS IS NOT" in the header for exactly what the handover would take.
+    choice CloseSession : ContractId ContinuousBook
+      controller operator
+      do create this with isOpen = False
+
+    choice OpenSession : ContractId ContinuousBook
+      controller operator
+      do create this with isOpen = True
+
+-- ===========================================================================
+-- RestingOrder — one PRIVATE order in the continuous book.
+-- ===========================================================================
+-- THE DARK-POOL PRIMITIVE, again. Signed by operator + trader, observed by NOBODY
+-- else: not other participants, not the auditor. While it rests, only the venue and
+-- the trader who placed it know it exists, and nobody at all knows its side, size or
+-- limit. On a transparent chain a resting limit order is a free option written to the
+-- fastest reader — this is the property that cannot be bought there at any price.
+template RestingOrder
+  with
+    operator       : Party
+    auditor        : Party
+    trader         : Party
+    instrumentId   : Text
+    cashInstrument : Text
+    side           : BookSide
+    quantity       : Decimal          -- units still working (a partial fill reduces it)
+    limitPrice     : Optional Decimal -- Some p = limit; None = market (IOC only)
+    timeInForce    : TimeInForce
+    -- ARRIVAL STAMP — the book's `nextSeq` at placement. Never changes, INCLUDING
+    -- across a partial fill, which is exactly how a real venue treats queue position:
+    -- being filled does not send you to the back. (What DOES lose priority is amending
+    -- the price or INCREASING the size — a new order, a new stamp. This module has no
+    -- amend choice, so the question does not arise; adding one means allocating a fresh
+    -- seqNo for a price change or a size increase, and keeping it for a size decrease.)
+    seqNo          : Int
+    holdingCid     : ContractId Holding  -- the reserved slice, disclosed to the operator
+  where
+    signatory operator, trader
+
+    ensure quantity > 0.0
+        && seqNo >= 0
+        && (case limitPrice of None -> True; Some p -> p > 0.0)
+
+    -- -------------------------------------------------------------------
+    -- FILL — deliver this order's leg of one crossing into the venue.
+    -- -------------------------------------------------------------------
+    -- Exercised twice per fill by `walkBook` (once on each side). The trader's
+    -- authority — needed to split, transfer and disclose its own holding — is present
+    -- because the trader SIGNS this contract; that is the whole reason multi-party
+    -- settlement composes into a single transaction on this ledger.
+    --
+    -- Returns (the leg delivered to the venue, the residual order if any remains).
+    --
+    -- ⚠️ THE TRUST ASSUMPTION THIS CHOICE CARRIES — the same one
+    -- `MarketOnClose.SealedOrder.PledgeToVenue` carries, and it must be stated in the
+    -- same words. The choice is `controller operator`. Nothing in this body references
+    -- the book, the match, or the other side of the trade. So the operator CAN exercise
+    -- it standalone at any `tradePrice` inside the trader's limit and take the delivered
+    -- leg while delivering nothing back. Every economic control in this design — the
+    -- priority assertions, the band, the maker-price rule, the confirms — lives in
+    -- `MatchOrder`, one level ABOVE the choice that actually moves the money. The
+    -- correct shape is allocate → approve → settle, and this package already implements
+    -- it properly in `TokenStandardDvp.daml`; porting settlement onto that lifecycle is
+    -- the most valuable change left in both this module and the auction.
+    --
+    -- WHAT IS DIFFERENT HERE, AND IT IS A REAL IMPROVEMENT RATHER THAN A COMFORT: an
+    -- unauthorised standalone `Fill` produces NO `TapePrint` and NO `TradeConfirm`.
+    -- Every legitimate fill produces both, and the tape is observed by every
+    -- participant. So a stolen leg is not merely visible to its victim — it is visible
+    -- as a movement with no print behind it, against a public record the venue itself
+    -- signed. That is detection, not prevention. Do not sell it as prevention.
+    choice Fill : (ContractId Holding, Optional (ContractId RestingOrder))
+      with
+        fillQty    : Decimal  -- units crossing on this fill
+        tradePrice : Decimal  -- the MAKER's posted price, computed by `walkBook`
+      controller operator
+      do
+        assertMsg "fill quantity must be positive"        (fillQty > 0.0)
+        assertMsg "fill cannot exceed the working size"   (fillQty <= quantity)
+        assertMsg "trade price must be positive"          (tradePrice > 0.0)
+        -- PRICE ELIGIBILITY, through the same `crossesAt` the match gate uses, so the
+        -- two can never disagree about whether this order crosses. A market order
+        -- passes trivially: an order that accepted the book sight unseen cannot then be
+        -- refused settlement for being off-price.
+        assertMsg "this order does not trade at that price"
+          (crossesAt side tradePrice limitPrice)
+
+        -- WHAT THIS SIDE OWES. An ask delivers the ASSET; a bid delivers the CASH.
+        -- `fillQty * tradePrice` is evaluated exactly once for the whole fill (see
+        -- `Execution`), so the amount delivered and the amount confirmed are the same
+        -- number by construction, not by reconciliation.
+        let deliverAmount = case side of
+              Ask -> fillQty
+              Bid -> fillQty * tradePrice
+        (deliveredCid, changeOpt) <- fillFromReserve holdingCid deliverAmount operator
+
+        let remainingQty = quantity - fillQty
+        if remainingQty <= 0.0
+          then do
+            -- FULLY FILLED. Anything left in the reservation is the trader's and goes
+            -- home privately. For an ask that is nothing (it delivered exactly the units
+            -- it offered). For a bid it is the PRICE IMPROVEMENT — the difference
+            -- between the limit it funded and the better prices it actually paid — which
+            -- is real money and is returned in this same transaction, not swept.
+            _ <- forA (optionalToList changeOpt)
+                   (\c -> exercise c Transfer with newOwner = trader)
+            pure (deliveredCid, None)
+          else do
+            -- PARTIALLY FILLED. The remainder rests, KEEPING ITS seqNo — a partial fill
+            -- must not cost queue position, or every maker would be punished for being
+            -- hit.
+            changeCid <- case changeOpt of
+              Some c -> pure c
+              -- Unreachable: remainingQty > 0 means the reservation strictly exceeded
+              -- what was delivered, so `fillFromReserve` split rather than transferred.
+              None   -> abort "a partial fill left no change to re-reserve"
+            ch <- fetch changeCid
+            -- WHAT THE REMAINDER STILL NEEDS BACKING FOR — the same rule as placement,
+            -- applied to the size that is still working.
+            let requiredAfter = case (side, limitPrice) of
+                  (Ask, _)      -> remainingQty
+                  (Bid, Some l) -> remainingQty * l
+                  -- A market order is IOC, so this residual exists for the remainder of
+                  -- ONE transaction before `MatchOrder` kills it. There is no tighter
+                  -- bound to compute than "everything left", and everything left is
+                  -- sufficient: the reservation was sized at `quantity * bandHigh` and
+                  -- every price paid was at or below bandHigh.
+                  (Bid, None)   -> ch.amount
+            assertMsg "the residual order would be under-backed" (ch.amount >= requiredAfter)
+            keptCid <-
+              if ch.amount == requiredAfter
+                then pure changeCid       -- already disclosed to the operator
+                else do
+                  -- RELEASE THE SURPLUS NOW, NOT LATER. For a bid that traded inside its
+                  -- own limit, `fillQty * (limit − tradePrice)` is money the order can
+                  -- never owe. Leaving it locked behind the residual would be a silent
+                  -- margin charge for the crime of getting a good fill.
+                  (kept, surplus) <- exercise changeCid Split with splitAmount = requiredAfter
+                  keptDisclosed <- exercise kept Disclose with newObserver = operator
+                  _ <- exercise surplus Transfer with newOwner = trader
+                  pure keptDisclosed
+            residual <- create this with
+              quantity   = remainingQty
+              holdingCid = keptCid
+            pure (deliveredCid, Some residual)
+
+    -- -------------------------------------------------------------------
+    -- RELEASE — the trader pulls this order; the reserved backing goes home.
+    -- -------------------------------------------------------------------
+    -- Controlled by `trader, operator`, NOT the trader alone: `liveCount` lives on the
+    -- book, so an order that could vanish behind the venue's back would corrupt it. The
+    -- two authorities meet in `ContinuousBook.CancelOrder`, which is the entry point —
+    -- this choice is the mechanism.
+    --
+    -- Transferring the reserved slice back re-creates it PRIVATE (`Holding.Transfer`
+    -- resets `disclosedTo`), so the balance is freely the trader's again AND the venue
+    -- stops observing it. Un-reserving and un-disclosing are the same operation.
+    choice Release : ContractId Holding
+      controller trader, operator
+      do exercise holdingCid Transfer with newOwner = trader
+
+    -- -------------------------------------------------------------------
+    -- VENUE RELEASE — the venue clears this order; the backing still goes home.
+    -- -------------------------------------------------------------------
+    -- Needed as a separate choice because a `controller trader, operator` choice cannot
+    -- be exercised from inside `MatchOrder` (a choice on the BOOK): the trader signs
+    -- this order, not the book, so the trader's authority is not in scope there. Inside
+    -- THIS choice it is, which is what lets the transfer back to the trader happen.
+    -- Used for an unmatched IOC remainder and for `ContinuousBook.KillOrder`.
+    choice VenueRelease : ContractId Holding
+      controller operator
+      do exercise holdingCid Transfer with newOwner = trader
+
+-- ===========================================================================
+-- TapePrint — the PUBLIC post-trade record of one fill.
+-- ===========================================================================
+-- Price, size, time, and the sequence number of the match that produced it. NO
+-- identities, on either side — which is both what MiFID II RTS 1 post-trade
+-- publication actually requires and what a central counterparty exists to provide.
+--
+-- Observed by the auditor AND every registered participant. That is deliberate and it
+-- is the counterweight to everything else in this file being private: the resting book
+-- is dark, so the tape is the only public fact about this venue, and it is therefore
+-- the only thing that can hold the venue to its own priority rules. A maker whose bid
+-- at 100.02 rested untouched while the tape printed at 100.05 has venue-signed
+-- evidence of a violation. Without the tape, that violation is undetectable and every
+-- priority assertion in `MatchOrder` is only as good as the list the venue chose to
+-- supply.
+template TapePrint
+  with
+    operator       : Party
+    auditor        : Party
+    participants   : [Party]   -- the whole session sees every print
+    instrumentId   : Text
+    cashInstrument : Text
+    price          : Decimal
+    quantity       : Decimal
+    printedAt      : Time
+    matchSeq       : Int       -- the aggressor's seqNo: ties the prints of one sweep
+  where
+    signatory operator
+    observer auditor :: participants
+    ensure price > 0.0 && quantity > 0.0
+
+-- ===========================================================================
+-- TradeConfirm — the venue's bilateral confirm to ONE side of one fill.
+-- ===========================================================================
+-- The exchange confirm. Signed by the venue, observed by the one trader it belongs to
+-- plus the auditor — and it never names the other trader, because the venue stood
+-- between them as momentary counterparty and neither side is entitled to learn who it
+-- traded with. Two of these per fill.
+--
+-- `liquidity` is the maker/taker flag: "Maker" for the resting side, "Taker" for the
+-- aggressor. Every fee schedule in the industry is built on that one field (maker
+-- rebates, taker fees), and here it also lets a maker verify on its own confirm that
+-- it was paid ITS posted price rather than the taker's — the rule `walkBook` enforces.
+template TradeConfirm
+  with
+    operator       : Party
+    auditor        : Party
+    trader         : Party
+    instrumentId   : Text
+    cashInstrument : Text
+    side           : BookSide  -- this trader's side of this fill
+    quantity       : Decimal
+    price          : Decimal
+    cashAmount     : Decimal   -- quantity * price, the number that actually moved
+    liquidity      : Text      -- "Maker" | "Taker"
+    tradedAt       : Time
+  where
+    signatory operator
+    observer trader, auditor
+    ensure quantity > 0.0 && price > 0.0
+        && (liquidity == "Maker" || liquidity == "Taker")
+
+-- ===========================================================================
+-- walkBook — WALK THE LADDER: match the aggressor down the contra list, settling
+-- each crossing bilaterally, in the caller's single transaction.
+-- ===========================================================================
+-- The list arrives already validated by `MatchOrder` (opposite side, crossing, in
+-- price-then-time priority, inside the band, no self-match, no duplicates, all older
+-- than the aggressor). This function's job is the money, and the two rules it enforces
+-- that the pre-checks cannot:
+--
+--   1. THE TRADE PRICE IS THE MAKER'S. `tradePrice` is read off the resting order's
+--      own limit — never supplied by the operator, never taken from the aggressor.
+--      This is the universal rule of a continuous market and it is the reason posting
+--      liquidity pays: the maker gets the price it posted, and any improvement accrues
+--      to the taker who crossed. A taker bidding 101 into an offer at 100 pays 100, and
+--      the extra 1 comes straight back to it as change in this same transaction.
+--
+--   2. NO NIBBLING, AND NO PADDING. The fill is `min(aggressor, contra)` and the
+--      operator supplies NO quantity anywhere in this choice, so only the last order
+--      touched can ever be partially filled — a venue cannot take a slice out of a
+--      better-priced maker and carry on to a worse one, because it has no way to
+--      express the idea. That is structural. The two assertions below are the
+--      tripwires that keep it structural: "a contra ahead of the last fill must be
+--      filled in full" (unreachable today, and it must STAY unreachable) and "the
+--      contra list runs past the end of the fill", which is reachable and is what
+--      stops the venue padding the ladder with orders that trade nothing.
+--
+-- SETTLEMENT SHAPE — the venue as MOMENTARY counterparty. Each side delivers its leg
+-- into the venue (inside a choice on its OWN order, which is where its authority is),
+-- and the venue immediately hands each leg to the other side. The venue owns both legs
+-- for zero ledger time: there is no commit in which it is holding anyone's money. And
+-- because each fill is one buyer against one seller at one price, there is no pooling
+-- and no allocation residual to reconcile — the auction needs `mergeAll`/`distribute`
+-- and a published residual rule because it rations a marginal level across many
+-- orders; a continuous book never rations anything.
+walkBook :
+     ContractId RestingOrder
+  -> [ContractId RestingOrder]
+  -> Update ([Execution], Optional (ContractId RestingOrder), [ContractId RestingOrder])
+walkBook aggrCid [] =
+  -- Ladder exhausted with the aggressor still working: the remainder is unfilled.
+  -- `MatchOrder` decides its fate from the time-in-force.
+  pure ([], Some aggrCid, [])
+walkBook aggrCid (cCid :: rest) = do
+  aggr   <- fetch aggrCid
+  contra <- fetch cCid
+  tradePrice <- case contra.limitPrice of
+    Some p -> pure p
+    -- Unreachable: `PlaceOrder` refuses to rest an unpriced order and `MatchOrder`
+    -- re-checks every contra is priced. Kept as an abort rather than a default so a
+    -- future change that breaks the invariant fails loudly instead of trading at 0.
+    None   -> abort "a resting order must be priced — an unpriced order cannot make a market"
+  let fillQty = if aggr.quantity <= contra.quantity then aggr.quantity else contra.quantity
+
+  -- BOTH LEGS INTO THE VENUE. Each `Fill` runs inside a choice on that trader's own
+  -- order, so that trader's authority is present exactly where its money moves.
+  (aggrLeg,   aggrResidual)   <- exercise aggrCid Fill with fillQty; tradePrice
+  (contraLeg, contraResidual) <- exercise cCid   Fill with fillQty; tradePrice
+
+  let (buyer, seller) = case aggr.side of
+        Bid -> (aggr.trader,   contra.trader)
+        Ask -> (contra.trader, aggr.trader)
+
+  -- ...AND STRAIGHT OUT AGAIN. The venue's authority to move what it now owns comes
+  -- from signing the `ContinuousBook` this was called from.
+  case aggr.side of
+    Bid -> do
+      _ <- exercise aggrLeg   Transfer with newOwner = seller  -- the taker's cash
+      _ <- exercise contraLeg Transfer with newOwner = buyer   -- the maker's asset
+      pure ()
+    Ask -> do
+      _ <- exercise aggrLeg   Transfer with newOwner = buyer   -- the taker's asset
+      _ <- exercise contraLeg Transfer with newOwner = seller  -- the maker's cash
+      pure ()
+
+  let exec = Execution with
+        price      = tradePrice
+        quantity   = fillQty
+        cashAmount = fillQty * tradePrice
+        buyer; seller
+        aggressor  = aggr.trader
+        maker      = contra.trader
+
+  case aggrResidual of
+    None -> do
+      -- The aggressor is done. Anything further in the list would fill nothing.
+      assertMsg "the contra list runs past the end of the fill" (null rest)
+      pure ([exec], None, optionalToList contraResidual)
+    Some nextAggr -> do
+      -- The aggressor still has size, so this contra MUST have been exhausted.
+      assertMsg "a contra ahead of the last fill must be filled in full"
+        (isNone contraResidual)
+      (execs, finalAggr, cres) <- walkBook nextAggr rest
+      pure (exec :: execs, finalAggr, cres)
+
+-- ===========================================================================
+-- reserveBacking — carve off EXACTLY `amt` from a holding the trader owns into a
+-- dedicated slice, disclosed to the operator, and return it.
+-- ===========================================================================
+-- This is what makes an order's backing STABLE: the order references only its own
+-- slice, so no later order, split, merge or re-placement can consume it and make the
+-- pinned cid go stale. The unreserved remainder stays with the trader and stays
+-- private. Must be called where the holding OWNER's authority is in scope — `Split`
+-- and `Disclose` are owner-controlled — and `PlaceOrder` is controlled by the trader,
+-- so it is.
+--
+-- (This is `MarketOnClose.reserveExact`, deliberately re-stated rather than imported;
+-- see DELIBERATE DUPLICATION in the header.)
+reserveBacking : ContractId Holding -> Decimal -> Party -> Update (ContractId Holding)
+reserveBacking holdingCid amt operator = do
+  h <- fetch holdingCid
+  assertMsg "committed holding is too small to back this order" (h.amount >= amt)
+  assertMsg "an order must reserve a positive amount" (amt > 0.0)
+  reserved <-
+    if h.amount == amt
+      then pure holdingCid                 -- exact: reserve the whole holding
+      else do
+        (r, _change) <- exercise holdingCid Split with splitAmount = amt
+        pure r
+  exercise reserved Disclose with newObserver = operator
+
+-- ===========================================================================
+-- fillFromReserve — deliver EXACTLY `amt` out of a reserved slice to the venue and
+-- hand back whatever is left, still disclosed to the venue.
+-- ===========================================================================
+-- The difference from `Holding.deliverExact` is the CHANGE, and it matters. A partial
+-- fill leaves a remainder that must go on backing the residual order, so the change
+-- cannot simply be dropped: this returns it, and re-DISCLOSES it to the operator,
+-- because `Holding.Split` deliberately makes both successors private and a residual
+-- order whose backing the venue cannot see is a residual order that can never be
+-- matched again. `Fill` then decides how much of that change the residual actually
+-- needs and sends the surplus home.
+fillFromReserve :
+     ContractId Holding -> Decimal -> Party
+  -> Update (ContractId Holding, Optional (ContractId Holding))
+fillFromReserve reservedCid amt operator = do
+  assertMsg "a delivery must be positive" (amt > 0.0)
+  h <- fetch reservedCid
+  assertMsg "the reserved backing is too small for this fill" (h.amount >= amt)
+  if h.amount == amt
+    then do
+      delivered <- exercise reservedCid Transfer with newOwner = operator
+      pure (delivered, None)
+    else do
+      (deliverCid, changeCid) <- exercise reservedCid Split with splitAmount = amt
+      delivered <- exercise deliverCid Transfer with newOwner = operator
+      change    <- exercise changeCid  Disclose with newObserver = operator
+      pure (delivered, Some change)
