@@ -96,6 +96,13 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
   const [liveMarks, setLiveMarks] = useState<LiveMark[]>([]);
   const liveMark = liveMarks.find((m) => m.instrumentId === instrumentId);
 
+  // NAV is a FUND concept; a single asset has a MARK. An accruing fix values a
+  // fund-like instrument (a money-market share, whose value is earned) so it really is
+  // a NAV. A snapshot fix on cETH is a mark. Saying "NAV" for both invites exactly the
+  // question "why does one market have a NAV?" — which has no good answer.
+  const strikeNoun = accruing ? 'NAV' : 'mark';
+  const strikeNounCaps = accruing ? 'NAV' : 'MARK';
+
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>('');
 
@@ -235,7 +242,7 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
     if (!res) return;
     setFixCid(res.contractId);
     setProposalCid('');
-    flash(`Official NAV struck by ${attestors.length}-of-${members.length} — no single party could.`);
+    flash(`Official ${strikeNoun} struck by ${attestors.length}-of-${members.length} — no single party could.`);
   }
 
   const enoughAttestors = attestors.length >= threshold;
@@ -246,7 +253,7 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
     <section className="card committee" aria-label="Decentralised operator committee">
       <div className="card-head">
         <h2>Decentralised Operator</h2>
-        <span className="who">K-of-N NAV committee</span>
+        <span className="who">K-of-N pricing committee</span>
       </div>
       <p className="hint">
         The official price must not be one venue&rsquo;s number. A committee of independent members
@@ -488,7 +495,7 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
           </div>
           <button className="primary" disabled={busy || !enoughAttestors} onClick={finalize}>
             {enoughAttestors
-              ? `Finalise · strike the official NAV (${attestors.length}-of-${members.length})`
+              ? `Finalise · strike the official ${strikeNoun} (${attestors.length}-of-${members.length})`
               : `Need ${threshold - attestors.length} more attestation(s)`}
           </button>
           {!enoughAttestors && (
@@ -502,7 +509,7 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
       {/* Result — the official fix, and (if it accrues) the value MOVING */}
       {fixCid && (
         <div className="committee-result">
-          <div className="fix-badge">OFFICIAL NAV · {attestors.length}-of-{members.length} attested</div>
+          <div className="fix-badge">OFFICIAL {strikeNounCaps} · {attestors.length}-of-{members.length} attested</div>
           <div className="fix-line mono">
             {instrumentId} {session}{' '}
             {accruing ? (
@@ -522,7 +529,7 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
           <p className="hint">
             Credibly neutral: this fix carries {attestors.length} genuine member signatures — the
             contract&rsquo;s own signatory set IS the proof. An auction bound to it can only print
-            against this attested NAV.
+            against this attested {strikeNoun}.
           </p>
 
           {/*
