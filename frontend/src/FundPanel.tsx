@@ -11,6 +11,7 @@ import {
   errorMessage,
   type Basket,
   type Instrument,
+  type IndicativeNav,
   type NavResponse,
   type Party,
 } from './api';
@@ -38,6 +39,7 @@ export default function FundPanel({ parties, instruments, acting, onChanged, fla
 
   const [baskets, setBaskets] = useState<Basket[]>([]);
   const [navs, setNavs] = useState<Record<string, NavResponse | null>>({});
+  const [inav, setInav] = useState<IndicativeNav | null>(null);
   const [selected, setSelected] = useState<string>('');
   const [shares, setShares] = useState<string>('10');
 
@@ -87,6 +89,34 @@ export default function FundPanel({ parties, instruments, acting, onChanged, fla
 
   const basket = baskets.find((b) => b.basketId === selected) ?? null;
   const nav = selected ? navs[selected] ?? null : null;
+
+  // THE INDICATIVE SIDE IS MEANT TO MOVE, so it is polled rather than loaded once.
+  // 10s is chosen to sit near the ~15s cadence exchanges disseminate an iNAV at —
+  // fast enough that the number visibly lives, slow enough that it is not a stream
+  // pretending to be a price. Failures are silent: a missing iNAV must never take the
+  // official NAV off the screen, because that one is what actually settles.
+  useEffect(() => {
+    if (!selected) {
+      setInav(null);
+      return;
+    }
+    let alive = true;
+    const load = () =>
+      api
+        .basketIndicativeNav(selected)
+        .then((r) => {
+          if (alive) setInav(r);
+        })
+        .catch(() => {
+          /* keep the last good value; never blank the official NAV */
+        });
+    void load();
+    const t = setInterval(load, 10_000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [selected, navs]);
   const sharesNum = Number(shares) || 0;
 
   async function create() {
@@ -185,26 +215,68 @@ export default function FundPanel({ parties, instruments, acting, onChanged, fla
                 ))}
                 <span className="per-share">per share</span>
               </div>
+              {/* THE TWO NAVs, AND THE GAP BETWEEN THEM.
+                  Official is struck from signed marks and is what create/redeem
+                  settles at. Indicative is what the fund is worth right now — the
+                  on-chain equivalent of the iNAV an exchange puts out every ~15s.
+                  A real ETF runs both; the drift is the honest measure of how stale
+                  the last strike has become, and the cue to strike again. */}
               <div className="nav-line">
-                <span className="nav-label">NAV / share</span>
+                <span className="nav-label">
+                  Official NAV / share
+                  <span className="nav-sub">signed · settles create &amp; redeem</span>
+                </span>
                 <span className="mono nav">
                   {nav && nav.navPerShare != null ? `${fmt2(nav.navPerShare)} ${CASH}` : '—'}
                 </span>
               </div>
+              {inav && inav.indicativeNavPerShare != null && (
+                <div className="nav-line indicative">
+                  <span className="nav-label">
+                    Indicative NAV <span className="live-dot" aria-hidden="true" />
+                    <span className="nav-sub">live · binding on nobody</span>
+                  </span>
+                  <span className="mono nav">
+                    {fmt2(inav.indicativeNavPerShare)} {CASH}
+                    {inav.driftBps != null && (
+                      <span
+                        className={
+                          'drift ' +
+                          (inav.driftBps > 0 ? 'up' : inav.driftBps < 0 ? 'down' : '')
+                        }
+                        title="gap between the live value and the last signed strike"
+                      >
+                        {inav.driftBps > 0 ? '+' : ''}
+                        {inav.driftBps.toFixed(2)} bps
+                      </span>
+                    )}
+                  </span>
+                </div>
+              )}
               {nav && (
                 <table className="blotter nav-breakdown">
                   <tbody>
-                    {nav.legs.map((l) => (
-                      <tr key={l.instrumentId}>
-                        <td>
-                          <span className="pill asset">{l.instrumentId}</span>
-                        </td>
-                        <td className="num mono muted">
-                          {fmt(l.unitsPerShare)} × {l.price != null ? fmt2(l.price) : '—'}
-                        </td>
-                        <td className="num mono strong">{l.value != null ? fmt2(l.value) : '—'}</td>
-                      </tr>
-                    ))}
+                    {nav.legs.map((l) => {
+                      const il = inav?.legs.find((x) => x.instrumentId === l.instrumentId);
+                      return (
+                        <tr key={l.instrumentId}>
+                          <td>
+                            <span className="pill asset">{l.instrumentId}</span>
+                            {il && <div className="basis">{il.basis}</div>}
+                          </td>
+                          <td className="num mono muted">
+                            {fmt(l.unitsPerShare)} × {l.price != null ? fmt2(l.price) : '—'}
+                            {il && il.indicativePrice != null && l.price != null
+                              && il.indicativePrice !== l.price && (
+                              <div className="now">now {fmt2(il.indicativePrice)}</div>
+                            )}
+                          </td>
+                          <td className="num mono strong">
+                            {l.value != null ? fmt2(l.value) : '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               )}

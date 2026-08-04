@@ -62,9 +62,28 @@ public class SettlementController {
             org.slf4j.LoggerFactory.getLogger(SettlementController.class);
 
     private final LedgerService ledger;
+    private final com.lucilla.settlement.ledger.MarketData marketData;
 
-    public SettlementController(LedgerService ledger) {
+    public SettlementController(LedgerService ledger,
+                                com.lucilla.settlement.ledger.MarketData marketData) {
         this.ledger = ledger;
+        this.marketData = marketData;
+    }
+
+    /**
+     * CANDIDATE marks from the outside world — for pre-filling a proposal, nothing more.
+     *
+     * <p>The desk has no oracle: an official mark is a {@code NavFixing} carrying K-of-N
+     * signatures, and this endpoint writes nothing to the ledger. It exists so a
+     * committee member proposes today's real price instead of one typed from memory.
+     * An empty list means the feed is unreachable — propose the mark by hand.
+     */
+    @GetMapping("/marks/live")
+    public List<Dtos.LiveMarkResponse> liveMarks() {
+        return marketData.liveMarks().stream()
+                .map(m -> new Dtos.LiveMarkResponse(m.instrumentId(), m.symbol(), m.price(),
+                        m.source(), String.valueOf(m.asOf()), m.note()))
+                .toList();
     }
 
     // ---- Parties ----------------------------------------------------------
@@ -109,13 +128,19 @@ public class SettlementController {
     @PostMapping("/instruments")
     public ResponseEntity<Dtos.CidResponse> issueInstrument(
             @Valid @RequestBody Dtos.IssueInstrumentRequest req) {
-        String depository = blankTo(req.depository(), req.issuer());
+        // RESOLVE THE LABELS. A party id carries a per-run Canton namespace suffix, so
+        // "Issuer" is not a party — submitting it raw fails UNKNOWN_SUBMITTERS ("the
+        // participant is not connected to any synchronizer where the given submitters
+        // are known"), which reads like a node problem and is not one. Every other
+        // endpoint resolves; these two did not.
+        String issuer = ledger.resolveParty(req.issuer());
+        String depository = ledger.resolveParty(blankTo(req.depository(), req.issuer()));
         String version = blankTo(req.version(), "1");
         String description = req.description() == null ? "" : req.description();
         var cmd = LedgerCommands.createInstrument(
-                req.issuer(), depository, req.id(), version, req.kind(), description,
+                issuer, depository, req.id(), version, req.kind(), description,
                 Optional.ofNullable(req.referencePrice()));
-        String cid = ledger.submitForCreated(req.issuer(), cmd, LedgerCommands.instrumentTemplateId());
+        String cid = ledger.submitForCreated(issuer, cmd, LedgerCommands.instrumentTemplateId());
         return created(new Dtos.CidResponse(cid));
     }
 
@@ -124,9 +149,12 @@ public class SettlementController {
     @PostMapping("/holdings")
     public ResponseEntity<Dtos.CidResponse> issueHolding(
             @Valid @RequestBody Dtos.IssueHoldingRequest req) {
+        // Same label-resolution rule as POST /instruments above.
+        String issuer = ledger.resolveParty(req.issuer());
+        String owner = ledger.resolveParty(req.owner());
         var cmd = LedgerCommands.createHolding(
-                req.issuer(), req.instrumentId(), req.owner(), req.amount());
-        String cid = ledger.submitForCreated(req.issuer(), cmd, LedgerCommands.holdingTemplateId());
+                issuer, req.instrumentId(), owner, req.amount());
+        String cid = ledger.submitForCreated(issuer, cmd, LedgerCommands.holdingTemplateId());
         return created(new Dtos.CidResponse(cid));
     }
 
@@ -1236,14 +1264,55 @@ public class SettlementController {
      * disclosed to {@code publishTo} (e.g. the auction venue that will print at it).
      */
     @PostMapping("/fixing/{cid}/finalize")
-    public ResponseEntity<Dtos.CidResponse> finalizeFixing(
+    public ResponseEntity<Dtos.FinalizeFixingResponse> finalizeFixing(
             @PathVariable String cid, @Valid @RequestBody Dtos.FinalizeFixingRequest req) {
         String proposer = ledger.resolveParty(req.proposer());
         List<String> publishTo = (req.publishTo() == null ? List.<String>of() : req.publishTo())
                 .stream().map(ledger::resolveParty).toList();
         String fixCid = ledger.submitForCreated(proposer,
                 LedgerCommands.finalizeFixing(cid, publishTo), LedgerCommands.navFixingTemplateId());
-        return created(new Dtos.CidResponse(fixCid));
+
+        // PUBLISH THE ATTESTED MARK, or the fix is a number nothing values against.
+        //
+        // A NavFixing is the attestation; the fund's NAV per share is Σ(unitsPerShare ×
+        // mark) read off the Instrument. Without this step those are two disconnected
+        // numbers — the committee strikes a price and the basket keeps valuing at
+        // whatever the issuer last published, which is exactly the single-venue mark the
+        // committee exists to replace. So the official fix is written back to the
+        // instrument, and create/redeem then happens AT the attested number.
+        //
+        // Deliberately NON-FATAL: the fixing itself is already final and disclosed. If
+        // the mark cannot be republished (no such instrument, or we cannot act as its
+        // issuer) that is reported in the response rather than failing a settled
+        // attestation and leaving the caller unsure which half happened.
+        var fix = ledger.navFixingById(proposer, fixCid);
+        String note;
+        boolean updated = false;
+        BigDecimal newMark = fix.price();
+        try {
+            // Query AS THE ISSUER, not as the proposer. An Instrument is signed by its
+            // issuer and observed by the depository — a committee member is neither, so
+            // looking it up as the proposer returns nothing and the mark silently never
+            // updates. Same convention as referencePriceOf, which the fund NAV uses.
+            var ref = ledger.instrumentRefOf(ledger.resolveParty("Issuer"), fix.instrumentId());
+            if (ref.isEmpty()) {
+                note = "no live Instrument named " + fix.instrumentId()
+                        + " — the fix stands, but nothing values against it yet";
+            } else {
+                ledger.submit(ref.get().issuer(),
+                        LedgerCommands.setReferencePrice(ref.get().contractId(), newMark));
+                updated = true;
+                note = "mark republished at the attested fix";
+                log.info("FIXING {} finalised; {} mark -> {} (attested by {} of {})",
+                        fixCid, fix.instrumentId(), newMark, fix.attestors().size(), fix.threshold());
+            }
+        } catch (RuntimeException e) {
+            note = "the fix is final, but the mark could not be republished: " + e.getMessage();
+            log.warn("FIXING {} finalised but {} mark NOT updated: {}",
+                    fixCid, fix.instrumentId(), e.toString());
+        }
+        return created(new Dtos.FinalizeFixingResponse(
+                fixCid, fix.instrumentId(), newMark, updated, note));
     }
 
     // ---- Continuous accrual: what the fund is worth RIGHT NOW ---------------
@@ -1544,6 +1613,102 @@ public class SettlementController {
         }
         return new Dtos.NavResponse(basketId, complete ? total : null,
                 basket.cashInstrument(), legs, complete);
+    }
+
+    /**
+     * THE TWO NAVs A FUND ACTUALLY HAS, side by side.
+     *
+     * <p>A real ETF runs both and they are not in competition:
+     * <ul>
+     *   <li><b>Official NAV</b> — struck from attested marks, signed, and the number
+     *       creations and redemptions legally settle at. It moves only when the
+     *       committee strikes it.</li>
+     *   <li><b>Indicative NAV (iNAV)</b> — recomputed continuously from current
+     *       market data, informational, binding on nobody. Exchanges disseminate one
+     *       roughly every fifteen seconds.</li>
+     * </ul>
+     *
+     * <p>Marking a volatile asset once a day and settling against it all the next day
+     * would be indefensible — which is exactly why the indicative side exists. And
+     * publishing a streamed number as the official one would be equally wrong: it is
+     * the signatures, not the freshness, that make a NAV bindable.
+     *
+     * <p>Each leg is valued by what that asset actually is:
+     * <ul>
+     *   <li>a <b>wrapped crypto</b> leg → live spot for its underlying (BitSafe's own
+     *       integration guidance for cBTC is a BTC-USD feed);</li>
+     *   <li>a <b>money-market</b> leg → its accrued value from the committee's recipe.
+     *       It has no live price to stream: an MMF's NAV is struck and then <i>earned</i>,
+     *       so {@code navAt} derives it at this instant. That is not a stale number —
+     *       it is the correct one.</li>
+     * </ul>
+     * A leg with neither a feed nor an accrual falls back to its attested mark, and
+     * {@code live} says whether anything actually moved.
+     */
+    @GetMapping("/basket/nav/indicative")
+    public Dtos.IndicativeNavResponse basketIndicativeNav(
+            @RequestParam String basketId, @RequestParam(required = false) String actingAs) {
+        String acting = (actingAs == null || actingAs.isBlank())
+                ? ledger.resolveParty("Auditor") : ledger.resolveParty(actingAs);
+        var basket = basketByIdVisibleTo(acting, basketId);
+        Instant asOf = Instant.now();
+
+        // The committee's accruing fixes, newest first, so a money-market leg is valued
+        // from the most recent recipe its attestors signed.
+        var fixings = ledger.navFixingsVisibleTo(acting);
+
+        List<Dtos.IndicativeNavLeg> legs = new ArrayList<>();
+        BigDecimal official = BigDecimal.ZERO;
+        BigDecimal indicative = BigDecimal.ZERO;
+        boolean complete = true;
+        boolean anyLive = false;
+
+        for (var c : basket.components()) {
+            BigDecimal mark = ledger.referencePriceOf("Issuer", c.instrumentId()).orElse(null);
+
+            BigDecimal now = null;
+            String basis = "attested mark";
+            var feed = marketData.liveMarkOf(c.instrumentId());
+            if (feed.isPresent()) {
+                now = feed.get().price();
+                basis = feed.get().source() + " " + feed.get().symbol();
+                anyLive = true;
+            } else {
+                var accruing = fixings.stream()
+                        .filter(f -> f.instrumentId().equals(c.instrumentId()) && f.accruing())
+                        .max(Comparator.comparing(LedgerService.NavFixingView::finalizedAt));
+                if (accruing.isPresent()) {
+                    var f = accruing.get();
+                    now = Accrual.navAt(f.price(), f.ratePerAnnum(), f.dayCount(), f.accrualFrom(), asOf);
+                    basis = "accrued @ " + f.ratePerAnnum() + "/yr " + f.dayCount();
+                    anyLive = true;
+                } else {
+                    now = mark;
+                }
+            }
+
+            BigDecimal officialValue = mark == null ? null : c.unitsPerShare().multiply(mark);
+            BigDecimal indicativeValue = now == null ? null : c.unitsPerShare().multiply(now);
+            if (mark == null || now == null) {
+                complete = false;
+            } else {
+                official = official.add(officialValue);
+                indicative = indicative.add(indicativeValue);
+            }
+            legs.add(new Dtos.IndicativeNavLeg(
+                    c.instrumentId(), c.unitsPerShare(), mark, officialValue, now, indicativeValue, basis));
+        }
+
+        BigDecimal drift = null;
+        if (complete && official.signum() != 0) {
+            drift = indicative.subtract(official)
+                    .multiply(new BigDecimal("10000"))
+                    .divide(official, 2, java.math.RoundingMode.HALF_EVEN);
+        }
+        return new Dtos.IndicativeNavResponse(
+                basketId, basket.cashInstrument(),
+                complete ? official : null, complete ? indicative : null,
+                drift, legs, complete, anyLive, asOf.toString());
     }
 
     /** Find a basket by id among those visible to a party, else a clear 400. */

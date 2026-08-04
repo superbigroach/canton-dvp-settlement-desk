@@ -1,6 +1,7 @@
 package com.lucilla.settlement.web;
 
 import com.lucilla.settlement.ledger.LedgerService;
+import com.lucilla.settlement.ledger.MarketData;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -34,6 +35,12 @@ class SettlementControllerTest {
 
     @MockBean
     LedgerService ledger;
+
+    // The controller reads CANDIDATE marks from an outside feed. Mocked here so the
+    // slice never touches the network: these tests are about routing and validation,
+    // and a unit test that depends on a live price endpoint is a flaky test.
+    @MockBean
+    MarketData marketData;
 
     @Test
     void issueHolding_returns201WithContractId() throws Exception {

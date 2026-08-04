@@ -784,6 +784,8 @@ actually changed.
 | `POST /api/committee` · `/{cid}/propose` · `/{cid}/propose-accruing` | K-of-N committee; accruing or snapshot fixing |
 | `POST /api/fixing/{cid}/confirm` · `/finalize` · `GET /api/fixings` · `GET /api/fixing/{cid}/nav` | attestation accumulation + the accrued NAV at an instant |
 | `POST /api/basket` · `/create` · `/redeem` · `GET /api/basket/nav` · `GET /api/baskets` | the in-kind fund primary market |
+| `GET  /api/basket/nav/indicative` | **both NAVs, side by side** — the signed one create/redeem settles at, and what the fund is worth *now* (crypto legs at live spot, the money-market leg accrued from the committee's recipe), plus the drift in bps between them |
+| `GET  /api/marks/live` | CANDIDATE marks from an outside feed, for pre-filling a proposal. Writes nothing — a price is official only once the threshold has signed it |
 | `POST /api/book/session` · `POST /api/book/close` · `/open` | open, halt and resume a **continuous session** (a halt still permits cancellation) |
 | `POST /api/book/order` | `PlaceOrder` **then** `MatchOrder` — an aggressive order crosses on submission; a passive one rests. Blank `limitPrice` = an unpriced market order (forced IOC: it may never rest) |
 | `GET  /api/book/state?as=` | the ladder **as that party may see it** — the venue sees all of it, a trader only its own, the **auditor none of it** |

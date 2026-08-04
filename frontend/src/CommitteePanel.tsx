@@ -32,6 +32,7 @@ import {
   type DayCountConvention,
   type FixingResponse,
   type Instrument,
+  type LiveMark,
   type Party,
   type Session,
 } from './api';
@@ -88,6 +89,13 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
   const [rate, setRate] = useState<string>('0.036');
   const [dayCount, setDayCount] = useState<DayCountConvention>('ACT/360');
 
+  // CANDIDATE marks from an outside feed. These are NOT prices — nothing values
+  // against them until this committee signs. They exist so a member proposes today's
+  // real number rather than one typed from memory. The feed proposes; the committee
+  // disposes, and it is the signatures that make the result provable.
+  const [liveMarks, setLiveMarks] = useState<LiveMark[]>([]);
+  const liveMark = liveMarks.find((m) => m.instrumentId === instrumentId);
+
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>('');
 
@@ -112,6 +120,27 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
       live = false;
     };
   }, [fixCid]);
+
+  // Candidate marks, refreshed on a slow tick. A minute is plenty: these only ever
+  // pre-fill a proposal a human then attests, so there is nothing to chase.
+  useEffect(() => {
+    let live = true;
+    const load = () =>
+      api
+        .liveMarks()
+        .then((m) => {
+          if (live) setLiveMarks(m);
+        })
+        .catch(() => {
+          /* no feed = type the mark in; never a broken panel */
+        });
+    void load();
+    const t = setInterval(load, 60_000);
+    return () => {
+      live = false;
+      clearInterval(t);
+    };
+  }, []);
 
   const priceOf = (id: string) => instruments.find((i) => i.id === id)?.referencePrice ?? null;
 
@@ -339,6 +368,23 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
                 disabled={busy}
                 onChange={(e) => setPrice(e.target.value)}
               />
+              {/* A CANDIDATE, not a price. Clicking this fills the box; the number
+                  becomes official only when the threshold has signed it. */}
+              {liveMark && (
+                <button
+                  type="button"
+                  className="link live-mark"
+                  disabled={busy}
+                  title={`${liveMark.source} · ${liveMark.symbol} · ${liveMark.note}`}
+                  onClick={() => setPrice(String(liveMark.price))}
+                >
+                  use {liveMark.symbol} {liveMark.price.toLocaleString(undefined, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}{' '}
+                  <span className="src">({liveMark.source})</span>
+                </button>
+              )}
             </label>
           </div>
 

@@ -457,6 +457,59 @@ function asText(value: unknown): string {
  * single place that guarantees the three forbidden renderings can never reach the
  * screen, including for values that are not Errors at all.
  */
+/** One leg valued twice: at the attested mark, and as of right now. */
+export interface IndicativeNavLeg {
+  instrumentId: string;
+  unitsPerShare: number;
+  officialPrice: number | null;
+  officialValue: number | null;
+  indicativePrice: number | null;
+  indicativeValue: number | null;
+  /** Where the current number came from: a named feed, an accrual recipe, or the mark. */
+  basis: string;
+}
+
+/**
+ * The two NAVs a fund actually has — and a real ETF runs both.
+ *
+ * `official` is struck from marks the committee signed; it is what create/redeem
+ * legally settles at, and it moves only when the committee strikes again.
+ * `indicative` is what the fund is worth right now, recomputed from current data and
+ * binding on nobody — the on-chain equivalent of the iNAV an exchange disseminates
+ * every ~15 seconds. `driftBps` is the gap, which is the honest measure of how stale
+ * the official strike has become.
+ */
+export interface IndicativeNav {
+  basketId: string;
+  cashInstrument: string;
+  officialNavPerShare: number | null;
+  indicativeNavPerShare: number | null;
+  driftBps: number | null;
+  legs: IndicativeNavLeg[];
+  complete: boolean;
+  /** False when nothing could be revalued — every leg fell back to its mark. */
+  live: boolean;
+  asOf: string;
+}
+
+/**
+ * A CANDIDATE mark from an outside feed — NOT an official price.
+ *
+ * The desk has no oracle: a price is official only once a committee has attested it,
+ * and the signatures are what make it provable. This exists so a member proposes
+ * today's real number instead of one typed from memory. The feed proposes; the
+ * committee disposes.
+ */
+export interface LiveMark {
+  instrumentId: string;
+  symbol: string;
+  price: number;
+  source: string;
+  asOf: string;
+  /** The assumption being made — e.g. a wrapped token marked at its underlying's spot. */
+  note: string;
+}
+
 // ---- THE CONTINUOUS SESSION (daml/ContinuousBook.daml) --------------------
 
 export type BookSideName = 'Bid' | 'Ask';
@@ -932,6 +985,22 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ party, instructionCid }),
     }),
+
+  /**
+   * Candidate marks from an outside feed, for pre-filling a proposal. Writes nothing
+   * to the ledger. An empty list means the feed is unreachable — type the mark in.
+   */
+  liveMarks: () => req<LiveMark[]>('/marks/live'),
+
+  /**
+   * Official vs indicative NAV, side by side. Poll this — the indicative side is
+   * meant to move, and the drift between the two is the point.
+   */
+  basketIndicativeNav: (basketId: string, actingAs = '') =>
+    req<IndicativeNav>(
+      `/basket/nav/indicative?basketId=${encodeURIComponent(basketId)}` +
+        (actingAs ? `&actingAs=${encodeURIComponent(actingAs)}` : ''),
+    ),
 
   // ---- THE CONTINUOUS SESSION ------------------------------------------
   // The auction's counterpart: limit interest that RESTS and is matched by

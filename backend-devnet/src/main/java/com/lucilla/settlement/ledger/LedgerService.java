@@ -700,6 +700,38 @@ public class LedgerService {
                         "no official NavFixing " + contractId + " is visible to " + labelOf(party)));
     }
 
+    /**
+     * The live {@link Instrument} contract for {@code instrumentId}, with the party that
+     * may republish its mark.
+     *
+     * <p>{@code InstrumentView} deliberately carries no contract id (it is the UI's
+     * reference-data shape). Exercising {@code SetReferencePrice} needs one, and needs to
+     * know WHO signs — only the issuer controls that choice — so this returns both.
+     */
+    public Optional<InstrumentRef> instrumentRefOf(String party, String instrumentId) {
+        return withRetry("instrument ref " + instrumentId + " for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<Instrument.Contract> filter = ContractFilter.of(Instrument.COMPANION);
+            List<InstrumentRef> out = new ArrayList<>();
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false,
+                            client.getStateClient().getLedgerEnd().blockingGet())
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (Instrument.Contract c : active.activeContracts) {
+                            if (c.data.id.equals(instrumentId)) {
+                                out.add(new InstrumentRef(c.id.contractId, c.data.issuer, c.data.id));
+                            }
+                        }
+                    });
+            return out.stream().findFirst();
+        });
+    }
+
+    /** An instrument's live contract id plus the issuer who controls its mark. */
+    public record InstrumentRef(String contractId, String issuer, String instrumentId) {
+    }
+
     /** The published reference (close) price for an instrument id, or empty. */
     public Optional<BigDecimal> referencePriceOf(String issuerRef, String instrumentId) {
         return instrumentsVisibleTo(resolveParty(issuerRef)).stream()

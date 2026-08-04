@@ -581,6 +581,71 @@ public final class Dtos {
             String sealedAuctionCid) {
     }
 
+    /**
+     * One leg, valued twice: at the attested mark, and as of right now.
+     *
+     * <p>{@code basis} says WHERE the current number came from — a named feed, an
+     * accrual recipe, or "attested mark" when the leg has neither and therefore
+     * cannot move between fixings.
+     */
+    public record IndicativeNavLeg(
+            String instrumentId,
+            BigDecimal unitsPerShare,
+            BigDecimal officialPrice,
+            BigDecimal officialValue,
+            BigDecimal indicativePrice,
+            BigDecimal indicativeValue,
+            String basis) {
+    }
+
+    /**
+     * The two NAVs a fund actually has.
+     *
+     * <p>{@code official} is what create/redeem settles at — struck from marks the
+     * committee signed. {@code indicative} is what the fund is worth right now.
+     * {@code driftBps} is the gap between them in basis points, and it is the honest
+     * measure of how stale the official strike has become: a wide drift on a volatile
+     * book is the signal to strike again, not something to hide.
+     */
+    public record IndicativeNavResponse(
+            String basketId,
+            String cashInstrument,
+            BigDecimal officialNavPerShare,
+            BigDecimal indicativeNavPerShare,
+            BigDecimal driftBps,
+            List<IndicativeNavLeg> legs,
+            boolean complete,
+            /** False when nothing could be revalued — every leg fell back to its mark. */
+            boolean live,
+            String asOf) {
+    }
+
+    /**
+     * A CANDIDATE mark from an outside feed. Not an official price — nothing values
+     * against it until a committee attests it. {@code note} carries the assumption
+     * being made (e.g. that a wrapped token marks at its underlying's spot).
+     */
+    public record LiveMarkResponse(
+            String instrumentId, String symbol, BigDecimal price,
+            String source, String asOf, String note) {
+    }
+
+    /**
+     * A finalised fix, and what happened to the instrument's mark.
+     *
+     * <p>{@code markUpdated} is the bit that matters: the attested price is written back
+     * to the Instrument so the fund's NAV per share values against the committee's number
+     * rather than the issuer's last unilateral one. It can be false without the fix being
+     * invalid — {@code note} says why.
+     */
+    public record FinalizeFixingResponse(
+            String contractId,
+            String instrumentId,
+            BigDecimal attestedPrice,
+            boolean markUpdated,
+            String note) {
+    }
+
     // =====================================================================
     // THE CONTINUOUS SESSION (daml/ContinuousBook.daml)
     // =====================================================================

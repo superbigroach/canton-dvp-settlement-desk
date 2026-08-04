@@ -1,6 +1,7 @@
 package com.lucilla.settlement.web;
 
 import com.lucilla.settlement.ledger.LedgerService;
+import com.lucilla.settlement.ledger.MarketData;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -35,8 +36,20 @@ class SettlementControllerTest {
     @MockBean
     LedgerService ledger;
 
+    // The controller reads CANDIDATE marks from an outside feed. Mocked here so the
+    // slice never touches the network: these tests are about routing and validation,
+    // and a unit test that depends on a live price endpoint is a flaky test.
+    @MockBean
+    MarketData marketData;
+
     @Test
     void issueHolding_returns201WithContractId() throws Exception {
+        // This build now resolves BOTH the issuer and the owner label to a full party
+        // id before building the command — a party id carries a per-run namespace
+        // suffix, so submitting the bare label fails UNKNOWN_SUBMITTERS. The mock must
+        // therefore answer resolveParty, or the controller submits as null.
+        when(ledger.resolveParty("Issuer")).thenReturn("Issuer");
+        when(ledger.resolveParty("Alice")).thenReturn("Alice");
         when(ledger.submitForCreated(eq("Issuer"), any(), any())).thenReturn("holding#1");
 
         mvc.perform(post("/api/holdings")

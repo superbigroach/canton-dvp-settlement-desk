@@ -68,6 +68,19 @@ public final class LedgerCommands {
 
     // ---- Holding (balance) ------------------------------------------------
 
+    /**
+     * The issuer republishes an instrument's mark.
+     *
+     * <p>This is how a committee-attested NAV becomes the number the rest of the desk
+     * values against: {@code NavFixing} is the attestation, and the fund's NAV per share
+     * is {@code Σ(unitsPerShare × mark)} — so unless the attested price is written back
+     * to the instrument, the committee's fix and the fund's NAV are two disconnected
+     * numbers. Consuming: it supersedes the old reference-data record atomically.
+     */
+    public static Update<?> setReferencePrice(String instrumentCid, BigDecimal newPrice) {
+        return new Instrument.ContractId(instrumentCid).exerciseSetReferencePrice(newPrice);
+    }
+
     public static Update<?> createHolding(
             String issuer, String instrumentId, String owner, BigDecimal amount) {
         return new Holding(issuer, instrumentId, owner, amount, List.of()).create();
