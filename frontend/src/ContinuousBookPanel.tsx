@@ -67,6 +67,7 @@ export default function ContinuousBookPanel({
   const [side, setSide] = useState<BookSideName>('Bid');
   const [quantity, setQuantity] = useState<string>('10');
   const [limitPrice, setLimitPrice] = useState<string>('');
+  const [orderType, setOrderType] = useState<'Limit' | 'Market'>('Limit');
   const [tif, setTif] = useState<TimeInForce>('GTC');
 
   const [busy, setBusy] = useState(false);
@@ -136,10 +137,12 @@ export default function ContinuousBookPanel({
       setErr('quantity must be a positive number');
       return;
     }
-    const hasLimit = limitPrice.trim() !== '';
+    // The TYPE decides, so a stale number left in the box cannot turn a market order
+    // into a limit one behind the trader's back.
+    const hasLimit = orderType === 'Limit';
     const lim = hasLimit ? Number(limitPrice) : null;
     if (hasLimit && (!Number.isFinite(lim as number) || (lim as number) <= 0)) {
-      setErr('a stated limit must be a positive number — leave it blank for a market order');
+      setErr('a limit order needs a positive limit price — or switch Type to Market');
       return;
     }
     const r = await run(() =>
@@ -194,7 +197,7 @@ export default function ContinuousBookPanel({
     }
   }
 
-  const marketOrder = limitPrice.trim() === '';
+  const marketOrder = orderType === 'Market';
 
   return (
     <section className="card continuous-book">
@@ -309,6 +312,26 @@ export default function ContinuousBookPanel({
                 <option value="Ask">Ask (sell)</option>
               </select>
             </label>
+            {/* AN ORDER TYPE IS A CHOICE, NOT AN EMPTY FIELD. This used to be
+                expressed by leaving the limit blank, which is how the ledger models it
+                (limitPrice : Optional Decimal) but not how anyone thinks about it.
+                Picking Market now clears and disables the limit box, so the two can
+                never disagree. */}
+            <label>
+              Type
+              <select
+                value={orderType}
+                onChange={(e) => {
+                  const t = e.target.value as 'Limit' | 'Market';
+                  setOrderType(t);
+                  if (t === 'Market') setLimitPrice('');
+                }}
+                disabled={busy}
+              >
+                <option value="Limit">Limit — at my price or better</option>
+                <option value="Market">Market — take what&rsquo;s there</option>
+              </select>
+            </label>
             <label>
               Quantity
               <input
@@ -319,13 +342,13 @@ export default function ContinuousBookPanel({
               />
             </label>
             <label>
-              Limit <span className="hint">blank = market</span>
+              Limit
               <input
                 inputMode="decimal"
-                placeholder="market"
+                placeholder={orderType === 'Market' ? 'n/a — market order' : 'e.g. 1880'}
                 value={limitPrice}
                 onChange={(e) => setLimitPrice(e.target.value)}
-                disabled={busy}
+                disabled={busy || orderType === 'Market'}
               />
             </label>
             <label>
