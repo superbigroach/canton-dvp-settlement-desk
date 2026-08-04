@@ -201,6 +201,50 @@ for AP in Alice Bob; do
   report "MMF -> $AP" "$(post /holdings "{\"issuer\":\"Issuer\",\"instrumentId\":\"MMF:USYC-REF\",\"owner\":\"$AP\",\"amount\":100000}")"
 done
 
+# -----------------------------------------------------------------------------
+say "6c · a live continuous book on cETH"
+# -----------------------------------------------------------------------------
+# AN EMPTY BOOK DEMONSTRATES NOTHING. The Continuous Session panel is where the
+# dark-pool property is shown — venue sees the whole ladder, a trader sees only its
+# own, the auditor sees none of it — and none of that is visible against an empty
+# book. So the seed lays a real two-sided ladder and crosses one order, which also
+# leaves a print on the tape and a Maker/Taker confirm on each side.
+#
+# Prices sit around the attested cETH mark. The bids are deliberately BELOW the
+# asks so the ladder RESTS instead of self-destructing on arrival — except for one
+# aggressive bid, which is there precisely to produce a fill.
+book_order() {  # trader side qty limit
+  post /book/order "{\"trader\":\"$1\",\"side\":\"$2\",\"quantity\":$3,\"instrumentId\":\"cETH\",\"cashInstrument\":\"$CASH\",\"limitPrice\":$4}" \
+    | python3 -c "
+import sys,json
+try: d=json.load(sys.stdin)
+except Exception: print('  $1 $2 $3 @ $4 -> unreadable'); raise SystemExit
+if d.get('status') and int(d.get('status',0))>=400:
+    print('  %-5s %-3s %-5s @ %-8s FAILED: %s' % ('$1','$2','$3','$4', str(d.get('message',''))[:90]))
+else:
+    f=d.get('fills',[])
+    print('  %-5s %-3s %-5s @ %-8s filled %s, resting %s%s' % (
+        '$1','$2','$3','$4', d.get('filledQuantity'), d.get('restingQuantity'),
+        ('  <- %d fill(s) printed to the tape' % len(f)) if f else ''))
+"
+}
+
+report "book session" "$(post /book/session '{"instrumentId":"cETH","cashInstrument":"USDC"}')"
+book_order Bob   Ask 1.0 1880     # rests: best offer
+book_order Bank  Ask 2.0 1885     # rests: second level
+book_order Alice Bid 0.5 1882     # AGGRESSIVE - crosses Bob at HIS price, 1880
+book_order Alice Bid 1.0 1870     # rests: best bid
+book_order Bank  Bid 0.5 1868     # rests: second level
+
+echo "  --- the resting ladder, as the VENUE sees it ---"
+curl -sS "$BASE/book/state?instrumentId=cETH&as=Venue" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+for o in d.get('bids',[]): print('   BID %-5s %-6s @ %-9s #%s' % (o['trader'],o['quantity'],o['limitPrice'],o['seqNo']))
+for o in d.get('asks',[]): print('   ASK %-5s %-6s @ %-9s #%s' % (o['trader'],o['quantity'],o['limitPrice'],o['seqNo']))
+print('   best bid %s / best ask %s   resting: %s' % (d.get('bestBid'), d.get('bestAsk'), d.get('liveCount')))
+"
+
 say "7 · NAV per share, from the attested marks"
 curl -sS "$BASE/basket/nav?basketId=LX1&party=Auditor" 2>/dev/null | python3 -c "
 import sys,json
