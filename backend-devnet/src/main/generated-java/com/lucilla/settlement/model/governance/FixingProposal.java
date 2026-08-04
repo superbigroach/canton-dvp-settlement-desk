@@ -16,6 +16,7 @@ import com.daml.ledger.javaapi.data.PackageVersion;
 import com.daml.ledger.javaapi.data.Party;
 import com.daml.ledger.javaapi.data.Template;
 import com.daml.ledger.javaapi.data.Text;
+import com.daml.ledger.javaapi.data.Timestamp;
 import com.daml.ledger.javaapi.data.Unit;
 import com.daml.ledger.javaapi.data.Value;
 import com.daml.ledger.javaapi.data.codegen.Choice;
@@ -39,6 +40,7 @@ import java.lang.Object;
 import java.lang.Override;
 import java.lang.String;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -48,9 +50,9 @@ import java.util.Set;
 public final class FixingProposal extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#canton-dvp-settlement-desk", "Governance", "FixingProposal");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("cd6202b647482a998c93612fd615750e35250bcfb57272e00d9198ebe014161a", "Governance", "FixingProposal");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("5ac8f47b9e28322096bc4c9c58f8449ead13792c4a30aad95cd1e80669894a79", "Governance", "FixingProposal");
 
-  public static final String PACKAGE_ID = "cd6202b647482a998c93612fd615750e35250bcfb57272e00d9198ebe014161a";
+  public static final String PACKAGE_ID = "5ac8f47b9e28322096bc4c9c58f8449ead13792c4a30aad95cd1e80669894a79";
 
   public static final String PACKAGE_NAME = "canton-dvp-settlement-desk";
 
@@ -110,11 +112,18 @@ public final class FixingProposal extends Template {
 
   public final String rationale;
 
+  public final BigDecimal ratePerAnnum;
+
+  public final String dayCount;
+
+  public final Instant accrualFrom;
+
   public final List<String> approvers;
 
   public FixingProposal(String admin, List<String> members, Long threshold, String auditor,
       String proposer, String instrumentId, String cashInstrument, String session, BigDecimal price,
-      String rationale, List<String> approvers) {
+      String rationale, BigDecimal ratePerAnnum, String dayCount, Instant accrualFrom,
+      List<String> approvers) {
     this.admin = admin;
     this.members = members;
     this.threshold = threshold;
@@ -125,6 +134,9 @@ public final class FixingProposal extends Template {
     this.session = session;
     this.price = price;
     this.rationale = rationale;
+    this.ratePerAnnum = ratePerAnnum;
+    this.dayCount = dayCount;
+    this.accrualFrom = accrualFrom;
     this.approvers = approvers;
   }
 
@@ -201,9 +213,11 @@ public final class FixingProposal extends Template {
 
   public static Update<Created<ContractId>> create(String admin, List<String> members,
       Long threshold, String auditor, String proposer, String instrumentId, String cashInstrument,
-      String session, BigDecimal price, String rationale, List<String> approvers) {
+      String session, BigDecimal price, String rationale, BigDecimal ratePerAnnum, String dayCount,
+      Instant accrualFrom, List<String> approvers) {
     return new FixingProposal(admin, members, threshold, auditor, proposer, instrumentId,
-        cashInstrument, session, price, rationale, approvers).create();
+        cashInstrument, session, price, rationale, ratePerAnnum, dayCount, accrualFrom,
+        approvers).create();
   }
 
   @Override
@@ -221,7 +235,7 @@ public final class FixingProposal extends Template {
   }
 
   public DamlRecord toValue() {
-    ArrayList<DamlRecord.Field> fields = new ArrayList<DamlRecord.Field>(11);
+    ArrayList<DamlRecord.Field> fields = new ArrayList<DamlRecord.Field>(14);
     fields.add(new DamlRecord.Field("admin", new Party(this.admin)));
     fields.add(new DamlRecord.Field("members", this.members.stream().collect(DamlCollectors.toDamlList(v$0 -> new Party(v$0)))));
     fields.add(new DamlRecord.Field("threshold", new Int64(this.threshold)));
@@ -232,6 +246,9 @@ public final class FixingProposal extends Template {
     fields.add(new DamlRecord.Field("session", new Text(this.session)));
     fields.add(new DamlRecord.Field("price", new Numeric(this.price)));
     fields.add(new DamlRecord.Field("rationale", new Text(this.rationale)));
+    fields.add(new DamlRecord.Field("ratePerAnnum", new Numeric(this.ratePerAnnum)));
+    fields.add(new DamlRecord.Field("dayCount", new Text(this.dayCount)));
+    fields.add(new DamlRecord.Field("accrualFrom", Timestamp.fromInstant(this.accrualFrom)));
     fields.add(new DamlRecord.Field("approvers", this.approvers.stream().collect(DamlCollectors.toDamlList(v$0 -> new Party(v$0)))));
     return new DamlRecord(fields);
   }
@@ -240,7 +257,7 @@ public final class FixingProposal extends Template {
       IllegalArgumentException {
     return value$ -> {
       Value recordValue$ = value$;
-      List<DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(11,0, recordValue$);
+      List<DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(14,0, recordValue$);
       String admin = PrimitiveValueDecoders.fromParty.decode(fields$.get(0).getValue());
       List<String> members = PrimitiveValueDecoders.fromList(PrimitiveValueDecoders.fromParty)
           .decode(fields$.get(1).getValue());
@@ -252,15 +269,20 @@ public final class FixingProposal extends Template {
       String session = PrimitiveValueDecoders.fromText.decode(fields$.get(7).getValue());
       BigDecimal price = PrimitiveValueDecoders.fromNumeric.decode(fields$.get(8).getValue());
       String rationale = PrimitiveValueDecoders.fromText.decode(fields$.get(9).getValue());
-      List<String> approvers = PrimitiveValueDecoders.fromList(PrimitiveValueDecoders.fromParty)
+      BigDecimal ratePerAnnum = PrimitiveValueDecoders.fromNumeric
           .decode(fields$.get(10).getValue());
+      String dayCount = PrimitiveValueDecoders.fromText.decode(fields$.get(11).getValue());
+      Instant accrualFrom = PrimitiveValueDecoders.fromTimestamp.decode(fields$.get(12).getValue());
+      List<String> approvers = PrimitiveValueDecoders.fromList(PrimitiveValueDecoders.fromParty)
+          .decode(fields$.get(13).getValue());
       return new FixingProposal(admin, members, threshold, auditor, proposer, instrumentId,
-          cashInstrument, session, price, rationale, approvers);
+          cashInstrument, session, price, rationale, ratePerAnnum, dayCount, accrualFrom,
+          approvers);
     } ;
   }
 
   public static JsonLfDecoder<FixingProposal> jsonDecoder() {
-    return JsonLfDecoders.record(Arrays.asList("admin", "members", "threshold", "auditor", "proposer", "instrumentId", "cashInstrument", "session", "price", "rationale", "approvers"), name -> {
+    return JsonLfDecoders.record(Arrays.asList("admin", "members", "threshold", "auditor", "proposer", "instrumentId", "cashInstrument", "session", "price", "rationale", "ratePerAnnum", "dayCount", "accrualFrom", "approvers"), name -> {
           switch (name) {
             case "admin": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
             case "members": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(1, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.list(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party));
@@ -272,11 +294,14 @@ public final class FixingProposal extends Template {
             case "session": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(7, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text);
             case "price": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(8, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10));
             case "rationale": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(9, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text);
-            case "approvers": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(10, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.list(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party));
+            case "ratePerAnnum": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(10, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10));
+            case "dayCount": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(11, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text);
+            case "accrualFrom": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(12, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.timestamp);
+            case "approvers": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(13, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.list(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party));
             default: return null;
           }
         }
-        , (Object[] args) -> new FixingProposal(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6]), JsonLfDecoders.cast(args[7]), JsonLfDecoders.cast(args[8]), JsonLfDecoders.cast(args[9]), JsonLfDecoders.cast(args[10])));
+        , (Object[] args) -> new FixingProposal(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6]), JsonLfDecoders.cast(args[7]), JsonLfDecoders.cast(args[8]), JsonLfDecoders.cast(args[9]), JsonLfDecoders.cast(args[10]), JsonLfDecoders.cast(args[11]), JsonLfDecoders.cast(args[12]), JsonLfDecoders.cast(args[13])));
   }
 
   public static FixingProposal fromJson(String json) throws JsonLfDecoder.Error {
@@ -295,6 +320,9 @@ public final class FixingProposal extends Template {
         JsonLfEncoders.Field.of("session", apply(JsonLfEncoders::text, session)),
         JsonLfEncoders.Field.of("price", apply(JsonLfEncoders::numeric, price)),
         JsonLfEncoders.Field.of("rationale", apply(JsonLfEncoders::text, rationale)),
+        JsonLfEncoders.Field.of("ratePerAnnum", apply(JsonLfEncoders::numeric, ratePerAnnum)),
+        JsonLfEncoders.Field.of("dayCount", apply(JsonLfEncoders::text, dayCount)),
+        JsonLfEncoders.Field.of("accrualFrom", apply(JsonLfEncoders::timestamp, accrualFrom)),
         JsonLfEncoders.Field.of("approvers", apply(JsonLfEncoders.list(JsonLfEncoders::party), approvers)));
   }
 
@@ -322,6 +350,9 @@ public final class FixingProposal extends Template {
         Objects.equals(this.cashInstrument, other.cashInstrument) &&
         Objects.equals(this.session, other.session) && Objects.equals(this.price, other.price) &&
         Objects.equals(this.rationale, other.rationale) &&
+        Objects.equals(this.ratePerAnnum, other.ratePerAnnum) &&
+        Objects.equals(this.dayCount, other.dayCount) &&
+        Objects.equals(this.accrualFrom, other.accrualFrom) &&
         Objects.equals(this.approvers, other.approvers);
   }
 
@@ -329,14 +360,15 @@ public final class FixingProposal extends Template {
   public int hashCode() {
     return Objects.hash(this.admin, this.members, this.threshold, this.auditor, this.proposer,
         this.instrumentId, this.cashInstrument, this.session, this.price, this.rationale,
-        this.approvers);
+        this.ratePerAnnum, this.dayCount, this.accrualFrom, this.approvers);
   }
 
   @Override
   public String toString() {
-    return String.format("com.lucilla.settlement.model.governance.FixingProposal(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+    return String.format("com.lucilla.settlement.model.governance.FixingProposal(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         this.admin, this.members, this.threshold, this.auditor, this.proposer, this.instrumentId,
-        this.cashInstrument, this.session, this.price, this.rationale, this.approvers);
+        this.cashInstrument, this.session, this.price, this.rationale, this.ratePerAnnum,
+        this.dayCount, this.accrualFrom, this.approvers);
   }
 
   public static final class ContractId extends com.daml.ledger.javaapi.data.codegen.ContractId<FixingProposal> implements Exercises<ExerciseCommand> {

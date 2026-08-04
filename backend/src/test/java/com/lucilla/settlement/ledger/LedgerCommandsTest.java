@@ -4,6 +4,7 @@ import com.daml.ledger.javaapi.data.Command;
 import com.daml.ledger.javaapi.data.CreateCommand;
 import com.daml.ledger.javaapi.data.ExerciseCommand;
 import com.lucilla.settlement.model.marketonclose.Side;
+import com.lucilla.settlement.model.marketonclose.SubmitOrder;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -128,10 +129,60 @@ class LedgerCommandsTest {
     @Test
     void publishImbalance_exercisesPublishImbalanceOnGivenAuction() {
         var cmd = asExercise(LedgerCommands.publishImbalance(
-                "auction#1", List.of("order#1", "order#2")));
+                "auction#1", List.of("order#1", "order#2"), "mandate#7"));
         assertThat(cmd.getChoice()).isEqualTo("PublishImbalance");
         assertThat(cmd.getContractId()).isEqualTo("auction#1");
         assertThat(cmd.getTemplateId().getEntityName()).isEqualTo("ClosingAuction");
+    }
+
+    /**
+     * THE GATE TRAVELS WITH THE CALL. Imbalance disclosure is no longer a standing
+     * privilege of a field on the auction — it demands a live {@code LiquidityMandate},
+     * and the mandate's contract id has to reach the ledger in the choice argument or
+     * the whole obligation model is decorative. Assert the argument carries it, not
+     * merely that the choice name is right.
+     */
+    @Test
+    void publishImbalance_carriesTheMandateContractIdInTheChoiceArgument() {
+        var cmd = asExercise(LedgerCommands.publishImbalance(
+                "auction#1", List.of("order#1"), "mandate#7"));
+        var arg = cmd.getChoiceArgument().asRecord().orElseThrow().getFieldsMap();
+        assertThat(arg.get("mandateCid").asContractId().orElseThrow().getValue())
+                .isEqualTo("mandate#7");
+        assertThat(arg.get("restingOrders").asList().orElseThrow().toList(v -> v)).hasSize(1);
+    }
+
+    /**
+     * The seat is POSTED, not awarded: terms are created with EMPTY {@code accepted}
+     * and {@code barred} lists. Those are ledger facts only {@code AcceptTerms} and
+     * {@code BarProvider} may move — a client that could seed them could pre-bar a
+     * competitor out of the offer before anyone had a chance to take it.
+     */
+    @Test
+    void postMandateTerms_createsAnOpenOfferWithNobodyAcceptedOrBarred() {
+        var cmd = asCreate(LedgerCommands.postMandateTerms(
+                "Venue", "Auditor", "DEMO:cETH", "USDC", "Close",
+                new java.math.BigDecimal("2400"), new java.math.BigDecimal("5"), 200L,
+                java.time.Instant.parse("2030-01-01T00:00:00Z"),
+                List.of("Bank", "Carol", "Bank")));
+        assertThat(cmd.getTemplateId().getEntityName()).isEqualTo("MandateTerms");
+        var fields = cmd.getCreateArguments().getFieldsMap();
+        assertThat(fields.get("accepted").asList().orElseThrow().toList(v -> v)).isEmpty();
+        assertThat(fields.get("barred").asList().orElseThrow().toList(v -> v)).isEmpty();
+        // A duplicated party would trip the template's own `ensure`; dedupe here so the
+        // caller's roster does not have to be pre-cleaned.
+        assertThat(fields.get("eligible").asList().orElseThrow().toList(v -> v)).hasSize(2);
+    }
+
+    /** Taking the seat is exercised on the TERMS, by the provider — never by the venue. */
+    @Test
+    void acceptMandateTerms_exercisesAcceptTermsOnTheOffer() {
+        var cmd = asExercise(LedgerCommands.acceptMandateTerms("terms#1", "Bank"));
+        assertThat(cmd.getChoice()).isEqualTo("AcceptTerms");
+        assertThat(cmd.getContractId()).isEqualTo("terms#1");
+        assertThat(cmd.getTemplateId().getEntityName()).isEqualTo("MandateTerms");
+        assertThat(cmd.getChoiceArgument().asRecord().orElseThrow().getFieldsMap()
+                .get("provider").asParty().orElseThrow().getValue()).isEqualTo("Bank");
     }
 
     @Test
@@ -162,10 +213,81 @@ class LedgerCommandsTest {
     void submitOrder_exercisesSubmitOrderOnGivenAuction() {
         var cmd = asExercise(LedgerCommands.submitOrder(
                 "auction#1", "Alice", Side.BUY,
-                new BigDecimal("10.0"), new BigDecimal("260.0"), "cash#1"));
+                new BigDecimal("10.0"), Optional.of(new BigDecimal("260.0")), "cash#1"));
         assertThat(cmd.getChoice()).isEqualTo("SubmitOrder");
         assertThat(cmd.getContractId()).isEqualTo("auction#1");
         assertThat(cmd.getTemplateId().getEntityName()).isEqualTo("ClosingAuction");
+    }
+
+    /** An UNPRICED market-on-close order: the limit is absent, and that is legal. */
+    @Test
+    void submitOrder_acceptsAnUnpricedMarketOnCloseOrder() {
+        var cmd = asExercise(LedgerCommands.submitOrder(
+                "auction#1", "Alice", Side.BUY,
+                new BigDecimal("10.0"), Optional.empty(), "cash#1"));
+        assertThat(cmd.getChoice()).isEqualTo("SubmitOrder");
+        var arg = SubmitOrder.valueDecoder().decode(cmd.getChoiceArgument());
+        assertThat(arg.limitPrice).isEmpty();
+    }
+
+    // ---- order type: an absent limit is MARKET, never a rejection ----------
+
+    @Test
+    void orderType_absentDiscriminatorInfersFromTheLimit() {
+        // No limit and no discriminator -> an unpriced market-on-close order.
+        assertThat(LedgerCommands.orderType(null, null)).isEmpty();
+        assertThat(LedgerCommands.orderType("  ", null)).isEmpty();
+        // A stated limit and no discriminator -> a limit-on-close order.
+        assertThat(LedgerCommands.orderType(null, new BigDecimal("260.0")))
+                .contains(new BigDecimal("260.0"));
+    }
+
+    @Test
+    void orderType_marketIsUnpricedEvenIfALimitIsSent() {
+        assertThat(LedgerCommands.orderType("Market", new BigDecimal("260.0"))).isEmpty();
+        assertThat(LedgerCommands.orderType("moc", null)).isEmpty();
+    }
+
+    @Test
+    void orderType_limitRequiresAPriceAndUnknownTypesAreRejected() {
+        assertThat(LedgerCommands.orderType("Limit", new BigDecimal("99.5")))
+                .contains(new BigDecimal("99.5"));
+        assertThatThrownBy(() -> LedgerCommands.orderType("Limit", null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> LedgerCommands.orderType("stop", new BigDecimal("1.0")))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    // ---- buying power: the collar bounds an unpriced BUY -------------------
+
+    @Test
+    void buyReservation_limitedBuyReservesQuantityTimesItsOwnLimit() {
+        assertThat(LedgerCommands.buyReservation(
+                Optional.of(new BigDecimal("260.0")), new BigDecimal("250.0"), new BigDecimal("10.0")))
+                .isEqualByComparingTo(new BigDecimal("2600.0"));
+    }
+
+    @Test
+    void buyReservation_unpricedBuyReservesTheTopOfTheCollarNotTheAnchor() {
+        // anchor 250 -> band = max(0.50, 10% of 250) = 25 -> collar high = 275.
+        // Reserving at the ANCHOR (2500) would under-fund this order by 250.
+        assertThat(LedgerCommands.collarBand(new BigDecimal("250.0")))
+                .isEqualByComparingTo(new BigDecimal("25.0"));
+        assertThat(LedgerCommands.collarHigh(new BigDecimal("250.0")))
+                .isEqualByComparingTo(new BigDecimal("275.0"));
+        assertThat(LedgerCommands.buyReservation(
+                Optional.empty(), new BigDecimal("250.0"), new BigDecimal("10.0")))
+                .isEqualByComparingTo(new BigDecimal("2750.0"));
+    }
+
+    @Test
+    void collarBand_usesTheAbsoluteFloorOnALowPricedInstrument() {
+        // 10% of 2.00 is 0.20, below the 0.50 floor — the floor wins (Nasdaq's rule).
+        assertThat(LedgerCommands.collarBand(new BigDecimal("2.0")))
+                .isEqualByComparingTo(new BigDecimal("0.50"));
+        assertThat(LedgerCommands.buyReservation(
+                Optional.empty(), new BigDecimal("2.0"), new BigDecimal("100.0")))
+                .isEqualByComparingTo(new BigDecimal("250.0"));
     }
 
     @Test

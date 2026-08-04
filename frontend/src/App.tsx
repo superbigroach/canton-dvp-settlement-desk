@@ -5,8 +5,11 @@ import {
   type Holding,
   type Instrument,
   type LedgerReceipt,
+  type LiquidityMandate,
+  type MandateTerms,
   type MocImbalance,
   type MocState,
+  type OrderType,
   type Party,
   type Session,
 } from './api';
@@ -17,6 +20,20 @@ const CASH = 'USDC';
 
 type Side = 'Buy' | 'Sell';
 type Mode = 'DvP' | 'Auction';
+
+// ---- The venue price collar (MIRRORED from daml/MarketOnClose.daml) ---------
+//
+// Kept in step with `collarBps` / `collarFloor` / `collarBand` on the ledger. The UI
+// needs them for ONE thing: an unpriced BUY's buying power. A market order has no
+// limit of its own, so the only bound on what it can be asked to pay is the collar —
+// RunClose clamps the print into anchor ± collarBand(anchor) and cannot settle
+// outside it. Nasdaq's construction: the GREATER of a percentage and an absolute
+// floor, because a pure percentage is meaningless on a low-priced instrument.
+const COLLAR_BPS = 1000;
+const COLLAR_FLOOR = 0.5;
+const collarBand = (anchor: number) => Math.max(COLLAR_FLOOR, (anchor * COLLAR_BPS) / 10000);
+/** The HIGHEST price this auction can legally print — an unpriced buy's worst case. */
+const collarHigh = (anchor: number) => anchor + collarBand(anchor);
 
 const fmt = (n: number) =>
   n.toLocaleString(undefined, { maximumFractionDigits: 4 });
@@ -41,16 +58,28 @@ export default function App() {
   const [side, setSide] = useState<Side>('Buy');
   const [quantity, setQuantity] = useState<string>('1');
   const [price, setPrice] = useState<string>(''); // DvP only
-  // Auction only. The WORST price this sealed order accepts (Buy: max, Sell: min).
-  // Blank pins it to the anchor, which always crosses. Limits set AWAY from the
-  // anchor are what let the uncross discover a different print — that is the whole
-  // point of price discovery, so this field is how the demo shows it.
+  // Auction only. THE ORDER TYPE.
+  //   Market — unpriced market-on-close. No limit at all: it takes whatever the book
+  //            prints, counts at every candidate price, and is allocated AHEAD of
+  //            every limit order. This is what the overwhelming majority of real
+  //            closing volume is (index funds and rebalancers whose mandate IS the
+  //            official print), so it is the default.
+  //   Limit  — limit-on-close at a stated worst price (Buy: max, Sell: min). Limits
+  //            set AWAY from the anchor are what let the uncross discover a different
+  //            print — that is the whole point of price discovery.
+  const [orderType, setOrderType] = useState<OrderType>('Market');
   const [limitPrice, setLimitPrice] = useState<string>('');
   const [counterparty, setCounterparty] = useState<string>('');
   const [session, setSession] = useState<Session>('Close');
 
   const [mocState, setMocState] = useState<MocState | null>(null);
   const [imbalance, setImbalance] = useState<MocImbalance | null>(null);
+  // THE SEAT. `mandate` is the acting party's own signed obligation over this book
+  // (null / held=false when it holds none); `terms` are the venue's OPEN offers of
+  // that seat. A party with no mandate is shown the terms instead of the imbalance —
+  // it must commit before it can see, and it CAN commit, which is the whole point.
+  const [mandate, setMandate] = useState<LiquidityMandate | null>(null);
+  const [terms, setTerms] = useState<MandateTerms[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>('');
   const [toast, setToast] = useState<string>('');
@@ -108,9 +137,10 @@ export default function App() {
     }
   }, []);
 
-  // The Designated Liquidity Provider view of the NET imbalance. The ledger discloses
-  // it ONLY to the DLP (and the venue); a normal trader gets disclosed=false, so the
-  // LP panel stays hidden for everyone but the one designated provider.
+  // The MANDATED-PROVIDER view of the NET imbalance. The ledger discloses it only to
+  // a party holding a live LiquidityMandate over this book (and to the venue); anyone
+  // else gets disclosed=false with mandateRequired=true, which the panel renders as
+  // the open terms and an Accept action rather than as a refusal.
   const loadImbalance = useCallback(async (assetId: string, sess: Session, actingAs: string) => {
     if (!assetId || !actingAs) {
       setImbalance(null);
@@ -121,6 +151,22 @@ export default function App() {
     } catch {
       setImbalance(null);
     }
+  }, []);
+
+  // The seat itself: what this party has committed to (if anything), and what the
+  // venue is currently offering anyone who wants to commit.
+  const loadMandate = useCallback(async (assetId: string, sess: Session, actingAs: string) => {
+    if (!assetId || !actingAs) {
+      setMandate(null);
+      setTerms([]);
+      return;
+    }
+    const [m, t] = await Promise.all([
+      api.myMandate(assetId, sess, actingAs, CASH).catch(() => null),
+      api.mandateTerms(assetId, sess, actingAs, CASH).catch(() => [] as MandateTerms[]),
+    ]);
+    setMandate(m);
+    setTerms(t);
   }, []);
 
   useEffect(() => {
@@ -154,6 +200,9 @@ export default function App() {
   useEffect(() => {
     void loadImbalance(asset, session, acting);
   }, [asset, session, acting, loadImbalance]);
+  useEffect(() => {
+    void loadMandate(asset, session, acting);
+  }, [asset, session, acting, loadMandate]);
 
   // When the asset changes, seed the DvP price with its published reference so the
   // "You pay X" line computes immediately (still editable — DvP is negotiated).
@@ -178,25 +227,43 @@ export default function App() {
   const priceNum = Number(price) || 0;
   const closePrice = refPriceOf(asset);
   const dvpCash = qtyNum * priceNum;
-  // A BUY reserves quantity * limitPrice — NOT quantity * anchor. The cross can
-  // print above the anchor, so the limit is the true worst case and reserving at
-  // the anchor would leave the buyer short. Blank limit == the anchor.
+  // BUYING POWER — quantity * the worst price the order can LEGALLY execute at.
+  // This must match the ledger's own reservation exactly or the ticket rejects orders
+  // the venue would have accepted (and vice versa):
+  //   * LIMIT buy  -> quantity * limit. A buy can never execute above its own limit,
+  //     so the limit is the exact worst case. NOT the anchor — the cross is discovered
+  //     from the book and can print above it.
+  //   * MARKET buy -> quantity * collarHigh(anchor), the TOP OF THE PRICE COLLAR. An
+  //     unpriced buy has no limit, so the collar is the only bound on what it can be
+  //     asked to pay. Sizing a market order at the ANCHOR would under-state the
+  //     requirement by the collar's whole width and wrongly reject fundable orders.
+  // A SELL is price-independent either way: it delivers `quantity` of the asset.
+  const isMarketOrder = orderType === 'Market';
   const limitNum = Number(limitPrice) || 0;
-  const effectiveLimit = limitNum > 0 ? limitNum : (closePrice ?? 0);
-  const mocCash = qtyNum * effectiveLimit;
+  const anchor = closePrice ?? 0;
+  // The worst price this ticket can be filled at, and the number the summary quotes.
+  const worstPrice = isMarketOrder ? collarHigh(anchor) : limitNum;
+  const mocCash = qtyNum * worstPrice;
   const selectedInstrument = instrumentOf(asset);
 
   // Spot guard: a Sell must be covered by the asset; a Buy by cash. (The ledger
   // also enforces this — there is no shorting and no negative position.)
+  //
+  // `mocCash` is already the collar-aware figure for a MARKET buy, so this check
+  // agrees with the ledger's own reservation instead of under-stating it at the
+  // anchor and letting the ticket through only for SubmitOrder to abort.
   const spotWarning = useMemo(() => {
     if (qtyNum <= 0) return '';
     if (side === 'Sell' && qtyNum > assetPosition + 1e-9)
       return `You hold ${fmt(assetPosition)} ${asset} — cannot sell ${fmt(qtyNum)}.`;
     const needCash = mode === 'DvP' ? dvpCash : mocCash;
     if (side === 'Buy' && needCash > cashPosition + 1e-9)
-      return `Costs ${fmt(needCash)} ${CASH} — you hold ${fmt(cashPosition)} ${CASH}.`;
+      return mode === 'Auction' && isMarketOrder
+        ? `An unpriced buy reserves ${fmt(needCash)} ${CASH} (the collar ceiling, refunded down ` +
+            `to the print) — you hold ${fmt(cashPosition)} ${CASH}.`
+        : `Costs ${fmt(needCash)} ${CASH} — you hold ${fmt(cashPosition)} ${CASH}.`;
     return '';
-  }, [side, qtyNum, assetPosition, asset, mode, dvpCash, mocCash, cashPosition]);
+  }, [side, qtyNum, assetPosition, asset, mode, dvpCash, mocCash, cashPosition, isMarketOrder]);
 
   // ---- actions ------------------------------------------------------------
 
@@ -241,16 +308,19 @@ export default function App() {
         quantity: qtyNum,
         instrumentId: asset,
         session,
-        // Omit when blank so the server pins the limit to the anchor.
-        ...(limitNum > 0 ? { limitPrice: limitNum } : {}),
+        orderType,
+        // A MARKET order carries NO limit at all — the field is omitted, not zeroed
+        // and not defaulted to the anchor. Omitting it is what makes it unpriced.
+        ...(isMarketOrder ? {} : { limitPrice: limitNum }),
       }),
     );
     if (!res) return;
     flash(
-      `Sealed ${side.toUpperCase()} order sent to the ${session.toLowerCase()} cross ` +
-        `(limit ${fmt2(effectiveLimit)} ${CASH}` +
-        (limitNum > 0 ? '' : ', pinned to the anchor') +
-        ` — the print is discovered at the cross).`,
+      isMarketOrder
+        ? `Sealed MARKET ${side.toUpperCase()} order sent to the ${session.toLowerCase()} cross ` +
+            `— unpriced, filled ahead of every limit order at whatever the book prints.`
+        : `Sealed LIMIT ${side.toUpperCase()} order sent to the ${session.toLowerCase()} cross ` +
+            `(limit ${fmt2(limitNum)} ${CASH} — the print is discovered at the cross).`,
     );
     await Promise.all([loadHoldings(acting), loadMoc(asset, session, acting), loadImbalance(asset, session, acting)]);
   }
@@ -290,8 +360,17 @@ export default function App() {
     if (!imbalance?.disclosed || !imbalance.netSide || !imbalance.netQuantity) return;
     const offsetSide: Side = imbalance.netSide === 'Buy' ? 'Sell' : 'Buy';
     const qty = imbalance.netQuantity;
+    // Unpriced by design: the LP is offsetting the imbalance at whatever the book
+    // prints, not expressing a view on price.
     const res = await runAction(() =>
-      api.mocOrder({ trader: acting, side: offsetSide, quantity: qty, instrumentId: asset, session }),
+      api.mocOrder({
+        trader: acting,
+        side: offsetSide,
+        quantity: qty,
+        instrumentId: asset,
+        session,
+        orderType: 'Market',
+      }),
     );
     if (!res) return;
     flash(
@@ -302,14 +381,51 @@ export default function App() {
   }
 
   const actingIsVenue = acting.toLowerCase() === 'venue';
-  // The LP panel shows ONLY for the one designated liquidity provider (the ledger
-  // discloses the imbalance to it) — never for a normal trader, never for the venue
-  // (which keeps its full-book view).
-  const isDesignatedLp =
-    !!imbalance?.disclosed && !actingIsVenue && imbalance.liquidityProvider === acting;
-  const hasImbalance = isDesignatedLp && imbalance?.netSide != null && imbalance.netSide !== 'Flat';
+  // THE SEAT, AND WHO IS IN IT.
+  //
+  // The panel used to key off a single designated party named in a field. It now keys
+  // off a SIGNED OBLIGATION — and, crucially, it also shows to a party that holds no
+  // mandate but COULD take one, because "you are not the DLP" was a dead end and
+  // "here are the terms, take them" is the contestability made visible.
+  const holdsMandate = !!mandate?.held;
+  const openTerms = terms.find((t) => t.openToActingParty) ?? null;
+  const showLpPanel = !actingIsVenue && (holdsMandate || !!openTerms);
+  const isMandatedLp = holdsMandate && !!imbalance?.disclosed;
+  const hasImbalance = isMandatedLp && imbalance?.netSide != null && imbalance.netSide !== 'Flat';
+
+  // ACCEPT THE MANDATE — take up the posted seat and become an obligated provider.
+  //
+  // Deliberately available to a party that can see NOTHING about the book: the terms
+  // state the commitment and the band, and that is all anyone gets to know before
+  // committing. Commit first, see second — there is no read-then-decide, and no
+  // separate application, capital test or fee between a participant and the seat.
+  async function doAcceptMandate() {
+    if (!openTerms) return;
+    const seat = openTerms;
+    const res = await runAction(() =>
+      api.acceptMandate({
+        provider: acting,
+        instrumentId: asset,
+        session,
+        cashInstrument: CASH,
+        termsCid: seat.contractId,
+      }),
+    );
+    if (!res) return;
+    flash(
+      `Mandate accepted — ${acting} is now obligated to absorb up to ` +
+        `${fmt(seat.commitmentSize)} ${asset} within ${seat.maxBandBps}bps ` +
+        `of ${fmt2(seat.anchorPrice)}. The residual is now visible to you.`,
+    );
+    await Promise.all([
+      loadMandate(asset, session, acting),
+      loadImbalance(asset, session, acting),
+    ]);
+  }
   const canDvP = !busy && qtyNum > 0 && priceNum > 0 && !!counterparty && counterparty !== acting;
-  const canMoc = !busy && qtyNum > 0 && !!asset;
+  // A LIMIT order is only well-formed once it names a limit; a MARKET order never
+  // needs one (that is the point) and is always ready to send.
+  const canMoc = !busy && qtyNum > 0 && !!asset && (isMarketOrder || limitNum > 0);
 
   // ---- render -------------------------------------------------------------
 
@@ -520,22 +636,54 @@ export default function App() {
                   </button>
                 </div>
               </div>
-              <label className="field small">
-                <span>Limit ({CASH})</span>
-                <input
-                  className="mono"
-                  type="number"
-                  min="0"
-                  step="any"
-                  placeholder={closePrice != null ? `${fmt2(closePrice)} (anchor)` : 'anchor'}
-                  value={limitPrice}
-                  onChange={(e) => setLimitPrice(e.target.value)}
-                />
-                <span className="summary-sub">
-                  {side === 'Buy' ? 'most you will pay' : 'least you will accept'} — blank pins to
-                  the anchor. Set it away from the anchor to let the book find its own price.
-                </span>
-              </label>
+              {/* ORDER TYPE, not session. The buttons are deliberately just "Market" and
+                  "Limit": the session toggle immediately above already spends the
+                  letters MOO/MOC on the SESSION, and an unpriced order in the opening
+                  session is a market-on-OPEN. The type is the thing being chosen here. */}
+              <div className="field">
+                <span>Order type</span>
+                <div className="segmented order-type">
+                  <button
+                    className={isMarketOrder ? 'on' : ''}
+                    onClick={() => setOrderType('Market')}
+                    title="Unpriced. Fills at whatever the cross prints, ahead of every limit order."
+                  >
+                    Market
+                  </button>
+                  <button
+                    className={!isMarketOrder ? 'on' : ''}
+                    onClick={() => setOrderType('Limit')}
+                    title="Priced. Names the worst price you will accept and walks away from anything worse."
+                  >
+                    Limit
+                  </button>
+                </div>
+              </div>
+              {isMarketOrder ? (
+                <p className="hint subtle">
+                  <strong>Unpriced.</strong> You are buying the print itself: this order counts at
+                  every candidate price, is allocated <strong>ahead of every limit order</strong>,
+                  and is never cancelled for being away from the cross. It is what index funds and
+                  rebalancers send, and it is most of the real closing volume.
+                </p>
+              ) : (
+                <label className="field small">
+                  <span>Limit ({CASH})</span>
+                  <input
+                    className="mono"
+                    type="number"
+                    min="0"
+                    step="any"
+                    placeholder={closePrice != null ? `${fmt2(closePrice)} (anchor)` : 'anchor'}
+                    value={limitPrice}
+                    onChange={(e) => setLimitPrice(e.target.value)}
+                  />
+                  <span className="summary-sub">
+                    {side === 'Buy' ? 'most you will pay' : 'least you will accept'} — set it away
+                    from the anchor to let the book find its own price.
+                  </span>
+                </label>
+              )}
               <div className="summary">
                 <span>{sessionLabel(session)} anchor</span>
                 <strong className="mono nav-inline">
@@ -546,6 +694,18 @@ export default function App() {
                     {side === 'Buy'
                       ? `commits ${fmt2(mocCash)} ${CASH}`
                       : `delivers ${fmt(qtyNum)} ${asset}`}
+                  </span>
+                )}
+                {/* WHY a market BUY commits more than quantity * anchor. It has no limit
+                    of its own, so the venue's price collar is the only bound on what it
+                    can be asked to pay — the close is clamped into anchor ± band and
+                    cannot print above the top of it. Any unspent cash comes straight
+                    back as change at settlement. */}
+                {closePrice != null && side === 'Buy' && isMarketOrder && (
+                  <span className="summary-sub">
+                    unpriced — reserved at the collar ceiling {fmt2(collarHigh(anchor))} {CASH}
+                    {' '}(anchor + {fmt2(collarBand(anchor))}), the highest this close can print.
+                    Change is returned at settlement.
                   </span>
                 )}
               </div>
@@ -559,18 +719,66 @@ export default function App() {
           )}
         </section>
 
-        {/* -------- Designated Liquidity Provider · imbalance panel -------- */}
-        {isDesignatedLp && (
+        {/* -------- Liquidity mandate · imbalance panel --------
+            Two states, one panel. WITH a live mandate it shows the residual, exactly
+            as before. WITHOUT one it shows the venue's posted terms and an Accept
+            action — because the seat is contestable, and a party that has not taken
+            it is not shut out, it simply has not committed yet. */}
+        {showLpPanel && !holdsMandate && openTerms && (
+          <section className="card lp-imbalance" aria-label="Liquidity mandate on offer">
+            <div className="card-head">
+              <h2>Imbalance · LP View</h2>
+              <span className="lp-tag">seat open · no mandate</span>
+            </div>
+            <p className="hint">
+              The net imbalance of <strong>{asset}</strong>&rsquo;s sealed book is disclosed only to
+              a party that has <strong>signed an obligation</strong> to absorb it. The seat is
+              posted, not awarded: any registered participant may take it, several may hold it at
+              once, and there is no fee. You commit <em>before</em> you can see — nothing about the
+              book is visible from here.
+            </p>
+            <div className="imbalance-figure flat">
+              <span className="imbalance-side">Mandate on offer</span>
+              <span className="imbalance-qty mono">
+                {fmt(openTerms.commitmentSize)} {asset}
+              </span>
+              <span className="imbalance-at mono">
+                within {openTerms.maxBandBps}bps of {fmt2(openTerms.anchorPrice)} {CASH}
+              </span>
+            </div>
+            <p className="imbalance-note">
+              {imbalance?.mandateRequired && imbalance.note ? imbalance.note : openTerms.note}
+            </p>
+            <button className="primary lp" disabled={busy} onClick={doAcceptMandate}>
+              {busy
+                ? 'Accepting…'
+                : `Accept mandate · absorb up to ${fmt(openTerms.commitmentSize)} ${asset}`}
+            </button>
+            <button
+              className="ghost"
+              disabled={busy}
+              onClick={() => loadMandate(asset, session, acting)}
+            >
+              Refresh
+            </button>
+          </section>
+        )}
+
+        {showLpPanel && holdsMandate && (
           <section className="card lp-imbalance" aria-label="Liquidity provider imbalance view">
             <div className="card-head">
               <h2>Imbalance · LP View</h2>
-              <span className="lp-tag">designated LP · {acting}</span>
+              <span className="lp-tag">mandated LP · {acting}</span>
             </div>
             <p className="hint">
-              As <strong>{asset}</strong>&rsquo;s designated liquidity provider you — and only you
-              (plus the venue) — are shown the <strong>net</strong> imbalance of the sealed book.
-              Individual orders and trader identities stay hidden. Commit offsetting interest to
-              clear the cross.
+              You hold a live liquidity mandate over <strong>{asset}</strong>: absorb up to{' '}
+              <strong>
+                {fmt(mandate!.commitmentSize ?? 0)} {asset}
+              </strong>{' '}
+              within <strong>{mandate!.maxBandBps}bps</strong> of{' '}
+              {mandate!.anchorPrice != null ? fmt2(mandate!.anchorPrice) : '—'} {CASH}. That
+              obligation — not a field the venue wrote — is what shows you the <strong>net</strong>{' '}
+              imbalance below. Individual orders and trader identities stay hidden.
             </p>
             {hasImbalance ? (
               <>
@@ -596,17 +804,31 @@ export default function App() {
                       )} ${asset}`}
                 </button>
               </>
-            ) : (
+            ) : isMandatedLp ? (
               <div className="imbalance-figure flat">
                 <span className="imbalance-side">Book balanced</span>
                 <span className="imbalance-qty mono">Flat</span>
                 <span className="imbalance-at">no offsetting liquidity needed</span>
               </div>
+            ) : (
+              /* Mandate held, but no number came back. Say THAT — never render an
+                 absent disclosure as "Flat", which would read as a balanced book and
+                 is a different (and false) statement. */
+              <div className="imbalance-figure flat">
+                <span className="imbalance-side">Residual not available</span>
+                <span className="imbalance-qty mono">—</span>
+                <span className="imbalance-at">
+                  {imbalance?.note ?? 'the venue has not published against your mandate yet'}
+                </span>
+              </div>
             )}
             <button
               className="ghost"
               disabled={busy}
-              onClick={() => loadImbalance(asset, session, acting)}
+              onClick={() => {
+                void loadImbalance(asset, session, acting);
+                void loadMandate(asset, session, acting);
+              }}
             >
               Refresh
             </button>
@@ -655,6 +877,7 @@ export default function App() {
                       <th>Trader</th>
                       <th>Side</th>
                       <th className="num">Qty</th>
+                      <th className="num">Limit</th>
                       <th className="num">Action</th>
                     </tr>
                   </thead>
@@ -666,6 +889,19 @@ export default function App() {
                           <span className={`side ${o.side.toLowerCase()}`}>{o.side}</span>
                         </td>
                         <td className="num mono">{fmt(o.quantity)}</td>
+                        {/* An unpriced order has NO limit — the ledger sends null, and
+                            the honest rendering of that is "MOC", not a blank cell and
+                            certainly not 0 or the anchor (both read as a real price the
+                            order never named). */}
+                        <td className="num mono">
+                          {o.limitPrice == null ? (
+                            <span className="tag moc" title="Unpriced market-on-close — fills at the print, ahead of every limit order">
+                              MOC
+                            </span>
+                          ) : (
+                            fmt2(o.limitPrice)
+                          )}
+                        </td>
                         <td className="num">
                           {o.trader === acting ? (
                             <button

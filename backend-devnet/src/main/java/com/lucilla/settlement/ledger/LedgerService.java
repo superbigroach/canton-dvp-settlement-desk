@@ -19,6 +19,8 @@ import com.lucilla.settlement.model.basket.BasketDefinition;
 import com.lucilla.settlement.model.basket.Component;
 import com.lucilla.settlement.model.holding.Holding;
 import com.lucilla.settlement.model.instrument.Instrument;
+import com.lucilla.settlement.model.liquiditymandate.LiquidityMandate;
+import com.lucilla.settlement.model.liquiditymandate.MandateTerms;
 import com.lucilla.settlement.model.marketonclose.ClosingAuction;
 import com.lucilla.settlement.model.marketonclose.ImbalanceDisclosure;
 import com.lucilla.settlement.model.marketonclose.SealedOrder;
@@ -314,7 +316,11 @@ public class LedgerService {
                             out.add(new OrderView(c.id.contractId, o.operator, labelOf(o.trader),
                                     o.instrumentId, o.cashInstrument, o.session,
                                     o.side.toString().equalsIgnoreCase("BUY") ? "Buy" : "Sell",
-                                    o.quantity, o.limitPrice));
+                                    // UNWRAP THE ORDER TYPE. `None` is an unpriced
+                                    // market-on-close order, carried onwards as a null
+                                    // limit — never coerced to 0 or to the anchor, both
+                                    // of which would read as a real (and wrong) price.
+                                    o.quantity, o.limitPrice.orElse(null)));
                         }
                     });
             return out;
@@ -345,6 +351,79 @@ public class LedgerService {
                             out.add(new ImbalanceView(c.id.contractId, d.operator,
                                     labelOf(d.liquidityProvider), d.instrumentId, d.cashInstrument,
                                     d.session, d.netSide, d.netQuantity, d.referencePrice));
+                        }
+                    });
+            return out;
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // The contestable liquidity mandate: the posted offer and the obligation
+    // -----------------------------------------------------------------------
+
+    /**
+     * Open {@link MandateTerms} — the seat, POSTED where every eligible participant
+     * can take it.
+     *
+     * <p>The venue signs the terms and every party on {@code eligible} observes them
+     * (plus the auditor), so this query returns the offer to anyone entitled to accept
+     * it and nothing to an outsider. That visibility IS the contestability: an open
+     * offer nobody can see is not an open offer, and the ledger — not this class —
+     * decides who sees it.
+     */
+    public List<MandateTermsView> mandateTermsVisibleTo(String party) {
+        return withRetry("mandate terms for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<MandateTerms.Contract> filter = ContractFilter.of(MandateTerms.COMPANION);
+            List<MandateTermsView> out = new ArrayList<>();
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false, client.getStateClient().getLedgerEnd().blockingGet())
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (MandateTerms.Contract c : active.activeContracts) {
+                            MandateTerms t = c.data;
+                            out.add(new MandateTermsView(c.id.contractId, t.operator,
+                                    t.instrumentId, t.cashInstrument, t.session, t.anchorPrice,
+                                    t.commitmentSize, t.maxBandBps, t.expiresAt,
+                                    t.eligible, t.accepted, t.barred));
+                        }
+                    });
+            return out;
+        });
+    }
+
+    /**
+     * Live {@link LiquidityMandate} obligations visible to {@code party}.
+     *
+     * <p>Operator AND provider are both signatories (the auditor observes), which is
+     * exactly the difference between this and the old {@code liquidityProvider} field:
+     * the obligation could not exist unless the provider's authority was present when
+     * it was created. So querying as a PROVIDER returns that provider's own mandates
+     * and no others, and querying as the VENUE returns every mandate over its books —
+     * which is what lets the desk resolve "who may be shown this residual" server-side
+     * instead of trusting a contract id off the wire.
+     *
+     * <p>Note {@code expiresAt} is returned raw and NOT filtered here. Liveness is the
+     * LEDGER's call ({@code mandateIsLive} runs on ledger time inside the choice); this
+     * layer reports the fact and lets the caller say something precise about it.
+     */
+    public List<MandateView> mandatesVisibleTo(String party) {
+        return withRetry("mandates for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<LiquidityMandate.Contract> filter =
+                    ContractFilter.of(LiquidityMandate.COMPANION);
+            List<MandateView> out = new ArrayList<>();
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false, client.getStateClient().getLedgerEnd().blockingGet())
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (LiquidityMandate.Contract c : active.activeContracts) {
+                            LiquidityMandate m = c.data;
+                            out.add(new MandateView(c.id.contractId, m.operator, m.provider,
+                                    m.instrumentId, m.cashInstrument, m.session, m.anchorPrice,
+                                    m.commitmentSize, m.maxBandBps, m.expiresAt, m.acceptedAt,
+                                    m.shownSide, m.peakShownQty, m.lastShownAt.orElse(null),
+                                    m.disclosuresSeen));
                         }
                     });
             return out;
@@ -686,6 +765,56 @@ public class LedgerService {
         }
     }
 
+    /**
+     * The venue's OPEN OFFER of the liquidity seat, flattened for the web layer.
+     *
+     * <p>Party fields are FULL party ids (never labels) because callers match on them —
+     * {@code eligible} decides who may accept, {@code accepted} who already holds a
+     * mandate, {@code barred} who forfeited the seat this session by failing a
+     * commitment. The web layer relabels for display; matching must not go through a
+     * label, which is only the readable prefix of a namespaced id.
+     */
+    public record MandateTermsView(
+            String contractId, String operator, String instrumentId, String cashInstrument,
+            String session, java.math.BigDecimal anchorPrice,
+            java.math.BigDecimal commitmentSize, long maxBandBps, java.time.Instant expiresAt,
+            List<String> eligible, List<String> accepted, List<String> barred) {
+
+        /** May {@code party} take up this seat right now? (eligible, not already in, not barred) */
+        public boolean openTo(String party) {
+            return eligible.contains(party) && !accepted.contains(party) && !barred.contains(party);
+        }
+    }
+
+    /**
+     * A signed liquidity OBLIGATION, flattened for the web layer.
+     *
+     * <p>{@code peakShownQty} / {@code shownSide} are the running disclosure record the
+     * ledger stamps on every publish: the duty is sized by what this provider was
+     * ACTUALLY SHOWN during the session, not by a figure assembled afterwards.
+     * {@code lastShownAt} is null when the provider has been shown nothing yet.
+     */
+    public record MandateView(
+            String contractId, String operator, String provider, String instrumentId,
+            String cashInstrument, String session, java.math.BigDecimal anchorPrice,
+            java.math.BigDecimal commitmentSize, long maxBandBps, java.time.Instant expiresAt,
+            java.time.Instant acceptedAt, String shownSide, java.math.BigDecimal peakShownQty,
+            java.time.Instant lastShownAt, long disclosuresSeen) {
+
+        /** Is this obligation still running at {@code now}? (the ledger re-checks on its own clock) */
+        public boolean liveAt(java.time.Instant now) {
+            return expiresAt.isAfter(now);
+        }
+
+        /** Does this mandate cover exactly this book, at this published anchor? */
+        public boolean covers(String venue, String instrument, String cash, String sess,
+                java.math.BigDecimal anchor) {
+            return operator.equals(venue) && instrumentId.equals(instrument)
+                    && cashInstrument.equals(cash) && session.equals(sess)
+                    && (anchor == null || anchorPrice.compareTo(anchor) == 0);
+        }
+    }
+
     /** Flat, JSON-friendly view of an ImbalanceDisclosure (the aggregate only). */
     public record ImbalanceView(
             String contractId, String operator, String liquidityProvider, String instrumentId,
@@ -693,11 +822,27 @@ public class LedgerService {
             java.math.BigDecimal netQuantity, java.math.BigDecimal referencePrice) {
     }
 
-    /** Flat, JSON-friendly view of a resting SealedOrder (as seen by the operator). */
+    /**
+     * Flat, JSON-friendly view of a resting SealedOrder (as seen by the operator).
+     *
+     * <p>{@code limitPrice} is NULL for an unpriced MARKET-on-close order (the ledger's
+     * {@code None}) and non-null for a LIMIT-on-close. Callers must branch on it rather
+     * than substitute a number: there is no price at which an MOC is "off-price".
+     */
     public record OrderView(
             String contractId, String operator, String trader, String instrumentId,
             String cashInstrument, String session, String side, java.math.BigDecimal quantity,
             java.math.BigDecimal limitPrice) {
+
+        /** {@code true} when this is an unpriced market-on-close order. */
+        public boolean isMarketOrder() {
+            return limitPrice == null;
+        }
+
+        /** The order type as a label for display: {@code "MOC"} or {@code "LOC"}. */
+        public String orderType() {
+            return isMarketOrder() ? "MOC" : "LOC";
+        }
     }
 
     /** One fill from a settled batch, resolved to the trader's side. */

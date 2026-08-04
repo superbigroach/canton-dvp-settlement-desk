@@ -87,11 +87,22 @@ public final class Dtos {
             String fixingRef) {              // optional: a committee NavFixing cid to bind the close to
     }
 
+    /**
+     * Lodge a sealed order into an EXISTING auction, with the backing holding already
+     * provisioned by the caller.
+     *
+     * <p>THE ORDER TYPE. {@code orderType} is {@code Market} (unpriced MOC) or
+     * {@code Limit} (LOC), and it may be omitted: with no discriminator the type is
+     * inferred from {@code limitPrice}, and an ABSENT OR NULL LIMIT IS A MARKET ORDER,
+     * never a rejection. A market order takes the price the book prints, ranks ahead of
+     * every limit order, and can never be cancelled for being away from the cross.
+     */
     public record SubmitOrderRequest(
             @NotBlank String trader,
             @NotBlank String side,           // Buy | Sell
             @NotNull @Positive BigDecimal quantity,
-            @NotNull @Positive BigDecimal limitPrice,
+            String orderType,                // Market | Limit (blank = infer from limitPrice)
+            @Positive BigDecimal limitPrice, // null/absent = unpriced market-on-close
             @NotBlank String holdingCid) {   // pre-committed cash (Buy) or asset (Sell)
     }
 
@@ -133,10 +144,17 @@ public final class Dtos {
 
     /**
      * Send one sealed order to the close — DEAD SIMPLE: just the asset, the side,
-     * and the amount. No price and no counterparty: a MOC order takes the official
-     * close price (the instrument's published reference price, resolved server-side)
-     * and the desk auto-commits the backing holding (cash for a Buy, the asset for a
-     * Sell). The acting party is {@code trader} (the logged-in party from the switcher).
+     * and the amount. No counterparty: the desk resolves (or opens) the auction and
+     * auto-commits the backing holding (cash for a Buy, the asset for a Sell). The
+     * acting party is {@code trader} (the logged-in party from the switcher).
+     *
+     * <p>THE ORDER TYPE, AND WHY AN ABSENT LIMIT IS NOT AN ERROR. The overwhelming
+     * majority of real closing volume is UNPRICED market-on-close — index funds and
+     * rebalancers whose mandate IS the official print — so an order that names no
+     * limit is the NORMAL case, not a malformed one. {@code orderType=Market} (or a
+     * blank discriminator with no {@code limitPrice}) lodges an unpriced MOC;
+     * {@code orderType=Limit} with a price lodges an LOC that walks away from anything
+     * worse than its limit.
      */
     public record MocOrderRequest(
             @NotBlank String trader,
@@ -145,14 +163,20 @@ public final class Dtos {
             @NotBlank String instrumentId,
             String cashInstrument,            // defaults to "USDC" when blank
             String session,                   // Open | Close (defaults to Close when blank)
-            // The worst price this order will accept (Buy: max, Sell: min). Optional —
-            // omit it and the order is pinned to the auction's published anchor, which
-            // guarantees it crosses. Supplying limits AWAY from the anchor is what lets
-            // the uncross discover a price other than the reference.
+            // Market | Limit. Blank/absent = INFER from limitPrice below.
+            String orderType,
+            // The worst price this order will accept (Buy: max, Sell: min). OPTIONAL:
+            // absent or null means an UNPRICED MARKET-ON-CLOSE order, which trades at
+            // whatever the book prints and is allocated ahead of every limit order.
+            // Supplying limits AWAY from the anchor is what lets the uncross discover a
+            // price other than the reference.
             //
-            // NOTE for buyers: the ledger reserves quantity * THIS limit in cash (never
-            // quantity * referencePrice), because the discovered cross may print above
-            // the anchor. Unspent cash comes back as change at settlement.
+            // NOTE for buyers: the ledger reserves quantity * the worst price the order
+            // can legally execute at. For a LIMIT that is quantity * THIS limit (never
+            // quantity * referencePrice — the cross may print above the anchor). For a
+            // MARKET order there is no limit, so it is quantity * the TOP OF THE VENUE'S
+            // PRICE COLLAR, which is the highest price the close can legally print.
+            // Unspent cash comes back as change at settlement either way.
             @Positive BigDecimal limitPrice) {
     }
 
@@ -167,9 +191,17 @@ public final class Dtos {
             BigDecimal closingPrice) {
     }
 
+    /**
+     * A resting sealed order as the acting party is entitled to see it.
+     *
+     * <p>{@code limitPrice} is NULL for an unpriced market-on-close order — that is the
+     * order TYPE showing through, not missing data, and a UI must render it as
+     * <b>"MOC"</b> rather than as blank, 0, or the anchor. {@code orderType} carries the
+     * same fact as a label so the blotter never has to infer it.
+     */
     public record MocOrderView(
             String contractId, String trader, String side,
-            BigDecimal quantity, BigDecimal limitPrice) {
+            BigDecimal quantity, BigDecimal limitPrice, String orderType) { // "MOC" | "LOC"
     }
 
     public record MocStateResponse(
@@ -206,13 +238,19 @@ public final class Dtos {
     }
 
     /**
-     * The NET imbalance of a sealed book — the Designated Liquidity Provider view.
+     * The NET imbalance of a sealed book — the MANDATED LIQUIDITY PROVIDER view.
      *
-     * <p>Returned by {@code GET /moc/imbalance} ONLY to the acting party the ledger
-     * lets see the {@link com.lucilla.settlement.model.marketonclose.ImbalanceDisclosure}
-     * (the DLP or the venue). {@code disclosed=false} means the acting party is not
-     * entitled to it (a normal trader), or no DLP auction exists. It reveals the
-     * AGGREGATE only — never any individual order or trader identity.
+     * <p>Returned by {@code GET /moc/imbalance} ONLY to a party the ledger lets see the
+     * {@link com.lucilla.settlement.model.marketonclose.ImbalanceDisclosure}, which is
+     * now exactly: a provider holding a LIVE {@code LiquidityMandate} over this book,
+     * and the venue. It reveals the AGGREGATE only — never any individual order or
+     * trader identity.
+     *
+     * <p>{@code mandateRequired=true} with {@code disclosed=false} is the one answer
+     * worth reading carefully: the caller is not being refused for who it is, it is
+     * being told the privilege now has a price — accept the venue's open
+     * {@code MandateTerms} and the same number is yours. That is a 4xx with a route
+     * out of it, not a dead end, and the UI turns it into the Accept action.
      */
     public record MocImbalanceResponse(
             boolean disclosed,               // did the acting party get the aggregate?
@@ -222,8 +260,86 @@ public final class Dtos {
             String netSide,                  // "Buy" | "Sell" | "Flat" (heavy side)
             BigDecimal netQuantity,          // magnitude of the imbalance (>= 0)
             BigDecimal referencePrice,       // the uniform price the cross will print at
-            String liquidityProvider,        // the DLP's friendly label (who may offset)
+            String liquidityProvider,        // label of the provider it was disclosed to
+            boolean mandateRequired,         // true = no live mandate; accept terms to see it
             String note) {                   // human-readable context for the UI
+    }
+
+    // ---- The contestable liquidity mandate --------------------------------
+
+    /**
+     * One open offer of the liquidity seat, as shown to a prospective provider.
+     *
+     * <p>{@code openToActingParty} is the ledger's own answer to "may I take this?" —
+     * eligible, not already holding a mandate off these terms, and not barred for
+     * having failed a commitment this session. The party lists are LABELS, for display.
+     */
+    public record MandateTermsResponse(
+            String contractId,
+            String instrumentId,
+            String cashInstrument,
+            String session,                  // "Open" | "Close"
+            BigDecimal anchorPrice,          // must equal the auction's published anchor
+            BigDecimal commitmentSize,       // units of imbalance a provider undertakes to absorb
+            long maxBandBps,                 // how far from the anchor it undertakes to stand
+            String expiresAt,                // ISO-8601; terms close here, and so do their mandates
+            List<String> eligible,           // who may take the seat (the trading roster)
+            List<String> accepted,           // who already holds a live mandate off these terms
+            List<String> barred,             // who forfeited it this session by missing a commitment
+            boolean openToActingParty,
+            String note) {
+    }
+
+    /** The venue posts an offer of the seat for one book. Numbers default if omitted. */
+    public record PostMandateTermsRequest(
+            @NotBlank String instrumentId,
+            String cashInstrument,           // defaults to "USDC"
+            String session,                  // defaults to "Close"
+            BigDecimal commitmentSize,       // defaults to the desk's standard commitment
+            Long maxBandBps,                 // defaults to the desk's standard band
+            Integer ttlHours) {              // how long the offer (and its mandates) run
+    }
+
+    /**
+     * A registered participant takes up the seat.
+     *
+     * <p>{@code termsCid} is OPTIONAL and normally omitted: the server resolves the
+     * open terms for the book itself. Naming one is only useful when several offers
+     * are live over the same book.
+     */
+    public record AcceptMandateRequest(
+            @NotBlank String provider,
+            @NotBlank String instrumentId,
+            String cashInstrument,           // defaults to "USDC"
+            String session,                  // defaults to "Close"
+            String termsCid) {
+    }
+
+    /**
+     * The acting party's OWN live obligation over one book.
+     *
+     * <p>{@code held=false} means no mandate — the caller sees no imbalance until it
+     * accepts terms. {@code expired=true} distinguishes "you never took the seat" from
+     * "your seat ran out", which are different problems with different fixes.
+     * {@code shownSide}/{@code peakShownQty} are the running record the ledger stamped
+     * on this mandate: what the provider was actually shown, and therefore owes.
+     */
+    public record MandateResponse(
+            boolean held,
+            String contractId,
+            String provider,                 // label
+            String instrumentId,
+            String cashInstrument,
+            String session,
+            BigDecimal anchorPrice,
+            BigDecimal commitmentSize,
+            long maxBandBps,
+            String expiresAt,                // ISO-8601
+            String shownSide,                // "Buy" | "Sell" | "Flat" — side of the PEAK shown
+            BigDecimal peakShownQty,         // largest imbalance this mandate has been shown
+            long disclosuresSeen,
+            boolean expired,
+            String note) {
     }
 
     // ---- Decentralised operator: committee-attested NAV -------------------

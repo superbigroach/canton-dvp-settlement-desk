@@ -52,10 +52,43 @@
 --   testFillsMatchReceipts   — delivered amounts EQUAL receipt amounts for every
 --                              filled order, including the last in the list; the
 --                              rounding residual lands by the published rule.
---   testPriceCollar          — the print must land inside the band around the
+--   testPriceCollar          — the collar CLAMPS the print into the band around the
 --                              anchor (percentage OR absolute floor, whichever is
---                              greater); a thin book that crosses outside it aborts
---                              the close and settles NOTHING.
+--                              greater) and the close still prints. A book crossing
+--                              ABOVE the band prints at the upper boundary, and the
+--                              crossed volume is re-scored there — smaller, with the
+--                              excess returned to its trader intact. (This test used
+--                              to assert an ABORT; bounding the price is what the
+--                              rulebooks do, and cancelling handed one participant a
+--                              denial of service on everyone else's close.)
+--   testCollarClampsDown     — the mirror image: a book crossing BELOW the band
+--                              prints at the lower boundary.
+--   testUnpricedBuyFundedAtClampedBoundary — the tightest reservation case there is:
+--                              an MOC buy filling IN FULL at a CLAMPED upper
+--                              boundary, minted exactly its reservation and spending
+--                              every cent of it.
+--   testInBandPrintIsNotClamped — the no-regression guard: inside the band (edges
+--                              included) the clamp is the identity and an ordinary
+--                              close never notices the collar.
+--   testMocClassPriority     — Nasdaq Rule 4754(b)(3) rung (A): an UNPRICED MOC buy
+--                              fills AHEAD of a limit order sitting at the print.
+--                              Class beats price.
+--   testAllUnpricedBookPrintsAtAnchor — MOC against MOC carries no price information,
+--                              so the book prints at the ANCHOR (Xetra §11.1.1 step
+--                              5; Euronext §3.1).
+--   testMocLocLadderEndToEnd — the full ladder on one book: unpriced fills in full,
+--                              through-the-print priced fills in full, the
+--                              at-the-print level is the only one rationed.
+--   testUnpricedBuyFundedAboveTheAnchor — THE CRUX. An unpriced buy is funded when
+--                              the print lands ABOVE the anchor, because it reserved
+--                              at the TOP OF THE COLLAR — the highest price the close
+--                              can legally print.
+--   testUnpricedInterestRationedProRata — unpriced interest larger than the whole
+--                              cross rations AMONG THE UNPRICED, and every limit
+--                              order behind them gets nothing.
+--   testMocIsNeverAwayFromTheCross — an unpriced sell trades at a print far below
+--                              where a limit would have stopped it, while a limited
+--                              sell beside it is cancelled away from the cross.
 --   testDarkPoolPrivacy      — a non-party (and even a rival participant) cannot
 --                              see a resting sealed order.
 --   testAtomicRollback       — a bad leg rolls the WHOLE settlement back.
@@ -72,6 +105,7 @@ import Daml.Script
 import DA.Assert ((===))
 import DA.List (head)
 import DA.Optional (isNone, isSome)
+import DA.Time (addRelTime, hours, days, seconds)
 
 import Instrument
 import Holding
@@ -80,6 +114,7 @@ import MarketOnClose
 import Agent
 import Governance
 import Basket
+import LiquidityMandate
 
 -- Instrument ids — keep string literals consistent across scenarios.
 aapl : Text
@@ -122,20 +157,51 @@ setup = do
   pure (Parties issuer venue alice bob bank auditor agent eve)
 
 -- ---------------------------------------------------------------------------
--- submitOrder — lodge one sealed order and THREAD THE AUCTION FORWARD.
+-- submitOrder / submitMocOrder — lodge one sealed order and THREAD THE AUCTION
+-- FORWARD. Two helpers, one per ORDER TYPE.
 -- ---------------------------------------------------------------------------
 -- `SubmitOrder` is CONSUMING now: the auction carries the book count that makes
 -- the close provably complete, so every submission archives the auction and
 -- re-creates it with the count incremented, returning (new auction cid, order
 -- cid). Every caller — these scripts and the desk's backend alike — has to carry
 -- the new cid to the next call. That is the contention cost, made visible.
+--
+-- `limitPrice` is `Optional Decimal` on the choice. `submitOrder` takes a Decimal
+-- and wraps it in `Some` — a LIMIT-ON-CLOSE, which is every order in the scripts
+-- that predate the MOC work. `submitMocOrder` passes `None` — an UNPRICED
+-- MARKET-ON-CLOSE, which takes no price argument because it does not have one.
 submitOrder :
   ContractId ClosingAuction -> Party -> Side -> Decimal -> Decimal -> ContractId Holding
   -> Script (ContractId ClosingAuction, ContractId SealedOrder)
 submitOrder auctionCid trader side quantity limitPrice holdingCid =
   submit trader do
     exerciseCmd auctionCid SubmitOrder with
-      trader; side; quantity; limitPrice; holdingCid
+      trader; side; quantity; limitPrice = Some limitPrice; holdingCid
+
+-- An UNPRICED MOC: no limit argument, because an MOC does not have a limit. It buys
+-- (or sells) the close, whatever the close turns out to be.
+submitMocOrder :
+  ContractId ClosingAuction -> Party -> Side -> Decimal -> ContractId Holding
+  -> Script (ContractId ClosingAuction, ContractId SealedOrder)
+submitMocOrder auctionCid trader side quantity holdingCid =
+  submit trader do
+    exerciseCmd auctionCid SubmitOrder with
+      trader; side; quantity; limitPrice = None; holdingCid
+
+-- ---------------------------------------------------------------------------
+-- liveMandateOf — re-read a provider's CURRENT LiquidityMandate cid.
+-- ---------------------------------------------------------------------------
+-- `PublishImbalance` consumes the mandate (it stamps what the provider was shown
+-- onto it, via `NoteDisclosure`) and returns only the disclosure cid, so a venue
+-- that publishes twice to the same provider must re-read that provider's mandate in
+-- between. It is the same cid-threading discipline `SubmitOrder` imposes on the
+-- auction, and this helper is how these scripts pay it.
+liveMandateOf : Party -> Script (ContractId LiquidityMandate)
+liveMandateOf provider = do
+  ms <- query @LiquidityMandate provider
+  case filter (\(_, m) -> m.provider == provider) ms of
+    ((cid, _) :: _) -> pure cid
+    []              -> abort "no live mandate for this provider"
 
 -- Publish the three tokenised instruments (the reference-data layer). onRails is
 -- the real cETH issuer on Devnet — here one `issuer` stands in for all three.
@@ -656,8 +722,8 @@ testWithdrawAndVenueClear = do
 -- ---------------------------------------------------------------------------
 testPriceDiscoveryUnit : Script ()
 testPriceDiscoveryUnit = do
-  let buy  q p = BookOrder with side = Buy;  quantity = q; limitPrice = p
-      sell q p = BookOrder with side = Sell; quantity = q; limitPrice = p
+  let buy  q p = BookOrder with side = Buy;  quantity = q; limitPrice = Some p
+      sell q p = BookOrder with side = Sell; quantity = q; limitPrice = Some p
       priceOf  = fmap (\c -> c.price)
 
   -- RULE 1 — MAXIMUM VOLUME, and it beats the reference outright.
@@ -828,8 +894,8 @@ testCompleteBookRequired = do
   carol <- allocatePartyByHint (PartyIdHint "Carol")
 
   -- The counterfactual, computed purely: the same book, with and without Carol.
-  let buy  q p = BookOrder with side = Buy;  quantity = q; limitPrice = p
-      sell q p = BookOrder with side = Sell; quantity = q; limitPrice = p
+  let buy  q p = BookOrder with side = Buy;  quantity = q; limitPrice = Some p
+      sell q p = BookOrder with side = Sell; quantity = q; limitPrice = Some p
       priceOf  = fmap (\c -> c.price)
       fullBook      = [sell 10.0 250.0, sell 10.0 240.0, buy 20.0 260.0]
       truncatedBook = [sell 10.0 250.0,                  buy 20.0 260.0]
@@ -1090,19 +1156,28 @@ testAgentInitiatedDvP = do
   cashNow.amount === 5000.0
 
 -- ---------------------------------------------------------------------------
--- TEST 7 — DESIGNATED LIQUIDITY PROVIDER: selective net-imbalance disclosure.
+-- TEST 7 — MANDATED LIQUIDITY PROVIDER: selective net-imbalance disclosure, but
+--          only to a party that has TAKEN ON AN OBLIGATION to absorb it.
 -- ---------------------------------------------------------------------------
--- LIQUIDITY WITHOUT LEAKAGE. A lit auction publishes its imbalance to the whole
--- market (leaking it to front-runners); a dark pool leaks nothing but risks a
--- no-fill. Canton does BOTH: reveal the NET imbalance to ONE designated liquidity
--- provider (who commits to offset it), and to nobody else.
+-- LIQUIDITY WITHOUT LEAKAGE, AND WITHOUT A FREE LUNCH. A lit auction publishes its
+-- imbalance to the whole market (leaking it to front-runners); a dark pool leaks
+-- nothing but risks a no-fill. Canton does BOTH: reveal the NET imbalance to a
+-- committed provider, and to nobody else.
 --
--- Book (AAPL, cash USDC, close 255, sealed):
+-- WHAT THIS TEST NOW PROVES THAT IT DID NOT BEFORE. The auction is still created
+-- with `liquidityProvider = Some bank` — the old hand-picked designation — and that
+-- field BUYS BANK NOTHING. Bank sees no imbalance until it accepts published
+-- `MandateTerms` and signs a `LiquidityMandate` binding it to absorb up to 5 units
+-- within 500bps of the anchor. The privilege is now the input to a duty.
+--
+-- Book (AAPL, cash USDC, anchor 255, sealed):
 --   BUY  Alice 2 @ 260   →  net BUY imbalance of 2 (no sells yet).
--- The venue publishes the aggregate to the DLP (Bank). We PROVE:
---   * Bank (DLP) SEES "Net BUY 2 @ 255"; the venue sees it too.
---   * Bank sees ONLY the aggregate — NOT Alice's individual sealed order.
---   * Carol (a normal registered trader) sees NEITHER the imbalance NOR the order.
+-- We PROVE:
+--   * with the field set but NO mandate, Bank sees nothing;
+--   * once mandated, Bank SEES "Net BUY 2 @ 255"; the venue sees it too;
+--   * Bank sees ONLY the aggregate — NOT Alice's individual sealed order;
+--   * Carol (a normal registered trader, equally eligible, simply hasn't accepted)
+--     sees NEITHER the imbalance NOR the order;
 --   * Bank offsets by SELLING 2; the republished imbalance is now Flat; the close
 --     crosses cleanly (Alice +2 AAPL, Bank +510 USDC).
 -- ---------------------------------------------------------------------------
@@ -1111,11 +1186,13 @@ testDesignatedLiquidityProvider = do
   Parties{..} <- setup
   setupInstruments issuer
   carol <- allocatePartyByHint (PartyIdHint "Carol")
+  now <- getTime
 
   aliceCash <- mint issuer usdc alice 600.0   -- reserves 2 @ her 260 limit (= 520)
-  bankAsset <- mint issuer aapl bank  10.0    -- the DLP's inventory to offset with
+  bankAsset <- mint issuer aapl bank  10.0    -- the provider's inventory to offset with
 
-  -- The venue opens the auction and DESIGNATES Bank as the liquidity provider.
+  -- The venue opens the auction. It still writes the LEGACY designation field — and
+  -- that is deliberate here, because the test's job is to show the field is inert.
   auctionCid <- submit venue do
     createCmd ClosingAuction with
       operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
@@ -1129,9 +1206,31 @@ testDesignatedLiquidityProvider = do
   -- Alice lodges a sealed BUY of 2. The book is now net BUY 2.
   (a1, aliceBuy) <- submitOrder auctionCid alice Buy 2.0 260.0 aliceCash
 
-  -- The venue publishes the NET imbalance to the DLP (aggregate only).
+  -- THE FIELD BUYS NOTHING. Bank is named `liquidityProvider` on a live auction with
+  -- a real imbalance resting in it, and holds no disclosure whatsoever.
+  namedButUnmandated <- query @ImbalanceDisclosure bank
+  assertMsg "the legacy liquidityProvider field must NOT disclose anything by itself"
+    (null namedButUnmandated)
+
+  -- THE VENUE POSTS OPEN TERMS to its whole participant roster. No fee, no ranking:
+  -- Alice, Bank and Carol are offered identical terms and any of them may take them.
+  termsCid <- submit venue do
+    createCmd MandateTerms with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; anchorPrice = 255.0
+      commitmentSize = 5.0; maxBandBps = 500
+      expiresAt = addRelTime now (hours 24)
+      eligible = [alice, bank, carol]
+      accepted = []; barred = []
+
+  -- Bank takes up the seat — and takes on the obligation. Note who controls this:
+  -- the PROVIDER. The venue posted the offer; it did not choose the taker.
+  (_terms1, bankMandate) <- submit bank do
+    exerciseCmd termsCid AcceptTerms with provider = bank
+
+  -- Only NOW does the venue have a party it may publish the residual to.
   discCid <- submit venue do
-    exerciseCmd a1 PublishImbalance with restingOrders = [aliceBuy]
+    exerciseCmd a1 PublishImbalance with restingOrders = [aliceBuy]; mandateCid = bankMandate
 
   -- THE DLP SEES THE AGGREGATE: net BUY of 2 at the reference price.
   Some disc <- queryContractId bank discCid
@@ -1152,13 +1251,16 @@ testDesignatedLiquidityProvider = do
   assertMsg "a normal trader must NOT see a rival's sealed order"
     . isNone =<< queryContractId carol aliceBuy
 
-  -- THE DLP OFFSETS: Bank lodges a sealed SELL of 2 (the opposite side) to clear
-  -- the cross. Its order is as private as any other.
+  -- THE PROVIDER PERFORMS: Bank lodges a sealed SELL of 2 (the opposite side) to
+  -- clear the cross. Its order is as private as any other.
   (a2, bankSell) <- submitOrder a1 bank Sell 2.0 250.0 bankAsset
 
-  -- The venue republishes: the book is now balanced (Flat).
+  -- The venue republishes: the book is now balanced (Flat). Note the re-read — the
+  -- first publication consumed the mandate to stamp what Bank was shown onto it.
+  bankMandate2 <- liveMandateOf bank
   discCid2 <- submit venue do
-    exerciseCmd a2 PublishImbalance with restingOrders = [aliceBuy, bankSell]
+    exerciseCmd a2 PublishImbalance with
+      restingOrders = [aliceBuy, bankSell]; mandateCid = bankMandate2
   Some disc2 <- queryContractId bank discCid2
   disc2.netSide     === "Flat"
   disc2.netQuantity === 0.0
@@ -1175,7 +1277,7 @@ testDesignatedLiquidityProvider = do
   batch.closingPrice === 255.0
   length batch.fills === 2
 
-  -- Alice bought 2 AAPL for 510 (90 change); the DLP sold 2 AAPL for 510 USDC.
+  -- Alice bought 2 AAPL for 510 (90 change); the provider sold 2 AAPL for 510 USDC.
   aliceAapl <- ownedAmount alice aapl
   aliceUsd  <- ownedAmount alice usdc
   bankAapl  <- ownedAmount bank  aapl
@@ -1185,9 +1287,519 @@ testDesignatedLiquidityProvider = do
   bankAapl  === 8.0
   bankUsd   === 510.0
 
+  -- THE OBLIGATION KEPT A RECORD OF THE PRIVILEGE. The mandate now carries what Bank
+  -- was shown — the PEAK imbalance (2, buy-side), and that it was opened twice. That
+  -- stamp is what `RecordPerformance` scores against, and it was written in the same
+  -- transactions as the disclosures themselves.
+  bankMandate3 <- liveMandateOf bank
+  Some mFinal  <- queryContractId bank bankMandate3
+  mFinal.peakShownQty    === 2.0
+  mFinal.shownSide       === "Buy"
+  mFinal.disclosuresSeen === 2
+  assertMsg "the mandate must record WHEN it was last shown the book" (isSome mFinal.lastShownAt)
+
   -- PRIVACY GUARD: an outsider cannot ask the venue to disclose the imbalance to
-  -- itself — PublishImbalance is operator-controlled, and only the DLP observes it.
+  -- itself — PublishImbalance is operator-controlled, and only a MANDATED provider
+  -- observes the result.
   pure ()
+
+-- ---------------------------------------------------------------------------
+-- TEST 7a — THE SEAT IS CONTESTABLE: an open offer, taken by whoever wants it.
+-- ---------------------------------------------------------------------------
+-- THE CRITICISM THIS ANSWERS. `liquidityProvider : Optional Party` was ONE slot,
+-- filled by the venue, uncontested. Hu & Murphy (2026, Management Science 72(5))
+-- measure the harm of exactly that shape of channel at NYSE and locate it where high
+-- fees INHIBIT COMPETITION for the privileged seat — so the remedy is not a better
+-- appointment, it is an open, cheap, plural entry.
+--
+-- WHAT IS PROVED HERE:
+--   * the terms are published to the whole participant roster and any of them may
+--     accept — Bank and Carol both do, off the SAME offer, at no cost;
+--   * both hold live mandates AT THE SAME TIME on identical terms (same size, same
+--     band, same expiry) — nobody got a better deal for being chosen;
+--   * an outsider who is not on the venue's roster CANNOT accept;
+--   * nobody can hold two mandates off one set of terms (double-dipping the seat).
+-- ---------------------------------------------------------------------------
+testMandateSeatIsContestable : Script ()
+testMandateSeatIsContestable = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  carol <- allocatePartyByHint (PartyIdHint "Carol")
+  now <- getTime
+
+  -- The venue posts ONE open offer to its whole registered roster.
+  termsCid <- submit venue do
+    createCmd MandateTerms with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; anchorPrice = 255.0
+      commitmentSize = 5.0; maxBandBps = 500
+      expiresAt = addRelTime now (hours 24)
+      eligible = [alice, bank, carol]
+      accepted = []; barred = []
+
+  -- EVERY eligible participant can SEE the offer. An open offer nobody can read is
+  -- not an open offer, so visibility is part of the contestability.
+  aliceSeesTerms <- query @MandateTerms alice
+  carolSeesTerms <- query @MandateTerms carol
+  assertMsg "every eligible participant must see the open terms" (length aliceSeesTerms == 1)
+  assertMsg "every eligible participant must see the open terms" (length carolSeesTerms == 1)
+
+  -- AN OUTSIDER CANNOT TAKE THE SEAT. Eve is not on the venue's roster.
+  submitMustFail eve do exerciseCmd termsCid AcceptTerms with provider = eve
+
+  -- TWO DIFFERENT PARTICIPANTS TAKE THE SAME OFFER. Bank first, then Carol — off the
+  -- successor terms, because acceptance is recorded on the ledger.
+  (terms1, bankMandate)  <- submit bank  do exerciseCmd termsCid AcceptTerms with provider = bank
+  (terms2, carolMandate) <- submit carol do exerciseCmd terms1  AcceptTerms with provider = carol
+
+  -- BOTH MANDATES ARE LIVE AT ONCE, ON IDENTICAL TERMS. This is the plurality that
+  -- one `Optional Party` could not express.
+  Some bankM  <- queryContractId bank  bankMandate
+  Some carolM <- queryContractId carol carolMandate
+  bankM.provider  === bank
+  carolM.provider === carol
+  bankM.commitmentSize === carolM.commitmentSize
+  bankM.maxBandBps     === carolM.maxBandBps
+  bankM.expiresAt      === carolM.expiresAt
+  bankM.anchorPrice    === 255.0
+
+  -- The venue co-signs every one of them: the obligation is bilateral, not a name in
+  -- a field the counterparty never agreed to.
+  assertMsg "a mandate must be signed by the venue AND the provider"
+    (bankM.operator == venue && bankM.provider == bank)
+
+  -- Both takers are on the record, and NOBODY is barred: entry cost is zero.
+  Some t2 <- queryContractId venue terms2
+  assertMsg "both providers must be recorded as holding the seat"
+    (bank `elem` t2.accepted && carol `elem` t2.accepted)
+  assertMsg "nobody is barred from an offer nobody has failed" (null t2.barred)
+
+  -- YOU CANNOT TAKE THE SAME SEAT TWICE off one set of terms.
+  submitMustFail bank do exerciseCmd terms2 AcceptTerms with provider = bank
+
+  -- And Alice — an ordinary trader, not a bank — is equally entitled to it. The
+  -- eligibility test is the trading roster and nothing else.
+  assertMsg "eligibility is the trading roster: no special status required"
+    (alice `elem` t2.eligible)
+
+-- ---------------------------------------------------------------------------
+-- TEST 7b — TWO LIVE MANDATES, BOTH SHOWN THE SAME IMBALANCE.
+-- ---------------------------------------------------------------------------
+-- Plurality is only worth something if the venue actually has to show the number to
+-- ALL of the obligated providers rather than picking a favourite among them. Bank
+-- and Carol both hold mandates; both are published to; both read the same residual.
+-- And — the privacy property survives the plurality — neither can see the OTHER's
+-- disclosure, nor the sealed order that produced it.
+-- ---------------------------------------------------------------------------
+testTwoLiveMandatesBothSeeTheImbalance : Script ()
+testTwoLiveMandatesBothSeeTheImbalance = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  carol <- allocatePartyByHint (PartyIdHint "Carol")
+  now <- getTime
+
+  aliceCash <- mint issuer usdc alice 3000.0   -- 10 @ her 260 limit = 2,600
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bank, carol]
+      liquidityProvider = None      -- NOTHING is designated; the mandate is the gate
+      fixingRef = None
+      submittedCount = 0; cancelledCount = 0
+      isOpen = True
+
+  termsCid <- submit venue do
+    createCmd MandateTerms with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; anchorPrice = 255.0
+      commitmentSize = 6.0; maxBandBps = 500
+      expiresAt = addRelTime now (hours 24)
+      eligible = [alice, bank, carol]
+      accepted = []; barred = []
+
+  (terms1, bankMandate)  <- submit bank  do exerciseCmd termsCid AcceptTerms with provider = bank
+  (_t2,    carolMandate) <- submit carol do exerciseCmd terms1  AcceptTerms with provider = carol
+
+  -- One 10-lot buy rests in the book: a net BUY imbalance of 10.
+  (a1, aliceBuy) <- submitOrder auctionCid alice Buy 10.0 260.0 aliceCash
+
+  -- The venue publishes to BOTH obligated providers. One call per mandate, so every
+  -- disclosure is tied to a specific obligation.
+  bankDisc  <- submit venue do
+    exerciseCmd a1 PublishImbalance with restingOrders = [aliceBuy]; mandateCid = bankMandate
+  carolDisc <- submit venue do
+    exerciseCmd a1 PublishImbalance with restingOrders = [aliceBuy]; mandateCid = carolMandate
+
+  -- BOTH SEE THE SAME NUMBER.
+  Some bd <- queryContractId bank  bankDisc
+  Some cd <- queryContractId carol carolDisc
+  bd.netSide === "Buy"
+  cd.netSide === "Buy"
+  bd.netQuantity === 10.0
+  cd.netQuantity === 10.0
+  bd.referencePrice === 255.0
+
+  -- BUT NOT EACH OTHER'S — a provider is not shown who else is standing behind the
+  -- book, only what the book needs. Competition without a view of the competitor.
+  assertMsg "one provider must NOT see another provider's disclosure"
+    . isNone =<< queryContractId bank carolDisc
+  assertMsg "one provider must NOT see another provider's disclosure"
+    . isNone =<< queryContractId carol bankDisc
+  -- And neither sees the sealed order itself: the aggregate, and nothing but.
+  assertMsg "a mandated provider still sees only the AGGREGATE"
+    . isNone =<< queryContractId bank aliceBuy
+  assertMsg "a mandated provider still sees only the AGGREGATE"
+    . isNone =<< queryContractId carol aliceBuy
+
+  -- Both obligations recorded the look independently.
+  bm <- liveMandateOf bank
+  cm <- liveMandateOf carol
+  Some bmC <- queryContractId bank  bm
+  Some cmC <- queryContractId carol cm
+  bmC.peakShownQty === 10.0
+  cmC.peakShownQty === 10.0
+
+-- ---------------------------------------------------------------------------
+-- TEST 7c — NO MANDATE, NO NUMBER. The privilege cannot be had without the duty.
+-- ---------------------------------------------------------------------------
+-- The sharpest single assertion in this module. The auction is created with the
+-- LEGACY `liquidityProvider = Some bank` field set — the exact designation that used
+-- to be sufficient — and Bank, holding no mandate for this book, is shown NOTHING,
+-- while Carol, who accepted the same open terms Bank could have accepted, is shown
+-- the residual. The privilege moved from a field to an obligation.
+--
+-- It also proves the gate is BOOK-SCOPED: Bank holds a real, live, signed mandate —
+-- for the cETH close — and it buys it nothing at the AAPL close.
+-- ---------------------------------------------------------------------------
+testNoMandateNoImbalance : Script ()
+testNoMandateNoImbalance = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  carol <- allocatePartyByHint (PartyIdHint "Carol")
+  now <- getTime
+
+  aliceCash <- mint issuer usdc alice 600.0
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bank, carol]
+      liquidityProvider = Some bank   -- the LEGACY designation, deliberately set
+      fixingRef = None
+      submittedCount = 0; cancelledCount = 0
+      isOpen = True
+
+  (a1, aliceBuy) <- submitOrder auctionCid alice Buy 2.0 260.0 aliceCash
+
+  -- Bank accepts a mandate for a DIFFERENT BOOK (the cETH close). A genuine, live,
+  -- co-signed obligation — just not one about this instrument.
+  cethTerms <- submit venue do
+    createCmd MandateTerms with
+      operator = venue; auditor; instrumentId = ceth; cashInstrument = usdc
+      session = "Close"; anchorPrice = 2400.0
+      commitmentSize = 5.0; maxBandBps = 500
+      expiresAt = addRelTime now (hours 24)
+      eligible = [alice, bank, carol]
+      accepted = []; barred = []
+  (_ct, bankCethMandate) <- submit bank do
+    exerciseCmd cethTerms AcceptTerms with provider = bank
+
+  -- THE GATE HOLDS: a mandate for another book discloses nothing here.
+  submitMustFail venue do
+    exerciseCmd a1 PublishImbalance with
+      restingOrders = [aliceBuy]; mandateCid = bankCethMandate
+
+  -- Carol takes the AAPL terms and IS shown the number.
+  aaplTerms <- submit venue do
+    createCmd MandateTerms with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; anchorPrice = 255.0
+      commitmentSize = 5.0; maxBandBps = 500
+      expiresAt = addRelTime now (hours 24)
+      eligible = [alice, bank, carol]
+      accepted = []; barred = []
+  (_at, carolMandate) <- submit carol do
+    exerciseCmd aaplTerms AcceptTerms with provider = carol
+  carolDisc <- submit venue do
+    exerciseCmd a1 PublishImbalance with restingOrders = [aliceBuy]; mandateCid = carolMandate
+  Some cd <- queryContractId carol carolDisc
+  cd.netSide     === "Buy"
+  cd.netQuantity === 2.0
+
+  -- AND THE NAMED PARTY STILL HAS NOTHING. Bank is `liquidityProvider` on this very
+  -- auction and holds no AAPL disclosure at all.
+  bankDiscs <- query @ImbalanceDisclosure bank
+  assertMsg "the legacy designation must grant NO sight of this book's imbalance"
+    (null (filter (\(_, d) -> d.instrumentId == aapl) bankDiscs))
+  assertMsg "an unmandated party must not see the mandated provider's disclosure"
+    . isNone =<< queryContractId bank carolDisc
+
+  -- A third party with no mandate at all sees nothing either — the control case.
+  eveDiscs <- query @ImbalanceDisclosure eve
+  assertMsg "a party with no mandate sees no imbalance anywhere" (null eveDiscs)
+
+-- ---------------------------------------------------------------------------
+-- TEST 7d — AN EXPIRED MANDATE STOPS THE DISCLOSURE.
+-- ---------------------------------------------------------------------------
+-- An obligation that has run out is not an obligation, so it cannot buy sight of the
+-- book. The same mandate is published to successfully BEFORE its expiry and rejected
+-- AFTER it, with nothing changed but the clock — and the expired terms can no longer
+-- be re-accepted to manufacture a fresh one.
+-- ---------------------------------------------------------------------------
+testExpiredMandateStopsDisclosure : Script ()
+testExpiredMandateStopsDisclosure = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  now <- getTime
+
+  aliceCash <- mint issuer usdc alice 600.0
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bank]
+      liquidityProvider = None
+      fixingRef = None
+      submittedCount = 0; cancelledCount = 0
+      isOpen = True
+
+  -- Terms that lapse in one hour.
+  termsCid <- submit venue do
+    createCmd MandateTerms with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; anchorPrice = 255.0
+      commitmentSize = 5.0; maxBandBps = 500
+      expiresAt = addRelTime now (hours 1)
+      eligible = [alice, bank]
+      accepted = []; barred = []
+  (terms1, bankMandate) <- submit bank do exerciseCmd termsCid AcceptTerms with provider = bank
+
+  (a1, aliceBuy) <- submitOrder auctionCid alice Buy 2.0 260.0 aliceCash
+
+  -- WHILE LIVE: the disclosure works.
+  disc1 <- submit venue do
+    exerciseCmd a1 PublishImbalance with restingOrders = [aliceBuy]; mandateCid = bankMandate
+  Some d1 <- queryContractId bank disc1
+  d1.netQuantity === 2.0
+
+  -- THE CLOCK MOVES PAST THE EXPIRY. Nothing else about the book changes.
+  passTime (hours 2)
+
+  -- THE SAME MANDATE NOW DISCLOSES NOTHING.
+  bankMandate2 <- liveMandateOf bank
+  submitMustFail venue do
+    exerciseCmd a1 PublishImbalance with
+      restingOrders = [aliceBuy]; mandateCid = bankMandate2
+
+  -- And it cannot be topped up: the expired terms cannot be re-accepted either, so a
+  -- lapsed provider cannot walk straight back into the seat without new terms.
+  submitMustFail alice do exerciseCmd terms1 AcceptTerms with provider = alice
+
+  -- The provider still holds no NEW disclosure — its last look is the one it took
+  -- while the obligation was live.
+  bankDiscs <- query @ImbalanceDisclosure bank
+  length bankDiscs === 1
+
+-- ---------------------------------------------------------------------------
+-- TEST 7e — A PROVIDER THAT MEETS ITS COMMITMENT IS RECORDED AS HAVING MET IT.
+-- ---------------------------------------------------------------------------
+-- The accountability half. Bank is shown a buy-side imbalance of 8, is committed to
+-- 8, sells 8 into the close, and the ledger records committed / owed / delivered /
+-- met against the batch that actually printed. Its mandate SURVIVES — a provider
+-- that performs keeps the seat for the rest of the session — and nobody is barred.
+--
+-- Book: Alice BUY 10 @ 260, Bob SELL 2 @ 250, Bank (mandated) SELL 8 @ 250.
+-- Every candidate crosses the full 10 with zero imbalance, so the anchor decides and
+-- the print is 255 — comfortably inside Bank's 1000bps band.
+-- ---------------------------------------------------------------------------
+testMandateMetIsRecorded : Script ()
+testMandateMetIsRecorded = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  now <- getTime
+
+  aliceCash <- mint issuer usdc alice 3000.0   -- 10 @ 260 = 2,600 reserved
+  bobAsset  <- mint issuer aapl bob   2.0
+  bankAsset <- mint issuer aapl bank  20.0
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bob, bank]
+      liquidityProvider = None
+      fixingRef = None
+      submittedCount = 0; cancelledCount = 0
+      isOpen = True
+
+  termsCid <- submit venue do
+    createCmd MandateTerms with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; anchorPrice = 255.0
+      commitmentSize = 8.0; maxBandBps = 1000
+      expiresAt = addRelTime now (hours 24)
+      eligible = [alice, bob, bank]
+      accepted = []; barred = []
+  (terms1, bankMandate) <- submit bank do exerciseCmd termsCid AcceptTerms with provider = bank
+
+  (a1, aliceBuy) <- submitOrder auctionCid alice Buy  10.0 260.0 aliceCash
+  (a2, bobSell)  <- submitOrder a1         bob   Sell  2.0 250.0 bobAsset
+
+  -- The venue opens the book to its obligated provider: net BUY 8.
+  disc <- submit venue do
+    exerciseCmd a2 PublishImbalance with
+      restingOrders = [aliceBuy, bobSell]; mandateCid = bankMandate
+  Some d <- queryContractId bank disc
+  d.netSide     === "Buy"
+  d.netQuantity === 8.0
+
+  -- THE PROVIDER PERFORMS: it sells the 8 it undertook to absorb.
+  (a3, bankSell) <- submitOrder a2 bank Sell 8.0 250.0 bankAsset
+
+  closedCid <- submit venue do exerciseCmd a3 CloseBidding
+  batchCid  <- submit venue do
+    exerciseCmd closedCid RunClose with
+      buyOrders  = [aliceBuy]
+      sellOrders = [bobSell, bankSell]
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 255.0
+
+  -- SCORE IT. The venue records performance against the batch that printed.
+  bankMandate2 <- liveMandateOf bank
+  outcome <- submit venue do
+    exerciseCmd bankMandate2 RecordPerformance with batchCid; termsCid = terms1
+
+  Some perf <- queryContractId auditor outcome.performance
+  perf.provider   === bank
+  perf.shownSide  === "Buy"
+  perf.shownQty   === 8.0
+  perf.committed  === 8.0
+  perf.owed       === 8.0
+  perf.delivered  === 8.0     -- its contra-side (SELL) fills in the batch
+  perf.met        === True
+  perf.withinBand === True
+  perf.printedPrice === 255.0
+  -- The record points AT the batch, so the auditor can recompute the arithmetic
+  -- instead of taking the venue's word for it.
+  perf.batchRef === batchCid
+
+  -- THE PROVIDER SEES ITS OWN SCORECARD; so does the auditor. A rival does not.
+  assertMsg "a provider must see its own performance record"
+    . isSome =<< queryContractId bank outcome.performance
+  assertMsg "a rival must NOT see another provider's performance record"
+    . isNone =<< queryContractId bob outcome.performance
+
+  -- THE MANDATE SURVIVES — performance keeps the seat — and nobody is barred.
+  assertMsg "a mandate that MET its commitment must survive the close"
+    (isSome outcome.mandate)
+  Some tAfter <- queryContractId venue outcome.terms
+  assertMsg "a provider that met its commitment must NOT be barred"
+    (null tAfter.barred)
+  assertMsg "a provider that met its commitment keeps its seat"
+    (bank `elem` tAfter.accepted)
+
+  -- And it was paid for standing in: 8 AAPL sold at the 255 print.
+  bankUsd <- ownedAmount bank usdc
+  bankUsd === 2040.0
+
+-- ---------------------------------------------------------------------------
+-- TEST 7f — A PROVIDER THAT FAILS IS RECORDED, REVOKED, AND BARRED.
+-- ---------------------------------------------------------------------------
+-- THE TEETH. Same book, same disclosure, same commitment — and Bank does nothing
+-- with what it was shown. The close prints anyway (Alice's 10-lot bid crosses Bob's
+-- 2 at 260, the residual goes unfilled), and the ledger records the failure, revokes
+-- the mandate, bars the provider from these terms for this session, and refuses the
+-- re-acceptance. This is what makes the disclosure a bargain rather than a gift.
+-- ---------------------------------------------------------------------------
+testFailedMandateIsRevokedAndBarred : Script ()
+testFailedMandateIsRevokedAndBarred = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  now <- getTime
+
+  aliceCash <- mint issuer usdc alice 3000.0
+  bobAsset  <- mint issuer aapl bob   2.0
+  _bankInv  <- mint issuer aapl bank  20.0    -- it HAD the inventory; it just sat on it
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bob, bank]
+      liquidityProvider = None
+      fixingRef = None
+      submittedCount = 0; cancelledCount = 0
+      isOpen = True
+
+  termsCid <- submit venue do
+    createCmd MandateTerms with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; anchorPrice = 255.0
+      commitmentSize = 8.0; maxBandBps = 1000
+      expiresAt = addRelTime now (hours 24)
+      eligible = [alice, bob, bank]
+      accepted = []; barred = []
+  (terms1, bankMandate) <- submit bank do exerciseCmd termsCid AcceptTerms with provider = bank
+
+  (a1, aliceBuy) <- submitOrder auctionCid alice Buy  10.0 260.0 aliceCash
+  (a2, bobSell)  <- submitOrder a1         bob   Sell  2.0 250.0 bobAsset
+
+  -- Bank is shown the residual it undertook to absorb: net BUY 8.
+  disc <- submit venue do
+    exerciseCmd a2 PublishImbalance with
+      restingOrders = [aliceBuy, bobSell]; mandateCid = bankMandate
+  Some d <- queryContractId bank disc
+  d.netQuantity === 8.0
+
+  -- ...AND DOES NOTHING. The close runs over the book as it stands: every candidate
+  -- trades 2 with a bid surplus of 8, so market pressure prints at the top (260).
+  closedCid <- submit venue do exerciseCmd a2 CloseBidding
+  batchCid  <- submit venue do
+    exerciseCmd closedCid RunClose with
+      buyOrders  = [aliceBuy]
+      sellOrders = [bobSell]
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 260.0
+
+  bankMandate2 <- liveMandateOf bank
+  outcome <- submit venue do
+    exerciseCmd bankMandate2 RecordPerformance with batchCid; termsCid = terms1
+
+  -- 1. THE FAILURE IS RECORDED, with the arithmetic that produced it.
+  Some perf <- queryContractId auditor outcome.performance
+  perf.shownSide  === "Buy"
+  perf.shownQty   === 8.0
+  perf.committed  === 8.0
+  perf.withinBand === True     -- 260 is inside 255 ± 1000bps: no excuse there
+  perf.owed       === 8.0
+  perf.delivered  === 0.0
+  perf.met        === False
+
+  -- 2. THE MANDATE IS REVOKED — there is no surviving obligation contract.
+  assertMsg "a failed mandate must be REVOKED" (isNone outcome.mandate)
+  bankMandates <- query @LiquidityMandate bank
+  assertMsg "a revoked provider must hold no live mandate" (null bankMandates)
+
+  -- 3. THE PROVIDER IS BARRED for this session, on the terms themselves.
+  Some tAfter <- queryContractId venue outcome.terms
+  assertMsg "a failed provider must be barred from these terms" (bank `elem` tAfter.barred)
+  assertMsg "a failed provider must lose its recorded seat"     (bank `notElem` tAfter.accepted)
+
+  -- 4. AND IT CANNOT SIMPLY TAKE THE SEAT AGAIN. This is the assert that makes the
+  --    consequence real rather than decorative.
+  submitMustFail bank do exerciseCmd outcome.terms AcceptTerms with provider = bank
+
+  -- The bar is EVIDENCE-GATED, not administrative: a provider that MET its
+  -- commitment cannot be barred even by the venue that signs the terms. Bob never
+  -- held a mandate and has no failure record, so there is nothing to bar him with —
+  -- and Bank's record cannot be re-used against him either.
+  submitMustFail venue do
+    exerciseCmd outcome.terms BarProvider with
+      provider = bob; performanceCid = outcome.performance
 
 -- ---------------------------------------------------------------------------
 -- TEST 8 — DECENTRALISED OPERATOR: a K-of-N committee-attested NAV fixing.
@@ -1346,6 +1958,315 @@ testCommitteeAttestedClose = do
   submitMustFail venue do
     exerciseCmd badClosed RunClose with buyOrders = [badBuy]; sellOrders = [badSell]
 
+-- ===========================================================================
+-- TESTS 9a–9e — CONTINUOUS ACCRUAL NAV.
+-- ===========================================================================
+-- The committee attests the INPUTS (base, rate, day count, origin); the ledger
+-- computes the value at every instant in between. These five scripts pin down the
+-- arithmetic, the precision, and the auction anchor that now depends on it.
+-- ---------------------------------------------------------------------------
+
+-- accrualFixture — a `NavFixing` as a plain RECORD VALUE, not a ledger contract.
+-- `navAt` and `accruedAmount` are pure and total, so they can be exercised with no
+-- ledger at all — the same way `testPriceDiscoveryUnit` exercises the uncross. A
+-- fund's value between marks is arithmetic; this is the test that treats it as such.
+accrualFixture : Party -> Party -> Decimal -> Decimal -> Text -> Time -> NavFixing
+accrualFixture admin auditor base rate dayCount from = NavFixing with
+  attestors = [admin]; admin; auditor; threshold = 1
+  instrumentId = ceth; cashInstrument = usdc; session = "Close"
+  price = base; rationale = "accrual unit fixture"
+  ratePerAnnum = rate; dayCount; accrualFrom = from
+  publishedTo = []; finalizedAt = from
+
+-- ---------------------------------------------------------------------------
+-- TEST 9a — THE ACCRUAL ARITHMETIC, HAND-COMPUTED.
+-- ---------------------------------------------------------------------------
+-- 3.6%/yr on ACT/360 accrues EXACTLY one basis point of NAV per day, because
+-- 0.036 / 360 = 0.0001 with nothing left over. That makes every expected value below
+-- checkable in your head, which is the point of choosing it: a test whose expected
+-- numbers came out of the implementation proves nothing.
+--
+-- It also pins the DAY-COUNT CONVENTION as a real economic input rather than a label:
+-- the SAME attested 3.6% accrues 0.0100000000 per day on ACT/360 and 0.0098630137 on
+-- ACT/365F — a 1.389% difference in the fund's yield, decided entirely by a string a
+-- committee signed.
+-- ---------------------------------------------------------------------------
+testAccrualArithmeticUnit : Script ()
+testAccrualArithmeticUnit = do
+  Parties{..} <- setup
+  t0 <- getTime
+  let f360 = accrualFixture issuer auditor 100.0 0.036 "ACT/360"  t0
+      f365 = accrualFixture issuer auditor 100.0 0.036 "ACT/365F" t0
+
+  -- ONE BASIS POINT PER DAY, exactly, and it scales linearly (simple interest — the
+  -- money-market convention, see the Governance header).
+  navAt f360 (addRelTime t0 (days  1)) === 100.01
+  navAt f360 (addRelTime t0 (days 10)) === 100.10
+  navAt f360 (addRelTime t0 (hours 12)) === 100.005          -- half a day, half a bp
+  navAt f360 (addRelTime t0 (hours  1)) === 100.0004166667   -- 0.01 / 24, rounded at 10dp
+
+  -- THE CONVENTION IS NOT COSMETIC. Same base, same attested rate, same elapsed day.
+  navAt f365 (addRelTime t0 (days 1)) === 100.0098630137
+  assertMsg "ACT/360 must accrue MORE than ACT/365F on the same quoted rate"
+    (navAt f360 (addRelTime t0 (days 1)) > navAt f365 (addRelTime t0 (days 1)))
+
+  -- A ZERO-RATE FIXING IS THE OLD SNAPSHOT, UNCHANGED — this is what the untouched
+  -- `ProposeFixing` path produces, so nothing that existed before this feature moves.
+  let snap = accrualFixture issuer auditor 100.0 0.0 "NONE" t0
+  navAt snap (addRelTime t0 (days 3650)) === 100.0
+
+-- ---------------------------------------------------------------------------
+-- TEST 9b — ZERO AT THE STRIKE, MONOTONE AFTER IT, AND LIVE EVERY SECOND.
+-- ---------------------------------------------------------------------------
+-- The claim the product rests on is that the fund has a correct value at 03:41 on a
+-- Sunday, so per-SECOND accrual has to be more than a slogan: it has to be
+-- representable. On a NAV of 100 at 3.6% one second is 1.157e-7 — over a thousand
+-- times the ledger's 1e-10 resolution, so the clock genuinely moves the number.
+-- ---------------------------------------------------------------------------
+testAccrualMonotoneAndZeroAtStrike : Script ()
+testAccrualMonotoneAndZeroAtStrike = do
+  Parties{..} <- setup
+  t0 <- getTime
+  let f = accrualFixture issuer auditor 100.0 0.036 "ACT/360" t0
+
+  -- AT the strike instant, nothing has accrued: the attested base IS the value.
+  navAt f t0 === 100.0
+  navAtChecked f t0 === Some 100.0
+
+  let v1s = navAt f (addRelTime t0 (seconds 1))
+      v1h = navAt f (addRelTime t0 (hours 1))
+      v1d = navAt f (addRelTime t0 (days 1))
+
+  -- ONE SECOND ALREADY MOVES THE NUMBER — not a rounding artefact, a real 1.157e-7.
+  v1s === 100.0000001157
+  assertMsg "a single second must accrue a representable, non-zero amount" (v1s > 100.0)
+  -- MONOTONE in time, strictly, at every scale that matters.
+  assertMsg "accrual must be monotone in elapsed time" (v1s < v1h && v1h < v1d)
+  v1d === 100.01
+
+-- ---------------------------------------------------------------------------
+-- TEST 9c — ONE STEP vs MANY STEPS, AND THE PRECISION TOLD HONESTLY.
+-- ---------------------------------------------------------------------------
+-- Accrual is always computed FROM THE ATTESTED BASE over the WHOLE elapsed interval,
+-- never accumulated from a previous value, so there is no path dependence to test —
+-- only the rounding of each independent evaluation. Each one is within half a unit in
+-- the last place (5e-11), so N of them summed can differ from the single-step figure
+-- by at most N x 5e-11 AND BY NOTHING ELSE. That bound is DERIVED, not tuned, and
+-- this test measures the real difference against it rather than asserting equality
+-- that does not hold.
+--
+-- IT ALSO SHOWS WHY THE IMPLEMENTATION ORDERS ITS OPERATIONS THE WAY IT DOES: the
+-- final block accumulates a $1.00 money-market share second by second — the obvious
+-- way to write this — and lands 1.09% away from the right answer. That is the failure
+-- mode the Governance header warns about, demonstrated rather than asserted.
+-- ---------------------------------------------------------------------------
+testAccrualStepsAgree : Script ()
+testAccrualStepsAgree = do
+  let dayMicros    = 86400 * 1000000
+      sixHrMicros  = 21600 * 1000000
+      oneHrMicros  =  3600 * 1000000
+      oneDay   = accruedAmount 100.0 0.036 "ACT/360" dayMicros
+      sixHours = accruedAmount 100.0 0.036 "ACT/360" sixHrMicros
+      oneHour  = accruedAmount 100.0 0.036 "ACT/360" oneHrMicros
+
+  oneDay   === 0.01      -- one basis point of a NAV of 100
+  sixHours === 0.0025
+
+  -- WHEN THE SUB-PERIOD DIVIDES EXACTLY there is no rounding to accumulate and the
+  -- decomposition is EXACT — not "within tolerance", identical.
+  4.0 * sixHours === oneDay
+
+  -- WHEN IT DOES NOT, each of the 24 hourly figures carries its own half-ulp.
+  let steps      = 24.0
+      twentyFour = steps * oneHour
+      -- THE DERIVED BOUND: N independent evaluations x HALF a unit in the last place.
+      -- Written as `N x ulp / 2` because half a ulp (5e-11) is not itself a
+      -- representable `Decimal` — which is worth noticing, since it is precisely the
+      -- quantity the rounding of every one of these evaluations is bounded by.
+      stepBound  = steps * 0.0000000001 / 2.0    -- = 1.2e-9
+  assertMsg "the step decomposition must genuinely differ — this measures rounding, \
+            \not a vacuous equality"
+    (twentyFour /= oneDay)
+  assertMsg "24 hourly accruals must match the one-step day within 24 half-ulps"
+    (abs (twentyFour - oneDay) <= stepBound)
+  -- Pin the actual observed drift so a regression in the operation order is caught,
+  -- not merely bounded: 8e-10 on a NAV of 100, i.e. 8e-12 relative.
+  abs (twentyFour - oneDay) === 0.0000000008
+
+  -- ------------------------------------------------------------------------
+  -- THE HONEST EDGE CASE, STATED PLAINLY RATHER THAN HIDDEN. On a $1.00
+  -- money-market share at 4%/yr, ONE SECOND of accrual is 1.286e-9 — which at 10dp
+  -- quantises to 0.0000000013, only about 13 units in the last place. Per-second
+  -- accrual IS representable at that scale, but it is COARSE: the quantisation is
+  -- ~1% of the increment.
+  -- THE MITIGATION IS THE DESIGN ITSELF. Because a day's accrual is computed in ONE
+  -- division over the whole interval, that coarseness never compounds. Accumulate it
+  -- second by second instead and the error is 1.09% of the fund's daily yield —
+  -- which is exactly what the block below measures.
+  -- ------------------------------------------------------------------------
+  let secondOnADollar = accruedAmount 1.0 0.04 "ACT/360" 1000000
+      naiveDollarDay  = 86400.0 * secondOnADollar          -- accumulated per second
+      trueDollarDay   = accruedAmount 1.0 0.04 "ACT/360" dayMicros
+  secondOnADollar === 0.0000000013
+  trueDollarDay   === 0.0001111111
+  assertMsg "per-second accumulation on a $1 share must be materially WRONG — this is \
+            \why accrual is always computed from the base over the whole interval"
+    (abs (naiveDollarDay - trueDollarDay) > 0.000001)
+
+-- ---------------------------------------------------------------------------
+-- TEST 9d — THE AUCTION ANCHOR IS THE NAV ACCRUED TO THE CLOSE.
+-- ---------------------------------------------------------------------------
+-- `RunClose` used to demand the anchor EQUAL the struck price. Accrual makes that
+-- wrong, not strict: ten days after a 2,400 mark at 3.6% ACT/360 the fund is worth
+-- 2,402.40, and a venue anchoring on 2,400 is anchoring on a number that stopped
+-- being true 240 hours ago.
+--   * an auction anchored on the ACCRUED NAV (2,402.40) runs and prints there;
+--   * an auction anchored on the STALE STRUCK price (2,400.00) cannot run at all.
+-- The boundary of the 1bp staleness budget is pinned on the pure predicate: one day
+-- of drift is inside it (that is what "1bp = one day at 3.6%" means), two days is
+-- not, and an anchor AHEAD of the accrual is rejected outright however small.
+-- ---------------------------------------------------------------------------
+testAccruedAnchorBindsTheClose : Script ()
+testAccruedAnchorBindsTheClose = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  -- A 2-of-3 committee attests the INPUTS: base 2,400, 3.6%/yr, ACT/360, from now.
+  t0 <- getTime
+  let members = [venue, bank, agent]
+  committeeCid <- submit issuer do
+    createCmd OperatorCommittee with
+      admin = issuer; members; threshold = 2; auditor; label = "Treasury NAV Committee"
+  propCid <- submit venue do
+    exerciseCmd committeeCid ProposeAccruingFixing with
+      proposer = venue; instrumentId = ceth; cashInstrument = usdc
+      session = "Close"; price = 2400.0
+      rationale = "tokenised T-bill fund: 3.6% money-market yield, ACT/360"
+      ratePerAnnum = 0.036; dayCount = "ACT/360"; accrualFrom = t0
+  propCid2 <- submit bank  do exerciseCmd propCid Confirm with member = bank
+  fixCid   <- submit venue do exerciseCmd propCid2 FinalizeFixing with publishTo = [venue]
+
+  -- What K-of-N actually signed is the RECIPE, not just the number.
+  Some fix <- queryContractId venue fixCid
+  fix.price        === 2400.0
+  fix.ratePerAnnum === 0.036
+  fix.dayCount     === "ACT/360"
+  fix.accrualFrom  === t0
+
+  -- THE STALENESS BUDGET, on the pure predicate, so the width is pinned exactly.
+  -- 2,400 at 3.6% accrues 0.24/day. One day behind is inside 1bp; two days is not.
+  assertMsg "one day of anchor staleness is inside the 1bp budget at 3.6%"
+    (anchorConsistentWithNav (navAt fix (addRelTime t0 (days 1))) 2400.0)
+  assertMsg "two days of anchor staleness must be REJECTED"
+    (not (anchorConsistentWithNav (navAt fix (addRelTime t0 (days 2))) 2400.0))
+  assertMsg "an anchor AHEAD of the accrued NAV is rejected however small the excess"
+    (not (anchorConsistentWithNav 2400.0 2400.01))
+
+  -- TEN DAYS PASS. The committee has attested nothing further; the ledger has been
+  -- computing the value the whole time.
+  passTime (days 10)
+  nowAtClose <- getTime
+  navAt fix nowAtClose === 2402.40      -- 2,400 + 10 x 0.24, derived, not attested
+
+  -- (1) A CLOSE ANCHORED ON THE ACCRUED NAV RUNS. Bob offers 3 at 2,350, Alice bids
+  -- 3 at 2,500: every candidate trades the full 3 flat, so the anchor takes the final
+  -- tie-break and the print IS the accrued NAV.
+  bobCeth   <- mint issuer ceth bob   3.0
+  aliceCash <- mint issuer usdc alice 7500.0
+  goodAuction <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = ceth; cashInstrument = usdc
+      session = "Close"; referencePrice = 2402.40      -- the ACCRUED NAV
+      participants = [alice, bob]; liquidityProvider = None
+      fixingRef = Some fixCid
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+  (g1, bobSell)  <- submitOrder goodAuction bob   Sell 3.0 2350.0 bobCeth
+  (g2, aliceBuy) <- submitOrder g1          alice Buy  3.0 2500.0 aliceCash
+  goodClosed <- submit venue do exerciseCmd g2 CloseBidding
+  goodBatch  <- submit venue do
+    exerciseCmd goodClosed RunClose with buyOrders = [aliceBuy]; sellOrders = [bobSell]
+  Some batch <- queryContractId auditor goodBatch
+  batch.closingPrice === 2402.40
+  assertMsg "the print must be the ACCRUED NAV, not the struck base"
+    (batch.closingPrice /= fix.price)
+
+  -- (2) THE SAME BOOK ANCHORED ON THE STALE STRUCK PRICE CANNOT CLOSE. Nothing is
+  -- wrong with the fixing, the orders, or the venue — only with the anchor's age.
+  bobCeth2   <- mint issuer ceth bob   3.0
+  aliceCash2 <- mint issuer usdc alice 7500.0
+  staleAuction <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = ceth; cashInstrument = usdc
+      session = "Close"; referencePrice = 2400.0      -- the STRUCK price, 10 days old
+      participants = [alice, bob]; liquidityProvider = None
+      fixingRef = Some fixCid
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+  (s1, staleSell) <- submitOrder staleAuction bob   Sell 3.0 2350.0 bobCeth2
+  (s2, staleBuy)  <- submitOrder s1           alice Buy  3.0 2500.0 aliceCash2
+  staleClosed <- submit venue do exerciseCmd s2 CloseBidding
+  submitMustFail venue do
+    exerciseCmd staleClosed RunClose with buyOrders = [staleBuy]; sellOrders = [staleSell]
+
+-- ---------------------------------------------------------------------------
+-- TEST 9e — TIME RUNNING BACKWARDS IS HANDLED, NOT SILENTLY WRONG.
+-- ---------------------------------------------------------------------------
+-- A query about an instant BEFORE a fixing applies from is legitimate (a backfill, a
+-- replay, a report window that opens early). The wrong answers are a negative accrual
+-- — silently marking the fund BELOW a value the committee attested — and an abort
+-- that makes the function partial. `navAt` clamps to the attested base, and
+-- `navAtChecked` exists so a caller that must distinguish "before the strike" from
+-- "at the strike" can.
+--
+-- It also pins the other silent-failure guard: an UNSUPPORTED day-count convention is
+-- rejected at proposal time rather than defaulted, because defaulting a typo to
+-- ACT/360 would mis-accrue a sterling fund by 1.389% of its yield under a signed
+-- attestation saying otherwise.
+-- ---------------------------------------------------------------------------
+testAccrualBackwardsTimeIsSafe : Script ()
+testAccrualBackwardsTimeIsSafe = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  t0 <- getTime
+  let f = accrualFixture issuer auditor 100.0 0.036 "ACT/360" t0
+
+  -- BEFORE the strike: the attested base, never less than it.
+  navAt f (addRelTime t0 (days (-1)))    === 100.0
+  navAt f (addRelTime t0 (seconds (-1))) === 100.0
+  assertMsg "a pre-strike query must never report BELOW the attested base"
+    (navAt f (addRelTime t0 (days (-3650))) >= 100.0)
+
+  -- ...and the caller that needs to KNOW gets told, rather than getting a number that
+  -- is indistinguishable from an at-strike answer.
+  navAtChecked f (addRelTime t0 (days (-1)))    === None
+  navAtChecked f (addRelTime t0 (seconds (-1))) === None
+  navAtChecked f t0                             === Some 100.0
+
+  -- The raw accrual function clamps at the same place, so nothing downstream of it
+  -- can be handed a negative amount.
+  accruedAmount 100.0 0.036 "ACT/360" (-86400000000) === 0.0
+  accruedAmount 100.0 0.036 "ACT/360" 0              === 0.0
+
+  -- AN UNSUPPORTED CONVENTION IS REJECTED, NOT DEFAULTED — at the ledger, at the
+  -- moment a member tries to attest it.
+  let members = [venue, bank, agent]
+  committeeCid <- submit issuer do
+    createCmd OperatorCommittee with
+      admin = issuer; members; threshold = 2; auditor; label = "NAV Committee"
+  submitMustFail venue do
+    exerciseCmd committeeCid ProposeAccruingFixing with
+      proposer = venue; instrumentId = ceth; cashInstrument = usdc
+      session = "Close"; price = 2400.0; rationale = "bond convention on a bill fund"
+      ratePerAnnum = 0.036; dayCount = "30/360"; accrualFrom = t0
+  -- A rate at or below -100%/yr is a typo, not a money market.
+  submitMustFail venue do
+    exerciseCmd committeeCid ProposeAccruingFixing with
+      proposer = venue; instrumentId = ceth; cashInstrument = usdc
+      session = "Close"; price = 2400.0; rationale = "typo"
+      ratePerAnnum = -1.5; dayCount = "ACT/360"; accrualFrom = t0
+  -- And an unrecognised convention accrues NOTHING if one ever reached the pure
+  -- function directly, rather than guessing a year length.
+  accruedAmount 100.0 0.036 "30/360" 86400000000 === 0.0
+
 -- ---------------------------------------------------------------------------
 -- TEST 10 — IN-KIND CREATION + REDEMPTION of an ETF basket (LX1 = 0.10 cETH +
 -- 0.01 CBTC per share). Creation atomically pulls the underlyings into custody and
@@ -1488,7 +2409,7 @@ testAllocationUnit = do
   -- would have been cut to 5 and the 110 bid would have gained nothing for bidding
   -- up — which is exactly the equilibrium that makes oversizing rational.
   allocateSide Buy 15.0
-    [("thru", 110.0, 10.0), ("at1", 100.0, 10.0), ("at2", 100.0, 10.0)]
+    [("thru", Some 110.0, 10.0), ("at1", Some 100.0, 10.0), ("at2", Some 100.0, 10.0)]
     === [("thru", 10.0), ("at1", 2.5), ("at2", 2.5)]
 
   -- (2) THREE LEVELS, AND THE WORST-PRICED ONE GETS NOTHING. Ten units: the 120 bid
@@ -1496,18 +2417,18 @@ testAllocationUnit = do
   -- but behind two better prices — is allocated ZERO. Eligibility is not precedence.
   -- Note the input is deliberately out of order: priority comes from the PRICE.
   allocateSide Buy 10.0
-    [("lo", 100.0, 10.0), ("hi", 120.0, 6.0), ("mid", 110.0, 8.0)]
+    [("lo", Some 100.0, 10.0), ("hi", Some 120.0, 6.0), ("mid", Some 110.0, 8.0)]
     === [("hi", 6.0), ("mid", 4.0), ("lo", 0.0)]
 
   -- (3) THE SELL SIDE IS THE MIRROR IMAGE: a LOWER limit is the more aggressive
   -- offer, so it is the one that fills first. (This is the book in TEST 3f.)
-  allocateSide Sell 15.0 [("high", 256.0, 10.0), ("low", 250.0, 10.0)]
+  allocateSide Sell 15.0 [("high", Some 256.0, 10.0), ("low", Some 250.0, 10.0)]
     === [("low", 10.0), ("high", 5.0)]
 
   -- (4) THE LIGHT SIDE IS NOT A SPECIAL CASE. When the crossed volume equals the
   -- side's own total, every level fills in full and the same function is a no-op —
   -- which is why the close no longer branches on "which side is heavy".
-  allocateSide Buy 20.0 [("a", 260.0, 12.0), ("b", 255.0, 8.0)]
+  allocateSide Buy 20.0 [("a", Some 260.0, 12.0), ("b", Some 255.0, 8.0)]
     === [("a", 12.0), ("b", 8.0)]
 
   -- (5) THE ALLOCATION SUMS EXACTLY TO THE CROSSED VOLUME. This is the audit's
@@ -1518,7 +2439,7 @@ testAllocationUnit = do
   -- The point is the LAST line: the fills sum to the crossed volume on the nose, so
   -- nobody has to silently absorb a pool remainder and no receipt can misstate it.
   let thirds = allocateSide Buy 100.0
-        [("a", 260.0, 100.0), ("b", 260.0, 100.0), ("c", 260.0, 100.0)]
+        [("a", Some 260.0, 100.0), ("b", Some 260.0, 100.0), ("c", Some 260.0, 100.0)]
   thirds === [("a", 33.3333333334), ("b", 33.3333333333), ("c", 33.3333333333)]
   sum (map snd thirds) === 100.0
 
@@ -1528,7 +2449,7 @@ testAllocationUnit = do
   -- though it is listed FIRST. That is the whole difference from the old behaviour,
   -- where array position decided who absorbed the rounding.
   let sixths = allocateSide Buy 1.0
-        [("big", 100.0, 4.0), ("s1", 100.0, 1.0), ("s2", 100.0, 1.0)]
+        [("big", Some 100.0, 4.0), ("s1", Some 100.0, 1.0), ("s2", Some 100.0, 1.0)]
   sixths === [("big", 0.6666666666), ("s1", 0.1666666667), ("s2", 0.1666666667)]
   sum (map snd sixths) === 1.0
 
@@ -1537,7 +2458,7 @@ testAllocationUnit = do
   -- allocation is exactly 0.0 — and the side still sums to the crossed volume.
   -- `RunClose` filters that order out before pledging instead of aborting on it.
   let dusty = allocateSide Sell 1.0
-        [("whale", 250.0, 1000000.0), ("dust", 250.0, 0.0000000001)]
+        [("whale", Some 250.0, 1000000.0), ("dust", Some 250.0, 0.0000000001)]
   dusty === [("whale", 1.0), ("dust", 0.0)]
   sum (map snd dusty) === 1.0
 
@@ -1571,8 +2492,8 @@ testAllocationUnit = do
 -- ---------------------------------------------------------------------------
 testMixedSurplusTieBreak : Script ()
 testMixedSurplusTieBreak = do
-  let buy  q p = BookOrder with side = Buy;  quantity = q; limitPrice = p
-      sell q p = BookOrder with side = Sell; quantity = q; limitPrice = p
+  let buy  q p = BookOrder with side = Buy;  quantity = q; limitPrice = Some p
+      sell q p = BookOrder with side = Sell; quantity = q; limitPrice = Some p
       priceOf  = fmap (\c -> c.price)
       -- The pathological book: supply and demand interleaved so that FOUR different
       -- prices trade the same 10 units and strand the same 10 — two bid-heavy, two
@@ -1609,11 +2530,12 @@ testMixedSurplusTieBreak = do
   -- in full" is not even arithmetically possible there. At the narrowed print of 100
   -- exactly one bid is through the print, and it takes the whole 10; the bid AT the
   -- print gets nothing, which is correct and is why zero fills must not abort.
-  let thruAt90  = sum [o.quantity | o <- book, o.side == Buy, o.limitPrice >  90.0]
-      thruAt100 = sum [o.quantity | o <- book, o.side == Buy, o.limitPrice > 100.0]
+  let thru p o = case o.limitPrice of None -> False; Some l -> l > p
+      thruAt90  = sum [o.quantity | o <- book, o.side == Buy, thru  90.0 o]
+      thruAt100 = sum [o.quantity | o <- book, o.side == Buy, thru 100.0 o]
   thruAt90  === 20.0
   thruAt100 === 10.0
-  allocateSide Buy 10.0 [("bid200", 200.0, 10.0), ("bid100", 100.0, 10.0)]
+  allocateSide Buy 10.0 [("bid200", Some 200.0, 10.0), ("bid100", Some 100.0, 10.0)]
     === [("bid200", 10.0), ("bid100", 0.0)]
 
 -- ---------------------------------------------------------------------------
@@ -1777,34 +2699,301 @@ testFillsMatchReceipts = do
   bobAapl === 0.0          -- the light side filled in full
 
 -- ---------------------------------------------------------------------------
--- TEST 17 — THE PRICE COLLAR: a thin book cannot print anywhere it likes.
+-- TEST 17 — THE PRICE COLLAR CLAMPS THE PRINT. IT DOES NOT CANCEL THE AUCTION.
 -- ---------------------------------------------------------------------------
--- THE ATTACK. CrossDesk's output is an OFFICIAL PRICE — a NAV, a fixing, a number
--- other contracts reference. Two orders are a legitimate maximum-volume cross: one
--- 1-unit buy and one 1-unit sell at 10,000 against a 255 anchor cross perfectly, and
--- the venue would have signed a `SettlementBatch` calling 10,000 the official close.
--- Thin books are precisely when someone would attack a fixing.
+-- WHAT THIS TEST USED TO ASSERT, AND WHY THAT WAS WRONG. It used to prove that a
+-- book crossing outside the band ABORTED the whole close and settled nothing. That
+-- is not what a real venue does, and on a venue that accepts unpriced MOC it is
+-- indefensible: an index fund's entire instruction is "own the closing price", so
+-- cancelling the close is the one outcome it cannot hedge. Worse, it hands any single
+-- participant a denial of service — one oversized order drags the indicative price
+-- past the band and NOBODY trades.
 --
--- THE ANSWER, AND WHY THIS ONE. Every venue bounds the print — Nasdaq at the greater
--- of $0.50 or 10% of the quote midpoint, NYSE inside the 7.35B(g)(2) two-endpoint
--- band, Xetra and Euronext inside static and dynamic price ranges. They split into
--- two families on a breach: REJECT (Nasdaq, NYSE — the print simply cannot land
--- outside) and EXTEND (Xetra's volatility interruption, Euronext's reservation and
--- repeated uncrossing). The extend family needs a call phase and a clock, and its
--- documented Xetra end state is termination "manually according to FWB exchange
--- rules" — a human. CrossDesk's close is ONE atomic transaction and that finality is
--- what it sells, so it is the reject family: the close aborts and NOTHING settles.
+-- WHAT THE RULEBOOKS ACTUALLY SAY. They bound the PRICE and let the auction happen.
+--   Nasdaq, on their own worked example (10.00 x 11.00 → band 8.95–12.05): "$8.95 is
+--     the LOWEST PRICE AT WHICH THE CROSS CAN OCCUR and $12.05 is the HIGHEST PRICE
+--     AT WHICH IT CAN OCCUR."
+--   NYSE Rule 7.35B(g)(2): the DMM "must select an Auction Price" inside a two-
+--     endpoint band. Rule 7.35C's Auction Collar is likewise a threshold on the
+--     Indicative Match Price. (Its percentages are UNVERIFIED-3 in the mechanics
+--     doc, so CrossDesk keeps Nasdaq's verified 10% / $0.50.)
+--
+-- AND THE BOUNDARY IS THE RIGHT PRICE, not a stopgap: exec(P) is the min of a
+-- non-increasing and a non-decreasing function, hence quasi-concave, so the maximum
+-- over a band that excludes its peak sits at the boundary nearest the peak. Clamping
+-- IS constrained volume maximisation.
+--
+-- Book (AAPL / USDC, anchor 255 → band 229.50 to 280.50):
+--   BUY  Alice 10 @ 400      SELL Bob   10 @ 300
+--                            SELL Carol  4 @ 250
+-- Unconstrained the uncross prints 300 and trades 10. 300 is above the band, so the
+-- close prints 280.50 — and at 280.50 Bob's 300 offer is no longer eligible, so only
+-- Carol's 4 cross. THE VOLUME SHRINKS FROM 10 TO 4, WHICH IS THE POINT: you cannot
+-- clamp the price and keep the old quantity, because the quantity was only available
+-- at a price the venue will not print.
 -- ---------------------------------------------------------------------------
 testPriceCollar : Script ()
 testPriceCollar = do
   Parties{..} <- setup
   setupInstruments issuer
+  carol <- allocatePartyByHint (PartyIdHint "Carol")
 
-  aliceCash <- mint issuer usdc alice 10000.0   -- 1 @ her 10,000 limit
-  bobAsset  <- mint issuer aapl bob   1.0
+  -- THE CLAMP AS PURE ARITHMETIC. Inside the band it is the identity — an ordinary
+  -- close never notices the collar — and only outside does it bind.
+  clampToCollar 255.0 260.0   === 260.0     -- inside: untouched
+  clampToCollar 255.0 280.5   === 280.5     -- exactly the top edge: printable as is
+  clampToCollar 255.0 229.5   === 229.5     -- exactly the bottom edge: printable as is
+  clampToCollar 255.0 300.0   === 280.5     -- above the band: pulled to the boundary
+  clampToCollar 255.0 10000.0 === 280.5     -- far above: same boundary
+  clampToCollar 255.0 100.0   === 229.5     -- below the band: pulled up
 
-  -- The venue's published anchor is 255, so the band is 255 ± max(0.50, 10%) =
-  -- 229.50 to 280.50.
+  aliceCash  <- mint issuer usdc alice 4000.0   -- 10 @ her 400 limit
+  bobAsset   <- mint issuer aapl bob   10.0
+  carolAsset <- mint issuer aapl carol 4.0
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bob, carol]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+
+  (a1, aliceBuy)  <- submitOrder auctionCid alice Buy  10.0 400.0 aliceCash
+  (a2, bobSell)   <- submitOrder a1         bob   Sell 10.0 300.0 bobAsset
+  (a3, carolSell) <- submitOrder a2         carol Sell  4.0 250.0 carolAsset
+
+  -- THE UNCONSTRAINED ANSWER, AND THE CONSTRAINED ONE, side by side.
+  let buy  q p = BookOrder with side = Buy;  quantity = q; limitPrice = Some p
+      sell q p = BookOrder with side = Sell; quantity = q; limitPrice = Some p
+      book = [buy 10.0 400.0, sell 10.0 300.0, sell 4.0 250.0]
+  fmap (\c -> c.price)       (discoverPrice 255.0 book) === Some 300.0
+  fmap (\c -> c.executedQty) (discoverPrice 255.0 book) === Some 10.0
+  assertMsg "300 must be outside a band centred on 255" (not (withinCollar 255.0 300.0))
+  (crossAt book 280.5).executedQty === 4.0     -- what actually crosses at the boundary
+
+  sealed   <- submit venue do exerciseCmd a3 CloseBidding
+  -- AND THE CLOSE PRINTS. This is the line that used to be a `submitMustFail`.
+  batchCid <- submit venue do
+    exerciseCmd sealed RunClose with
+      buyOrders  = [aliceBuy]
+      sellOrders = [bobSell, carolSell]
+
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 280.5
+  assertMsg "the print must be the collar boundary, not the unconstrained 300"
+    (batch.closingPrice /= 300.0)
+  assertMsg "the printed price must be inside the band" (withinCollar 255.0 batch.closingPrice)
+  length batch.fills === 2       -- Alice's partial buy + Carol's sell. Bob never traded.
+  assertMsg "every fill prints at the clamped price"
+    (all (\f -> f.price == 280.5) batch.fills)
+
+  -- THE CROSSED VOLUME IS THE SMALLER, RE-SCORED ONE — 4, not the 10 the
+  -- unconstrained price would have traded.
+  let aliceFill = head (filter (\f -> f.buyer == alice) batch.fills)
+  aliceFill.quantity === 4.0
+  aliceAapl <- ownedAmount alice aapl
+  aliceUsd  <- ownedAmount alice usdc
+  aliceAapl === 4.0
+  aliceUsd  === 2878.0        -- reserved 4,000 at her limit, paid 4 × 280.50 = 1,122
+
+  -- Carol's cheap offer filled in full at the clamped print.
+  carolAapl <- ownedAmount carol aapl
+  carolUsd  <- ownedAmount carol usdc
+  carolAapl === 0.0
+  carolUsd  === 1122.0
+
+  -- THE EXCESS RETURNS INTACT. Bob wanted 300 and the venue will not print above
+  -- 280.50, so his offer is away from the CLAMPED cross: cancelled on close, no fill
+  -- record, and every one of his 10 units still his. Clamping bounds the price — it
+  -- never drags anybody through their own limit.
+  assertMsg "an order away from the CLAMPED print is cancelled on close" . isNone
+    =<< queryContractId venue bobSell
+  assertMsg "the clamped-out order must have no fill record"
+    (null (filter (\f -> f.seller == bob) batch.fills))
+  bobAapl <- ownedAmount bob aapl
+  bobUsd  <- ownedAmount bob usdc
+  bobAapl === 10.0
+  bobUsd  === 0.0
+
+-- ---------------------------------------------------------------------------
+-- TEST 17a — THE COLLAR CLAMPS DOWNWARD TOO.
+-- ---------------------------------------------------------------------------
+-- The mirror image, because a band with only one working edge is not a band. A
+-- sell-heavy book drags the unconstrained print DOWN below the floor of the collar,
+-- and the close prints at the LOWER boundary instead — again re-crossing there, and
+-- again leaving the interest that was reaching past the band untouched.
+--
+-- Book (AAPL / USDC, anchor 255 → band 229.50 to 280.50):
+--   SELL Bob 10 @ 100        BUY Alice 10 @ 200
+--                            BUY Carol  4 @ 260
+-- Unconstrained the uncross prints 200 (both surviving prices are bid-heavy, so
+-- market pressure takes the higher of them) and trades 10. 200 is below the band, so
+-- the close prints 229.50, where Alice's 200 bid is no longer eligible and only
+-- Carol's 4 cross.
+-- ---------------------------------------------------------------------------
+testCollarClampsDown : Script ()
+testCollarClampsDown = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  carol <- allocatePartyByHint (PartyIdHint "Carol")
+
+  aliceCash <- mint issuer usdc alice 2000.0   -- 10 @ her 200 limit
+  carolCash <- mint issuer usdc carol 1040.0   --  4 @ her 260 limit
+  bobAsset  <- mint issuer aapl bob   10.0
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bob, carol]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+
+  (a1, bobSell)  <- submitOrder auctionCid bob   Sell 10.0 100.0 bobAsset
+  (a2, aliceBuy) <- submitOrder a1         alice Buy  10.0 200.0 aliceCash
+  (a3, carolBuy) <- submitOrder a2         carol Buy   4.0 260.0 carolCash
+
+  let buy  q p = BookOrder with side = Buy;  quantity = q; limitPrice = Some p
+      sell q p = BookOrder with side = Sell; quantity = q; limitPrice = Some p
+      book = [buy 10.0 200.0, buy 4.0 260.0, sell 10.0 100.0]
+  fmap (\c -> c.price)       (discoverPrice 255.0 book) === Some 200.0
+  fmap (\c -> c.executedQty) (discoverPrice 255.0 book) === Some 10.0
+  assertMsg "200 must be below a band centred on 255" (not (withinCollar 255.0 200.0))
+  clampToCollar 255.0 200.0 === 229.5
+  (crossAt book 229.5).executedQty === 4.0
+
+  sealed   <- submit venue do exerciseCmd a3 CloseBidding
+  batchCid <- submit venue do
+    exerciseCmd sealed RunClose with
+      buyOrders  = [aliceBuy, carolBuy]
+      sellOrders = [bobSell]
+
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 229.5
+  length batch.fills === 2
+
+  -- Carol bid through the clamped print and fills all 4 at 229.50 = 918, with 122 of
+  -- change back off her 1,040 reservation.
+  carolAapl <- ownedAmount carol aapl
+  carolUsd  <- ownedAmount carol usdc
+  carolAapl === 4.0
+  carolUsd  === 122.0
+  -- Bob is the heavy side, re-scored at the boundary: 4 of his 10 fill for 918, and
+  -- the other 6 units come home to him.
+  bobAapl <- ownedAmount bob aapl
+  bobUsd  <- ownedAmount bob usdc
+  bobAapl === 6.0
+  bobUsd  === 918.0
+  -- Alice's 200 bid is away from the CLAMPED cross — cancelled on close, and every
+  -- cent she committed is still hers.
+  assertMsg "a bid below the clamped print is cancelled on close" . isNone
+    =<< queryContractId venue aliceBuy
+  aliceAapl <- ownedAmount alice aapl
+  aliceUsd  <- ownedAmount alice usdc
+  aliceAapl === 0.0
+  aliceUsd  === 2000.0
+
+-- ---------------------------------------------------------------------------
+-- TEST 17b — AN UNPRICED BUY IS FULLY FUNDED AT A CLAMPED PRINT. THE TIGHTEST CASE.
+-- ---------------------------------------------------------------------------
+-- THE INVARIANT UNDER TEST. An unpriced buy reserves `quantity × (anchor +
+-- collarBand anchor)` — the highest price the close can legally print. Clamping is
+-- what makes that bound TIGHT rather than merely sufficient: the upper boundary is
+-- not a theoretical ceiling any more, it is a price the venue will actually print
+-- when the book reaches past it. So the tightest possible case for the reservation is
+-- exactly this one — an MOC buy filling IN FULL at a CLAMPED upper boundary — and it
+-- has to settle to the cent.
+--
+-- Book (AAPL / USDC, anchor 100 → band 90 to 110):
+--   BUY Alice 10 UNPRICED (MOC)      SELL Carol 12 @ 105
+--   BUY Dave  20 @ 200 (LOC)
+-- Every volume-maximising price is buy-heavy, so market pressure takes the print to
+-- 200 — far above the band. The close clamps to 110 and re-crosses: 12 units are
+-- available there. Class priority gives the MOC all 10 first, and Dave takes the
+-- remaining 2. Alice therefore fills IN FULL at the very top of the band and owes
+-- 10 × 110 = 1,100 — which is EXACTLY what she reserved. She is minted that and not a
+-- cent more, so this close can only settle if the collar-sized reservation is right.
+-- ---------------------------------------------------------------------------
+testUnpricedBuyFundedAtClampedBoundary : Script ()
+testUnpricedBuyFundedAtClampedBoundary = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  carol <- allocatePartyByHint (PartyIdHint "Carol")
+  dave  <- allocatePartyByHint (PartyIdHint "Dave")
+
+  collarBand 100.0 === 10.0
+  clampToCollar 100.0 200.0 === 110.0
+
+  -- EXACTLY the collar-sized reservation and no slack at all: 10 × (100 + 10).
+  aliceCash  <- mint issuer usdc alice 1100.0
+  daveCash   <- mint issuer usdc dave  4000.0    -- 20 @ his 200 limit
+  carolAsset <- mint issuer aapl carol 12.0
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 100.0
+      participants = [alice, carol, dave]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+
+  (a1, aliceBuy)  <- submitMocOrder auctionCid alice Buy  10.0       aliceCash
+  (a2, daveBuy)   <- submitOrder    a1         dave  Buy  20.0 200.0 daveCash
+  (a3, carolSell) <- submitOrder    a2         carol Sell 12.0 105.0 carolAsset
+
+  sealed   <- submit venue do exerciseCmd a3 CloseBidding
+  batchCid <- submit venue do
+    exerciseCmd sealed RunClose with
+      buyOrders  = [aliceBuy, daveBuy]
+      sellOrders = [carolSell]
+
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 110.0
+  batch.closingPrice === 100.0 + collarBand 100.0
+  length batch.fills === 3
+
+  -- THE ASSERTION THIS TEST EXISTS FOR: the MOC filled in full at the top of the
+  -- band and spent its whole reservation, to the cent, with no shortfall and no
+  -- change. `quantity × collarHigh` is exact, not conservative.
+  aliceAapl <- ownedAmount alice aapl
+  aliceUsd  <- ownedAmount alice usdc
+  aliceAapl === 10.0
+  aliceUsd  === 0.0
+  -- Class priority still runs at a clamped price: the MOC took its 10 first and the
+  -- limit order behind it got the 2 that were left, at the same one print.
+  daveAapl <- ownedAmount dave aapl
+  daveUsd  <- ownedAmount dave usdc
+  daveAapl === 2.0
+  daveUsd  === 3780.0      -- reserved 4,000 at his limit, paid 2 × 110 = 220
+  -- The seller filled in full at the boundary: 12 × 110 = 1,320.
+  carolAapl <- ownedAmount carol aapl
+  carolUsd  <- ownedAmount carol usdc
+  carolAapl === 0.0
+  carolUsd  === 1320.0
+
+-- ---------------------------------------------------------------------------
+-- TEST 17c — A PRINT INSIDE THE BAND IS UNTOUCHED (the no-regression guard).
+-- ---------------------------------------------------------------------------
+-- Clamping must be invisible on an ordinary close. `clampToCollar` is the identity
+-- everywhere inside the band INCLUDING both edges, so the uncross's answer survives
+-- unchanged and the collar costs a normal auction nothing at all. Every other script
+-- in this file is really a second copy of this assertion; this one states it on
+-- purpose so a future change to the collar cannot quietly move a normal print.
+-- ---------------------------------------------------------------------------
+testInBandPrintIsNotClamped : Script ()
+testInBandPrintIsNotClamped = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  -- The identity, edge to edge.
+  clampToCollar 255.0 229.5 === 229.5
+  clampToCollar 255.0 255.0 === 255.0
+  clampToCollar 255.0 280.5 === 280.5
+  -- ...and only a hair outside does it move at all.
+  clampToCollar 255.0 280.51 === 280.5
+  clampToCollar 255.0 229.49 === 229.5
+
+  aliceCash <- mint issuer usdc alice 2600.0   -- 10 @ her 260 limit
+  bobAsset  <- mint issuer aapl bob   10.0
+
   auctionCid <- submit venue do
     createCmd ClosingAuction with
       operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
@@ -1812,36 +3001,556 @@ testPriceCollar = do
       participants = [alice, bob]; liquidityProvider = None; fixingRef = None
       submittedCount = 0; cancelledCount = 0; isOpen = True
 
-  (a1, aliceBuy) <- submitOrder auctionCid alice Buy  1.0 10000.0 aliceCash
-  (a2, bobSell)  <- submitOrder a1         bob   Sell 1.0 10000.0 bobAsset
+  (a1, aliceBuy) <- submitOrder auctionCid alice Buy  10.0 260.0 aliceCash
+  (a2, bobSell)  <- submitOrder a1         bob   Sell 10.0 250.0 bobAsset
 
-  -- The book genuinely crosses — this is not a no-cross abort. The uncross finds
-  -- 10,000 and would trade a unit there.
-  let buy  q p = BookOrder with side = Buy;  quantity = q; limitPrice = p
-      sell q p = BookOrder with side = Sell; quantity = q; limitPrice = p
-      thin = [buy 1.0 10000.0, sell 1.0 10000.0]
-  fmap (\c -> c.price)       (discoverPrice 255.0 thin) === Some 10000.0
-  fmap (\c -> c.executedQty) (discoverPrice 255.0 thin) === Some 1.0
-  assertMsg "10,000 must be outside a band centred on 255"
-    (not (withinCollar 255.0 10000.0))
+  -- The uncross says 255 and 255 is inside the band, so 255 is what prints — the
+  -- collar did not participate in this close at all.
+  let buy  q p = BookOrder with side = Buy;  quantity = q; limitPrice = Some p
+      sell q p = BookOrder with side = Sell; quantity = q; limitPrice = Some p
+      book = [buy 10.0 260.0, sell 10.0 250.0]
+  fmap (\c -> c.price) (discoverPrice 255.0 book) === Some 255.0
 
-  -- AND THE CLOSE REFUSES TO PRINT IT.
-  sealed <- submit venue do exerciseCmd a2 CloseBidding
-  submitMustFail venue do
+  sealed   <- submit venue do exerciseCmd a2 CloseBidding
+  batchCid <- submit venue do
     exerciseCmd sealed RunClose with buyOrders = [aliceBuy]; sellOrders = [bobSell]
 
-  -- ATOMIC: the collar breach rolled the WHOLE close back. Nobody's leg moved —
-  -- Alice keeps all 10,000 USDC, Bob keeps his AAPL, and no official price exists
-  -- for this session. Aborting and re-running beats printing a number a downstream
-  -- contract would then have to honour.
-  aliceUsd  <- ownedAmount alice usdc
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 255.0
+  length batch.fills === 2
+  -- Full crossed volume, both sides, exactly as before the collar learned to clamp.
   aliceAapl <- ownedAmount alice aapl
+  aliceUsd  <- ownedAmount alice usdc
   bobAapl   <- ownedAmount bob   aapl
   bobUsd    <- ownedAmount bob   usdc
-  aliceUsd  === 10000.0
-  aliceAapl === 0.0
-  bobAapl   === 1.0
-  bobUsd    === 0.0
-  batches <- query @SettlementBatch auditor
-  assertMsg "a collared-out close must leave no settlement batch behind" (null batches)
+  aliceAapl === 10.0
+  aliceUsd  === 50.0
+  bobAapl   === 0.0
+  bobUsd    === 2550.0
+
+-- ===========================================================================
+-- TESTS 18–23 — THE UNPRICED MARKET-ON-CLOSE ORDER.
+-- ===========================================================================
+-- Until now every SealedOrder carried a limit, so every order in this book was
+-- really a LIMIT-on-close — a price SETTER. Real closing volume is overwhelmingly
+-- UNPRICED MOC: index funds tracking a benchmark that is struck AT the official
+-- close, rebalancers whose mandate IS the print, ETF create/redeem flow. They are
+-- price TAKERS, and until `limitPrice` became `Optional Decimal` this venue could
+-- not represent one of them. These six scripts pin down what the order type does.
+-- ===========================================================================
+
+-- ---------------------------------------------------------------------------
+-- TEST 18 — CLASS BEATS PRICE: an unpriced MOC fills ahead of a limit order.
+-- ---------------------------------------------------------------------------
+-- Nasdaq Rule 4754(b)(3) allocates the closing cross by ORDER CLASS → price →
+-- display → time, and rung (A) is verbatim "MOC orders, with time as the secondary
+-- priority". Euronext says it in one sentence (Trading Manual §2.2.7): "during
+-- uncrossing market orders have priority over orders limited at the uncrossing
+-- price." So an MOC does not merely tie with a limit order at the print — it is
+-- allocated BEFORE it, and the limit order can be left with nothing.
+--
+-- Book (AAPL / USDC, anchor 255):
+--   SELL Bob  10 @ 250              BUY Alice 10 UNPRICED (MOC)
+--                                   BUY Carol 10 @ 260   (LOC)
+-- Every candidate trades 10 and leaves the same 10 of unfilled demand, so market
+-- pressure prints at the top of the range: 260. Carol's limit is EXACTLY the print,
+-- which makes hers the marginal level — and the marginal level is what gets rationed.
+-- Alice's MOC takes the whole 10 first, and there is nothing left for Carol.
+--
+-- WHY THE RULE IS RIGHT, NOT JUST WRITTEN DOWN. Alice gave up the only protection
+-- she had — she accepted the print sight unseen. Carol kept hers to the last instant
+-- and is being filled at the very best price she was ever willing to pay. Rank them
+-- equally and no rational index fund ever sends an unpriced order again.
+-- ---------------------------------------------------------------------------
+testMocClassPriority : Script ()
+testMocClassPriority = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  carol <- allocatePartyByHint (PartyIdHint "Carol")
+
+  -- THE ALLOCATION RULE FIRST, AS PURE ARITHMETIC. The MOC is listed SECOND on
+  -- purpose: precedence comes from the CLASS, not from array position, and both
+  -- orders here are eligible at the print.
+  allocateSide Buy 10.0 [("loc260", Some 260.0, 10.0), ("moc", None, 10.0)]
+    === [("moc", 10.0), ("loc260", 0.0)]
+
+  bobAsset  <- mint issuer aapl bob   10.0
+  -- Alice's MOC reserves at the TOP OF THE COLLAR: 10 × (255 + 25.50) = 2,805.
+  aliceCash <- mint issuer usdc alice 2805.0
+  -- Carol's LOC reserves at her own limit: 10 × 260 = 2,600.
+  carolCash <- mint issuer usdc carol 2600.0
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bob, carol]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+
+  (a1, bobSell)  <- submitOrder    auctionCid bob   Sell 10.0 250.0 bobAsset
+  (a2, aliceBuy) <- submitMocOrder a1         alice Buy  10.0       aliceCash
+  (a3, carolBuy) <- submitOrder    a2         carol Buy  10.0 260.0 carolCash
+
+  sealed   <- submit venue do exerciseCmd a3 CloseBidding
+  batchCid <- submit venue do
+    exerciseCmd sealed RunClose with
+      buyOrders  = [aliceBuy, carolBuy]
+      sellOrders = [bobSell]
+
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 260.0
+  -- TWO fill records: Alice's buy and Bob's sell. Carol traded nothing at all.
+  length batch.fills === 2
+  assertMsg "the limit order at the print must not appear in the batch"
+    (null (filter (\f -> f.buyer == carol) batch.fills))
+
+  -- THE MOC TOOK THE WHOLE CROSS. Alice bought all 10 at 260 (2,600) and got the
+  -- 205 of change back off the collar-sized reservation she never had to spend.
+  aliceAapl <- ownedAmount alice aapl
+  aliceUsd  <- ownedAmount alice usdc
+  aliceAapl === 10.0
+  aliceUsd  === 205.0
+  -- CAROL GOT NOTHING, AND LOST NOTHING. Her order was allocated zero, so it is
+  -- cleared off the book exactly like any other order that did not trade, and every
+  -- cent she committed is still hers — the archive touches the ORDER, never the
+  -- balance. Being outranked is not being charged.
+  assertMsg "an outranked limit order is cancelled on close, not left resting" . isNone
+    =<< queryContractId venue carolBuy
+  carolAapl <- ownedAmount carol aapl
+  carolUsd  <- ownedAmount carol usdc
+  carolAapl === 0.0
+  carolUsd  === 2600.0
+  -- Bob sold his 10 at the print.
+  bobUsd  <- ownedAmount bob usdc
+  bobAapl <- ownedAmount bob aapl
+  bobUsd  === 2600.0
+  bobAapl === 0.0
+
+-- ---------------------------------------------------------------------------
+-- TEST 19 — AN ALL-UNPRICED BOOK PRINTS AT THE ANCHOR.
+-- ---------------------------------------------------------------------------
+-- MOC against MOC contains NO PRICE INFORMATION. Nobody in the book has expressed a
+-- view; every participant has said "give me the close, whatever it is". There is
+-- nothing for a volume-maximising search to maximise over, because every price
+-- trades exactly the same quantity. Both European venues publish the same answer:
+--   Xetra T7 §11.1.1 step 5: "If only market orders are executable against one
+--     another, they are matched at the reference price."
+--   Euronext Trading Manual §3.1: the same rule, same wording.
+-- So the print is the venue's anchor, and the volume is min(unpriced buys, unpriced
+-- sells). `discoverPrice` handles it as its own explicit branch — with no limits in
+-- the book there are no candidate prices to draw from, so the anchor is the only
+-- price in play.
+--
+-- Book (AAPL / USDC, anchor 255):  BUY Alice 5 UNPRICED   SELL Bob 8 UNPRICED
+-- ---------------------------------------------------------------------------
+testAllUnpricedBookPrintsAtAnchor : Script ()
+testAllUnpricedBookPrintsAtAnchor = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  -- THE ARITHMETIC FIRST. Five units trade at the anchor and three are stranded on
+  -- the sell side — and the print follows the anchor wherever the venue puts it,
+  -- because the orders have said nothing to contradict it.
+  let mktBuy  q = BookOrder with side = Buy;  quantity = q; limitPrice = None
+      mktSell q = BookOrder with side = Sell; quantity = q; limitPrice = None
+      priceOf   = fmap (\c -> c.price)
+      allMoc    = [mktBuy 5.0, mktSell 8.0]
+  discoverPrice 255.0 allMoc === Some (CrossResult with
+    price = 255.0; executedQty = 5.0; buyVolume = 5.0; sellVolume = 8.0; imbalance = -3.0)
+  priceOf (discoverPrice 100.0 allMoc) === Some 100.0    -- same book, anchor moved
+  -- And an all-unpriced book with only ONE side still does not cross: nobody to
+  -- trade with is nobody to trade with, whatever the order type.
+  discoverPrice 255.0 [mktBuy 5.0] === None
+
+  -- Alice's MOC reserves at the top of the collar: 5 × (255 + 25.50) = 1,402.50.
+  aliceCash <- mint issuer usdc alice 1402.5
+  bobAsset  <- mint issuer aapl bob   8.0
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bob]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+
+  (a1, aliceBuy) <- submitMocOrder auctionCid alice Buy  5.0 aliceCash
+  (a2, bobSell)  <- submitMocOrder a1         bob   Sell 8.0 bobAsset
+
+  sealed   <- submit venue do exerciseCmd a2 CloseBidding
+  batchCid <- submit venue do
+    exerciseCmd sealed RunClose with buyOrders = [aliceBuy]; sellOrders = [bobSell]
+
+  -- THE PRINT IS THE ANCHOR, and it is the only honest answer available.
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 255.0
+  length batch.fills === 2
+
+  -- Alice bought 5 at 255 (1,275) and got 127.50 of change back off the collar-sized
+  -- reservation. Bob sold 5 of the 8 he offered — the unpriced sell side was the
+  -- heavy one and is rationed down to the crossed volume — and keeps the other 3.
+  aliceAapl <- ownedAmount alice aapl
+  aliceUsd  <- ownedAmount alice usdc
+  bobAapl   <- ownedAmount bob   aapl
+  bobUsd    <- ownedAmount bob   usdc
+  aliceAapl === 5.0
+  aliceUsd  === 127.5
+  bobAapl   === 3.0
+  bobUsd    === 1275.0
+
+-- ---------------------------------------------------------------------------
+-- TEST 20 — THE WHOLE LADDER ON ONE BOOK.
+-- ---------------------------------------------------------------------------
+-- Class → price → margin, all three rungs visible in a single close:
+--   (a) the UNPRICED MOC fills in full, ahead of everything;
+--   (b) the limit priced THROUGH the print fills in full;
+--   (c) the limit AT the print is the marginal level, and is the only one rationed.
+--
+-- Book (AAPL / USDC, anchor 255):
+--   SELL Bob 15 @ 250        BUY Alice  5 UNPRICED (MOC)
+--                            BUY Carol  5 @ 260    (through the print)
+--                            BUY Dave  10 @ 255    (AT the print — the margin)
+-- 20 units of demand into 15 of supply. 250 and 255 both trade 15 and both leave the
+-- same 5 of unfilled demand; every survivor is buy-heavy, so market pressure prints
+-- at the top of them — 255. The buy side is therefore rationed, but NOT uniformly:
+-- Alice 5 (class), Carol 5 (price), Dave 5 of his 10 (the margin).
+-- ---------------------------------------------------------------------------
+testMocLocLadderEndToEnd : Script ()
+testMocLocLadderEndToEnd = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  carol <- allocatePartyByHint (PartyIdHint "Carol")
+  dave  <- allocatePartyByHint (PartyIdHint "Dave")
+
+  -- THE LADDER AS PURE ARITHMETIC, before a single leg moves.
+  allocateSide Buy 15.0
+    [("dave255", Some 255.0, 10.0), ("carol260", Some 260.0, 5.0), ("aliceMoc", None, 5.0)]
+    === [("aliceMoc", 5.0), ("carol260", 5.0), ("dave255", 5.0)]
+
+  bobAsset  <- mint issuer aapl bob   15.0
+  aliceCash <- mint issuer usdc alice 1402.5   -- MOC:  5 × (255 + 25.50)
+  carolCash <- mint issuer usdc carol 1300.0   -- LOC:  5 × 260
+  daveCash  <- mint issuer usdc dave  2550.0   -- LOC: 10 × 255
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bob, carol, dave]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+
+  (a1, bobSell)  <- submitOrder    auctionCid bob   Sell 15.0 250.0 bobAsset
+  (a2, aliceBuy) <- submitMocOrder a1         alice Buy   5.0       aliceCash
+  (a3, carolBuy) <- submitOrder    a2         carol Buy   5.0 260.0 carolCash
+  (a4, daveBuy)  <- submitOrder    a3         dave  Buy  10.0 255.0 daveCash
+
+  sealed   <- submit venue do exerciseCmd a4 CloseBidding
+  batchCid <- submit venue do
+    exerciseCmd sealed RunClose with
+      buyOrders  = [aliceBuy, carolBuy, daveBuy]
+      sellOrders = [bobSell]
+
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 255.0
+  length batch.fills === 4          -- 3 buys + 1 sell; everybody traded something
+  assertMsg "every fill prints at the ONE discovered price"
+    (all (\f -> f.price == 255.0) batch.fills)
+
+  -- (a) THE MOC FILLED IN FULL — 5 at 255 = 1,275, with 127.50 of change back off
+  --     the collar-sized reservation it never had to spend.
+  aliceAapl <- ownedAmount alice aapl
+  aliceUsd  <- ownedAmount alice usdc
+  aliceAapl === 5.0
+  aliceUsd  === 127.5
+  -- (b) THROUGH THE PRINT FILLED IN FULL — Carol bid 260 into a 255 print, so she is
+  --     guaranteed to participate and takes all 5, paying 1,275 with 25 back.
+  carolAapl <- ownedAmount carol aapl
+  carolUsd  <- ownedAmount carol usdc
+  carolAapl === 5.0
+  carolUsd  === 25.0
+  -- (c) THE MARGINAL LEVEL WAS RATIONED — Dave bid AT the print, so his is the level
+  --     the crossed volume ran out on: 5 of his 10 fill, and the 1,275 he did not
+  --     spend comes straight back to him.
+  daveAapl <- ownedAmount dave aapl
+  daveUsd  <- ownedAmount dave usdc
+  daveAapl === 5.0
+  daveUsd  === 1275.0
+  -- The fill records say the same thing the balances do.
+  let aliceFill = head (filter (\f -> f.buyer == alice) batch.fills)
+      carolFill = head (filter (\f -> f.buyer == carol) batch.fills)
+      daveFill  = head (filter (\f -> f.buyer == dave ) batch.fills)
+  aliceFill.quantity === 5.0
+  carolFill.quantity === 5.0
+  daveFill.quantity  === 5.0
+  -- The light side filled in full: Bob sold all 15 at 255 for 3,825.
+  bobAapl <- ownedAmount bob aapl
+  bobUsd  <- ownedAmount bob usdc
+  bobAapl === 0.0
+  bobUsd  === 3825.0
+
+-- ---------------------------------------------------------------------------
+-- TEST 21 — THE CRUX: AN UNPRICED BUY FUNDED WHEN THE PRINT LANDS ABOVE THE ANCHOR.
+-- ---------------------------------------------------------------------------
+-- THE PROBLEM THAT KEPT MOC OFF THIS VENUE. A sealed order pre-commits the holding
+-- it will deliver, and the amount is pinned at SUBMISSION time — before a price
+-- exists. A limited buy is easy: it can only ever execute at or inside its own limit,
+-- so `quantity × limitPrice` is an exact worst case. AN UNPRICED BUY HAS NO LIMIT AND
+-- THEREFORE NO NATURAL BOUND ON WHAT IT MAY OWE. Reserve at the anchor and the buyer
+-- is short the instant the book uncrosses above it — which is not an edge case, it is
+-- an ordinary buy-heavy close.
+--
+-- THE ANSWER IS THE COLLAR. The print is not unbounded here: `RunClose` will not
+-- settle outside `anchor ± collarBand anchor`. So the highest price this auction can
+-- LEGALLY print is `anchor + collarBand anchor`, and reserving there is sufficient BY
+-- CONSTRUCTION — either the print is inside the band and the reservation covers it,
+-- or nothing settles at all and the buyer keeps every cent. A risk control written
+-- for price integrity turns out to be exactly the bound that makes an unpriced order
+-- fundable.
+--
+-- Book (AAPL / USDC, anchor 100 → band ±10 → the close may print anywhere in
+-- [90, 110]):
+--   BUY Alice 10 UNPRICED       SELL Bob 10 @ 110
+-- At the anchor Bob's offer is not eligible and NOTHING trades. The only crossing
+-- price is 110 — the very top of the band, 10% above the anchor. Alice reserved
+-- 10 × 110 = 1,100 and owes exactly 1,100: the bound is not merely sufficient, it is
+-- TIGHT. She is minted exactly that and not a cent more, so the close can only settle
+-- if the collar-sized reservation was right.
+-- ---------------------------------------------------------------------------
+testUnpricedBuyFundedAboveTheAnchor : Script ()
+testUnpricedBuyFundedAboveTheAnchor = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  -- The band, as arithmetic: 10% of a 100 anchor beats the $0.50 floor, so the close
+  -- may legally print as high as 110 — and that is the number the reservation uses.
+  collarBand 100.0 === 10.0
+  assertMsg "the top of the band must be printable"      (withinCollar 100.0 110.0)
+  assertMsg "a hair above the band must not be printable" (not (withinCollar 100.0 110.01))
+
+  -- EXACTLY the collar-sized reservation, and not one cent of slack: 10 × 110.
+  aliceCash <- mint issuer usdc alice 1100.0
+  bobAsset  <- mint issuer aapl bob   10.0
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 100.0
+      participants = [alice, bob]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+
+  (a1, aliceBuy) <- submitMocOrder auctionCid alice Buy  10.0       aliceCash
+  (a2, bobSell)  <- submitOrder    a1         bob   Sell 10.0 110.0 bobAsset
+
+  sealed   <- submit venue do exerciseCmd a2 CloseBidding
+  batchCid <- submit venue do
+    exerciseCmd sealed RunClose with buyOrders = [aliceBuy]; sellOrders = [bobSell]
+
+  -- THE PRINT IS 10% ABOVE THE ANCHOR — the highest the collar allows — and the
+  -- close settled anyway, because the reservation was sized on that same bound.
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 110.0
+  batch.closingPrice === 100.0 + collarBand 100.0
+  length batch.fills === 2
+
+  -- THE COUNTERFACTUAL, STATED AS ARITHMETIC. Reserving at the anchor would have
+  -- pinned 1,000 against a bill of 1,100 — the buyer short by 100, the pledge
+  -- refused, and the WHOLE close aborted for everybody in the book.
+  let anchorSizedReserve = (10.0 * 100.0 : Decimal)
+      actualCost         = (10.0 * 110.0 : Decimal)
+  assertMsg "reserving at the ANCHOR would have left the MOC buyer short"
+    (anchorSizedReserve < actualCost)
+
+  -- Alice owns the close: 10 units, and every cent of the reservation spent, with no
+  -- change and — crucially — no shortfall.
+  aliceAapl <- ownedAmount alice aapl
+  aliceUsd  <- ownedAmount alice usdc
+  aliceAapl === 10.0
+  aliceUsd  === 0.0
+  bobAapl <- ownedAmount bob aapl
+  bobUsd  <- ownedAmount bob usdc
+  bobAapl === 0.0
+  bobUsd  === 1100.0
+
+-- ---------------------------------------------------------------------------
+-- TEST 22 — UNPRICED INTEREST BIGGER THAN THE CROSS RATIONS AMONG THE UNPRICED.
+-- ---------------------------------------------------------------------------
+-- Nasdaq Rule 4754(b)(3) rung (A) allocates MOC first "with time as the secondary
+-- priority" — so when unpriced interest ALONE exceeds the crossed volume, the
+-- rationing happens INSIDE the MOC class and nothing priced fills at all. That is not
+-- a corner case: an index reconstitution day is exactly a book where the unpriced
+-- side dwarfs everything else.
+--
+-- CrossDesk rations that level pro-rata BY SIZE rather than on time, for the reason
+-- given in the module header: a SealedOrder carries no on-ledger arrival timestamp,
+-- so the only "time" available at the close is the order of the array the OPERATOR
+-- hands to RunClose — and rationing on that would let the venue choose who fills by
+-- permuting a list. Pro-rata by size is invariant to that permutation.
+--
+-- Book (AAPL / USDC, anchor 255):
+--   SELL Bob 10 @ 250     BUY Alice 10 UNPRICED   BUY Carol 30 UNPRICED
+--                         BUY Dave  10 @ 260 (LOC — behind BOTH of them)
+-- Every candidate trades 10 and is buy-heavy by 40, so the print goes to the top:
+-- 260. Forty units of unpriced demand chase ten units of supply: Alice takes
+-- 10 × 10/40 = 2.5, Carol takes 30 × 10/40 = 7.5, and Dave — bidding 260 INTO a 260
+-- print, the best price he could possibly have named — gets nothing.
+-- ---------------------------------------------------------------------------
+testUnpricedInterestRationedProRata : Script ()
+testUnpricedInterestRationedProRata = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  carol <- allocatePartyByHint (PartyIdHint "Carol")
+  dave  <- allocatePartyByHint (PartyIdHint "Dave")
+
+  -- PURE ARITHMETIC FIRST: pro-rata WITHIN the unpriced class, zero for the limit.
+  allocateSide Buy 10.0
+    [("mocA", None, 10.0), ("mocC", None, 30.0), ("loc260", Some 260.0, 10.0)]
+    === [("mocA", 2.5), ("mocC", 7.5), ("loc260", 0.0)]
+
+  bobAsset  <- mint issuer aapl bob   10.0
+  aliceCash <- mint issuer usdc alice 2805.0   -- MOC: 10 × (255 + 25.50)
+  carolCash <- mint issuer usdc carol 8415.0   -- MOC: 30 × (255 + 25.50)
+  daveCash  <- mint issuer usdc dave  2600.0   -- LOC: 10 × 260
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bob, carol, dave]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+
+  (a1, bobSell)  <- submitOrder    auctionCid bob   Sell 10.0 250.0 bobAsset
+  (a2, aliceBuy) <- submitMocOrder a1         alice Buy  10.0       aliceCash
+  (a3, carolBuy) <- submitMocOrder a2         carol Buy  30.0       carolCash
+  (a4, daveBuy)  <- submitOrder    a3         dave  Buy  10.0 260.0 daveCash
+
+  sealed   <- submit venue do exerciseCmd a4 CloseBidding
+  batchCid <- submit venue do
+    exerciseCmd sealed RunClose with
+      buyOrders  = [aliceBuy, carolBuy, daveBuy]
+      sellOrders = [bobSell]
+
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 260.0
+  length batch.fills === 3          -- 2 unpriced buys + 1 sell. Dave is not there.
+
+  -- PRO-RATA BY SIZE INSIDE THE CLASS: 10 and 30 share the 10 that crossed, and the
+  -- two fills sum EXACTLY to the crossed volume.
+  let aliceFill = head (filter (\f -> f.buyer == alice) batch.fills)
+      carolFill = head (filter (\f -> f.buyer == carol) batch.fills)
+  aliceFill.quantity === 2.5
+  carolFill.quantity === 7.5
+  (aliceFill.quantity + carolFill.quantity) === 10.0
+
+  aliceAapl <- ownedAmount alice aapl
+  carolAapl <- ownedAmount carol aapl
+  aliceAapl === 2.5
+  carolAapl === 7.5
+  -- Change back off the collar-sized reservations: Alice spent 2.5 × 260 = 650 of
+  -- 2,805; Carol spent 7.5 × 260 = 1,950 of 8,415.
+  aliceUsd <- ownedAmount alice usdc
+  carolUsd <- ownedAmount carol usdc
+  aliceUsd === 2155.0
+  carolUsd === 6465.0
+
+  -- THE LIMIT ORDER BEHIND THEM GETS NOTHING — and is charged nothing. Dave bid the
+  -- print exactly and was still outranked by the class above him; his order is
+  -- cleared off the book and all 2,600 he committed is still his.
+  assertMsg "a limit order behind unpriced interest is cancelled on close" . isNone
+    =<< queryContractId venue daveBuy
+  daveAapl <- ownedAmount dave aapl
+  daveUsd  <- ownedAmount dave usdc
+  daveAapl === 0.0
+  daveUsd  === 2600.0
+
+  -- Bob sold his 10 at the print.
+  bobUsd <- ownedAmount bob usdc
+  bobUsd === 2600.0
+
+-- ---------------------------------------------------------------------------
+-- TEST 23 — AN UNPRICED ORDER IS NEVER "AWAY FROM THE CROSS".
+-- ---------------------------------------------------------------------------
+-- The close splits the book into interest that trades and interest that is CANCELLED
+-- for sitting away from the print. An unpriced order can never be on the wrong side
+-- of that split, because there is no price at which a market order is off-price —
+-- that is the whole content of the order type. It has to be true in all three places
+-- the close asks the question (the uncross's volume count, the eligibility split, and
+-- the pledge's own assert), which is why all three now read from ONE `eligibleAt`.
+--
+-- Book (AAPL / USDC, anchor 250 → band ±25):
+--   BUY  Alice 10 @ 230      SELL Bob   10 UNPRICED (MOC)
+--                            SELL Carol 10 @ 245    (LOC)
+-- The only price that trades anything is 230 — twenty points below the anchor and
+-- fifteen below Carol's limit. Carol is away from the cross and is cancelled. BOB
+-- TRADES ANYWAY, at a price he never named and would very likely not have named,
+-- because that is what he asked for: the close, whatever it is. That is the MOC
+-- bargain in one line, and it is why an MOC must never be cancelled for being
+-- off-price — there is no such thing.
+-- ---------------------------------------------------------------------------
+testMocIsNeverAwayFromTheCross : Script ()
+testMocIsNeverAwayFromTheCross = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  carol <- allocatePartyByHint (PartyIdHint "Carol")
+
+  -- WILLING AT ANY PRICE, AS ARITHMETIC. Sweep the candidate price from absurdly low
+  -- to absurdly high: the unpriced sell is counted at BOTH ends, and the limited sell
+  -- beside it only appears once the price reaches its limit. The MOC is the constant.
+  let buy   q p = BookOrder with side = Buy;  quantity = q; limitPrice = Some p
+      sell  q p = BookOrder with side = Sell; quantity = q; limitPrice = Some p
+      mktSell q = BookOrder with side = Sell; quantity = q; limitPrice = None
+      book      = [mktSell 10.0, sell 10.0 245.0, buy 10.0 230.0]
+  (crossAt book      1.0).sellVolume === 10.0     -- only the MOC is in down here
+  (crossAt book 100000.0).sellVolume === 20.0     -- the limit joins it up here
+  fmap (\c -> c.price) (discoverPrice 250.0 book) === Some 230.0
+
+  aliceCash  <- mint issuer usdc alice 2300.0   -- LOC: 10 × 230
+  bobAsset   <- mint issuer aapl bob   10.0     -- an MOC sell reserves the ASSET, as always
+  carolAsset <- mint issuer aapl carol 10.0
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 250.0
+      participants = [alice, bob, carol]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+
+  (a1, aliceBuy)  <- submitOrder    auctionCid alice Buy  10.0 230.0 aliceCash
+  (a2, bobSell)   <- submitMocOrder a1         bob   Sell 10.0       bobAsset
+  (a3, carolSell) <- submitOrder    a2         carol Sell 10.0 245.0 carolAsset
+
+  sealed   <- submit venue do exerciseCmd a3 CloseBidding
+  batchCid <- submit venue do
+    exerciseCmd sealed RunClose with
+      buyOrders  = [aliceBuy]
+      sellOrders = [bobSell, carolSell]
+
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 230.0
+  length batch.fills === 2
+
+  -- THE MOC TRADED, twenty points below the anchor and at a price it never named.
+  let bobFill = head (filter (\f -> f.seller == bob) batch.fills)
+  bobFill.quantity === 10.0
+  bobFill.price    === 230.0
+  bobAapl <- ownedAmount bob aapl
+  bobUsd  <- ownedAmount bob usdc
+  bobAapl === 0.0
+  bobUsd  === 2300.0
+
+  -- THE LIMIT ORDER BESIDE IT DID NOT. Carol's 245 offer is away from the 230 cross,
+  -- so she gets no fill record and her order is cancelled on close — she keeps all 10
+  -- units. Same side, same size, same book: the ONLY difference is the order type.
+  assertMsg "an away-from-the-cross LIMIT sell must be cancelled on close" . isNone
+    =<< queryContractId venue carolSell
+  assertMsg "the away-from-the-cross order must have no fill record"
+    (null (filter (\f -> f.seller == carol) batch.fills))
+  carolAapl <- ownedAmount carol aapl
+  carolUsd  <- ownedAmount carol usdc
+  carolAapl === 10.0
+  carolUsd  === 0.0
+
+  -- Alice bought her 10 at her own limit, spending the whole reservation.
+  aliceAapl <- ownedAmount alice aapl
+  aliceUsd  <- ownedAmount alice usdc
+  aliceAapl === 10.0
+  aliceUsd  === 0.0
 

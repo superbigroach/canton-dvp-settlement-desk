@@ -7,6 +7,8 @@ import com.lucilla.settlement.model.marketonclose.ClosingAuction;
 import com.lucilla.settlement.model.marketonclose.ImbalanceDisclosure;
 import com.lucilla.settlement.model.marketonclose.SealedOrder;
 import com.lucilla.settlement.model.marketonclose.Side;
+import com.lucilla.settlement.model.liquiditymandate.LiquidityMandate;
+import com.lucilla.settlement.model.liquiditymandate.MandateTerms;
 import com.lucilla.settlement.model.settlement.DvPAgreement;
 import com.lucilla.settlement.model.settlement.DvPProposal;
 import com.lucilla.settlement.model.settlement.SettlementBatch;
@@ -22,6 +24,7 @@ import com.lucilla.settlement.model.basket.RedemptionAgreement;
 import com.lucilla.settlement.model.basket.BasketReceipt;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -100,10 +103,16 @@ public final class LedgerCommands {
     // ---- Market-on-Close auction ------------------------------------------
 
     /**
-     * Open a ClosingAuction. {@code liquidityProvider} optionally designates ONE
-     * party as the auction's Designated Liquidity Provider — the only party (besides
-     * the venue) the net imbalance is ever disclosed to (see {@link #publishImbalance}).
-     * Pass {@link Optional#empty()} for a plain dark-pool auction with no DLP.
+     * Open a ClosingAuction.
+     *
+     * <p><b>{@code liquidityProvider} IS NOW INERT.</b> The field still exists on
+     * {@code ClosingAuction} — it is part of the frozen field list — but no ledger
+     * code reads it any more. Imbalance disclosure is gated on a live
+     * {@code LiquidityMandate} the recipient SIGNED (see {@link #publishImbalance}),
+     * not on a party name the venue wrote unilaterally into its own contract. Whatever
+     * is passed here designates nobody and buys nobody anything; the seat is taken by
+     * accepting {@link #postMandateTerms posted terms}. Kept for wire compatibility
+     * and because the field is still displayed as historical context.
      */
     public static Update<?> createAuction(
             String operator, String auditor, String instrumentId, String cashInstrument,
@@ -151,18 +160,140 @@ public final class LedgerCommands {
      * {@code closingAuctionTemplateId()}) into the next call, or they will exercise a
      * consumed contract.
      *
-     * <p>The trader's backing is reserved by the ledger at
-     * {@code quantity * limitPrice} for a BUY (never {@code referencePrice} — the
-     * cross is discovered from the book and can print above the anchor) and at
-     * {@code quantity} of the asset for a SELL. Fund the committed holding
-     * accordingly.
+     * <p><b>THE ORDER TYPE IS THE {@code limitPrice} OPTIONAL.</b>
+     * {@code Optional.of(p)} is a LIMIT-ON-CLOSE (LOC) and behaves exactly as before;
+     * {@link Optional#empty()} is an unpriced MARKET-ON-CLOSE (MOC) — "fill me at the
+     * close, whatever it is". An MOC counts at every candidate price, ranks ahead of
+     * every limit order, and is never cancelled for being away from the cross.
+     *
+     * <p>The trader's backing is reserved by the ledger at:
+     * <ul>
+     *   <li>SELL — {@code quantity} of the ASSET, price-independent, MOC or LOC alike;</li>
+     *   <li>LIMITED BUY — {@code quantity * limitPrice} of cash (never
+     *       {@code referencePrice}: the cross is discovered from the book and can print
+     *       above the anchor);</li>
+     *   <li>UNPRICED BUY — {@code quantity *} {@link #collarHigh(BigDecimal)} of the
+     *       anchor, because an MOC has no limit of its own and the venue's price collar
+     *       is the only bound on what it can be asked to pay. Size the committed
+     *       holding with {@link #buyReservation(Optional, BigDecimal, BigDecimal)}.</li>
+     * </ul>
      */
     public static Update<?> submitOrder(
             String auctionCid, String trader, Side side,
-            BigDecimal quantity, BigDecimal limitPrice, String holdingCid) {
+            BigDecimal quantity, Optional<BigDecimal> limitPrice, String holdingCid) {
         return new ClosingAuction.ContractId(auctionCid)
                 .exerciseSubmitOrder(trader, side, quantity, limitPrice,
                         new Holding.ContractId(holdingCid));
+    }
+
+    // ---- The venue price collar (MIRRORED from MarketOnClose.daml) ----------
+    //
+    // These four numbers exist on the ledger and are re-stated here for ONE reason:
+    // sizing an unpriced BUY's cash reservation BEFORE the order is sent. They must
+    // stay in step with `collarBps` / `collarFloor` / `collarBand` in
+    // daml/MarketOnClose.daml — if the model's constants move, move these.
+    //
+    // Nasdaq's construction: the band is the GREATER of a percentage of the anchor and
+    // an absolute floor (a pure percentage is meaningless on a low-priced instrument).
+
+    /** Half-width of the collar in basis points of the anchor (Daml: {@code collarBps}). */
+    public static final BigDecimal COLLAR_BPS = new BigDecimal("1000");
+
+    /** Absolute floor on the collar half-width (Daml: {@code collarFloor}). */
+    public static final BigDecimal COLLAR_FLOOR = new BigDecimal("0.50");
+
+    private static final BigDecimal BASIS_POINTS = new BigDecimal("10000");
+
+    /**
+     * Daml {@code Decimal} is fixed at 10 decimal places and its arithmetic rounds
+     * half-EVEN, so every mirrored calculation below rounds the same way. Matching the
+     * ledger bit-for-bit matters: this figure is compared against a trader's balance,
+     * and a reservation a hair ABOVE the ledger's own would reject a fundable order
+     * while one a hair BELOW would provision a holding the ledger then rejects.
+     */
+    private static final int DECIMAL_SCALE = 10;
+
+    private static BigDecimal damlDecimal(BigDecimal v) {
+        return v.setScale(DECIMAL_SCALE, java.math.RoundingMode.HALF_EVEN);
+    }
+
+    /**
+     * The collar's half-width around {@code anchor}: {@code max(floor, anchor * bps)}
+     * (Daml: {@code collarBand}).
+     */
+    public static BigDecimal collarBand(BigDecimal anchor) {
+        BigDecimal pct = damlDecimal(damlDecimal(anchor.multiply(COLLAR_BPS))
+                .divide(BASIS_POINTS, DECIMAL_SCALE, java.math.RoundingMode.HALF_EVEN));
+        return pct.max(COLLAR_FLOOR);
+    }
+
+    /**
+     * The HIGHEST price this auction can legally print: {@code anchor + collarBand}.
+     *
+     * <p>This is the bound that makes an unpriced BUY fundable at all. {@code RunClose}
+     * clamps the discovered price into {@code anchor ± collarBand anchor}, so no close
+     * can present an MOC buyer with a price above this — reserving here is sufficient
+     * BY CONSTRUCTION, and because the boundary is a REACHABLE print it is also tight,
+     * exactly the way a limit is tight for an LOC. Unspent cash returns as change.
+     */
+    public static BigDecimal collarHigh(BigDecimal anchor) {
+        return anchor.add(collarBand(anchor));
+    }
+
+    /**
+     * Cash a BUY must have committed before it can rest in the book — <b>the one
+     * formula every buying-power pre-check must use</b>.
+     *
+     * <p>{@code limitPrice} present (LOC) → {@code quantity * limit}: a limited buy can
+     * only ever execute at or inside its own limit. {@code limitPrice} empty (MOC) →
+     * {@code quantity * collarHigh(anchor)}: an unpriced buy has no limit, so the top of
+     * the venue's collar is its worst case. Using {@code quantity * anchor} for an MOC
+     * UNDER-states the requirement and using {@code quantity * limit} is not even
+     * defined — either way the check wrongly rejects, or wrongly accepts, orders the
+     * ledger would not.
+     */
+    public static BigDecimal buyReservation(
+            Optional<BigDecimal> limitPrice, BigDecimal anchor, BigDecimal quantity) {
+        BigDecimal worstPrice = limitPrice.orElseGet(() -> collarHigh(anchor));
+        return damlDecimal(quantity.multiply(worstPrice));
+    }
+
+    /**
+     * Resolve the ORDER TYPE from a REST payload into the ledger's {@code Optional}.
+     *
+     * <p>The wire carries two hints — an optional {@code orderType} discriminator and an
+     * optional {@code limitPrice} — and this is the single place they are reconciled:
+     * <ul>
+     *   <li>no discriminator → INFER: a stated limit is an LOC, <b>an absent or null
+     *       limit is an MOC</b>. An unpriced order is a first-class order type, never a
+     *       malformed one, so the absent case is a market order and not a rejection;</li>
+     *   <li>{@code Market} / {@code MOC} / {@code Mkt} → unpriced, whatever was sent in
+     *       {@code limitPrice} (the ticket hides the field in Market mode);</li>
+     *   <li>{@code Limit} / {@code LOC} / {@code Lmt} → priced, and here a MISSING price
+     *       genuinely is malformed: the caller asserted a limit order and then named no
+     *       limit. That is a contradiction in the request itself, not an absent field
+     *       to be defaulted.</li>
+     * </ul>
+     */
+    public static Optional<BigDecimal> orderType(String rawType, BigDecimal limitPrice) {
+        String t = rawType == null ? "" : rawType.trim().toLowerCase();
+        if (t.isEmpty()) {
+            return Optional.ofNullable(limitPrice);
+        }
+        switch (t) {
+            case "market", "moc", "moo", "mkt":
+                return Optional.empty();
+            case "limit", "loc", "lmt":
+                if (limitPrice == null) {
+                    throw new IllegalArgumentException(
+                            "orderType=Limit requires a limitPrice (omit orderType, or send "
+                                    + "orderType=Market, for an unpriced market-on-close order)");
+                }
+                return Optional.of(limitPrice);
+            default:
+                throw new IllegalArgumentException(
+                        "orderType must be Market or Limit, got: " + rawType);
+        }
     }
 
     /** Seal the order window; returns the new (sealed) auction contract id. */
@@ -230,19 +361,106 @@ public final class LedgerCommands {
 
     /**
      * Compute the NET imbalance of the resting book and disclose ONLY that aggregate
-     * to the auction's Designated Liquidity Provider (operator-controlled). The DLP —
-     * and only the DLP — will observe the resulting {@link ImbalanceDisclosure}; the
-     * individual orders are never copied onto it.
+     * to the provider named on {@code mandateCid} — nobody else observes the resulting
+     * {@link ImbalanceDisclosure}, and the individual orders are never copied onto it.
+     *
+     * <p><b>THE MANDATE IS THE GATE, and it is not optional.</b> The auction's
+     * {@code liquidityProvider} field is no longer read by the ledger: disclosure now
+     * requires a LIVE {@code LiquidityMandate} covering exactly this book — same venue,
+     * instrument, cash leg and session — whose {@code anchorPrice} equals the auction's
+     * published {@code referencePrice}, held by a registered participant. A provider
+     * cannot read the residual and then decide whether to be obligated about it; it
+     * signed the obligation first, blind, and the number is what the obligation is for.
+     *
+     * <p><b>THIS CONSUMES THE MANDATE.</b> {@code PublishImbalance} is nonconsuming on
+     * the auction but stamps what was shown onto the mandate (via {@code NoteDisclosure}),
+     * which archives it and creates a successor — and the choice returns only the
+     * disclosure cid. So a caller publishing twice to the same provider MUST re-read
+     * that provider's mandate in between; never cache one across calls. The resolution
+     * is server-side by design (see {@code SettlementController.resolveMandate}): a raw
+     * contract id from an untrusted client is not an authorisation.
      */
-    public static Update<?> publishImbalance(String auctionCid, List<String> restingOrderCids) {
+    public static Update<?> publishImbalance(
+            String auctionCid, List<String> restingOrderCids, String mandateCid) {
         List<SealedOrder.ContractId> resting = restingOrderCids.stream()
                 .map(SealedOrder.ContractId::new).toList();
-        return new ClosingAuction.ContractId(auctionCid).exercisePublishImbalance(resting);
+        return new ClosingAuction.ContractId(auctionCid)
+                .exercisePublishImbalance(resting, new LiquidityMandate.ContractId(mandateCid));
     }
 
     /** Archive a stale imbalance disclosure (operator is its sole signatory). */
     public static Update<?> archiveImbalance(String disclosureCid) {
         return new ImbalanceDisclosure.ContractId(disclosureCid).exerciseArchive();
+    }
+
+    // ---- The contestable liquidity mandate: terms -> acceptance -> obligation ---
+    //
+    // The seat that buys sight of the imbalance is POSTED, not awarded. `MandateTerms`
+    // is an open offer observable by every registered participant; `AcceptTerms` is
+    // controlled by the PROVIDER, so the venue consents once, publicly, to whoever
+    // shows up rather than privately to one name. Several providers may hold live
+    // mandates over the same book at the same time and all are shown the same number.
+
+    /**
+     * The venue's DEFAULT posted commitment, in units of the instrument.
+     *
+     * <p>These two constants are the terms this desk posts when it opens a book
+     * unattended (see {@code SettlementController.ensureMandateTerms}); a venue that
+     * wants different numbers posts them explicitly through
+     * {@code POST /api/moc/mandate/terms}. They are deliberately modest: the point of
+     * the offer is that entry is CHEAP, and a commitment nobody can meet is a seat
+     * nobody contests.
+     */
+    public static final BigDecimal DEFAULT_COMMITMENT_SIZE = new BigDecimal("5");
+
+    /** The default band a posted provider undertakes to stand in: 200bps of the anchor. */
+    public static final long DEFAULT_MAX_BAND_BPS = 200L;
+
+    /**
+     * Post an open offer of the liquidity seat for one book (operator-signed).
+     *
+     * <p>{@code accepted} and {@code barred} always start EMPTY — they are ledger
+     * facts that only {@code AcceptTerms} and {@code BarProvider} may move, and a
+     * client that could seed them could pre-bar a competitor. {@code anchorPrice} must
+     * equal the auction's published {@code referencePrice}: the band a provider
+     * promises to stand in is measured from the number the venue published, so a
+     * mandate struck against any other anchor is a promise about a different auction
+     * and {@code PublishImbalance} rejects it.
+     */
+    public static Update<?> postMandateTerms(
+            String operator, String auditor, String instrumentId, String cashInstrument,
+            String session, BigDecimal anchorPrice, BigDecimal commitmentSize,
+            long maxBandBps, Instant expiresAt, List<String> eligible) {
+        return new MandateTerms(
+                operator, auditor, instrumentId, cashInstrument, session,
+                anchorPrice, commitmentSize, maxBandBps, expiresAt,
+                eligible.stream().distinct().toList(),
+                /* accepted = */ List.of(),
+                /* barred   = */ List.of())
+                .create();
+    }
+
+    /**
+     * A registered participant takes up the seat → {@code (successor terms, mandate)}.
+     *
+     * <p><b>CONSUMING on the terms</b>: {@code accepted} has to move in the same
+     * transaction as the acceptance, so the terms cid passed in is dead once this
+     * succeeds and a second acceptance must re-read the successor. The ACTOR is the
+     * provider, never the venue — that is the whole contestability property.
+     *
+     * <p>Acceptance is BLIND: nothing about the resting book is visible from here, so
+     * a participant undertakes the duty before it can see the number the duty is about.
+     */
+    public static Update<?> acceptMandateTerms(String termsCid, String provider) {
+        return new MandateTerms.ContractId(termsCid).exerciseAcceptTerms(provider);
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier mandateTermsTemplateId() {
+        return MandateTerms.TEMPLATE_ID;
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier liquidityMandateTemplateId() {
+        return LiquidityMandate.TEMPLATE_ID;
     }
 
     // Template ids exposed for callers that need to locate created contracts of a

@@ -38,6 +38,7 @@ import java.lang.Object;
 import java.lang.Override;
 import java.lang.String;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -47,13 +48,21 @@ import java.util.Set;
 public final class OperatorCommittee extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#canton-dvp-settlement-desk", "Governance", "OperatorCommittee");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("cd6202b647482a998c93612fd615750e35250bcfb57272e00d9198ebe014161a", "Governance", "OperatorCommittee");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("5ac8f47b9e28322096bc4c9c58f8449ead13792c4a30aad95cd1e80669894a79", "Governance", "OperatorCommittee");
 
-  public static final String PACKAGE_ID = "cd6202b647482a998c93612fd615750e35250bcfb57272e00d9198ebe014161a";
+  public static final String PACKAGE_ID = "5ac8f47b9e28322096bc4c9c58f8449ead13792c4a30aad95cd1e80669894a79";
 
   public static final String PACKAGE_NAME = "canton-dvp-settlement-desk";
 
   public static final PackageVersion PACKAGE_VERSION = new PackageVersion(new int[] {1, 0, 0});
+
+  public static final Choice<OperatorCommittee, ProposeAccruingFixing, FixingProposal.ContractId> CHOICE_ProposeAccruingFixing = 
+      Choice.create("ProposeAccruingFixing", value$ -> value$.toValue(), value$ ->
+        ProposeAccruingFixing.valueDecoder().decode(value$), value$ ->
+        new FixingProposal.ContractId(value$.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected value$ to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()),
+        new ProposeAccruingFixing.JsonDecoder$().get(),
+        JsonLfDecoders.contractId(FixingProposal.ContractId::new),
+        ProposeAccruingFixing::jsonEncoder, JsonLfEncoders::contractId);
 
   public static final Choice<OperatorCommittee, ProposeFixing, FixingProposal.ContractId> CHOICE_ProposeFixing = 
       Choice.create("ProposeFixing", value$ -> value$.toValue(), value$ ->
@@ -73,7 +82,7 @@ public final class OperatorCommittee extends Template {
       new ContractCompanion.WithoutKey<>(new ContractTypeCompanion.Package(OperatorCommittee.PACKAGE_ID, OperatorCommittee.PACKAGE_NAME, OperatorCommittee.PACKAGE_VERSION),
         "com.lucilla.settlement.model.governance.OperatorCommittee", TEMPLATE_ID, ContractId::new,
         v -> OperatorCommittee.templateValueDecoder().decode(v), OperatorCommittee::fromJson,
-        Contract::new, List.of(CHOICE_ProposeFixing, CHOICE_Archive));
+        Contract::new, List.of(CHOICE_ProposeAccruingFixing, CHOICE_ProposeFixing, CHOICE_Archive));
 
   public final String admin;
 
@@ -97,6 +106,26 @@ public final class OperatorCommittee extends Template {
   @Override
   public Update<Created<ContractId>> create() {
     return new Update.CreateUpdate<ContractId, Created<ContractId>>(new CreateCommand(OperatorCommittee.TEMPLATE_ID, this.toValue()), x -> x, ContractId::new);
+  }
+
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseProposeAccruingFixing} instead
+   */
+  @Deprecated
+  public Update<Exercised<FixingProposal.ContractId>> createAndExerciseProposeAccruingFixing(
+      ProposeAccruingFixing arg) {
+    return createAnd().exerciseProposeAccruingFixing(arg);
+  }
+
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseProposeAccruingFixing} instead
+   */
+  @Deprecated
+  public Update<Exercised<FixingProposal.ContractId>> createAndExerciseProposeAccruingFixing(
+      String proposer, String instrumentId, String cashInstrument, String session, BigDecimal price,
+      String rationale, BigDecimal ratePerAnnum, String dayCount, Instant accrualFrom) {
+    return createAndExerciseProposeAccruingFixing(new ProposeAccruingFixing(proposer, instrumentId,
+        cashInstrument, session, price, rationale, ratePerAnnum, dayCount, accrualFrom));
   }
 
   /**
@@ -277,6 +306,19 @@ public final class OperatorCommittee extends Template {
   }
 
   public interface Exercises<Cmd> extends com.daml.ledger.javaapi.data.codegen.Exercises.Archivable<Cmd> {
+    default Update<Exercised<FixingProposal.ContractId>> exerciseProposeAccruingFixing(
+        ProposeAccruingFixing arg) {
+      return makeExerciseCmd(CHOICE_ProposeAccruingFixing, arg);
+    }
+
+    default Update<Exercised<FixingProposal.ContractId>> exerciseProposeAccruingFixing(
+        String proposer, String instrumentId, String cashInstrument, String session,
+        BigDecimal price, String rationale, BigDecimal ratePerAnnum, String dayCount,
+        Instant accrualFrom) {
+      return exerciseProposeAccruingFixing(new ProposeAccruingFixing(proposer, instrumentId,
+          cashInstrument, session, price, rationale, ratePerAnnum, dayCount, accrualFrom));
+    }
+
     default Update<Exercised<FixingProposal.ContractId>> exerciseProposeFixing(ProposeFixing arg) {
       return makeExerciseCmd(CHOICE_ProposeFixing, arg);
     }

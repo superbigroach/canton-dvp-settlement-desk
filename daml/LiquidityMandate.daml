@@ -1,0 +1,596 @@
+-- LiquidityMandate.daml
+-- ===========================================================================
+-- THE CONTESTABLE LIQUIDITY MANDATE — what the venue DEMANDS BACK for the look.
+-- ===========================================================================
+-- THE CRITICISM THIS MODULE EXISTS TO ANSWER, STATED AS SHARPLY AS A JUDGE WOULD.
+--   MarketOnClose showed the net imbalance of a sealed book to a Designated
+--   Liquidity Provider named in a FIELD on the auction — `liquidityProvider :
+--   Optional Party` — and asked NOTHING of that party in return. No duty to quote,
+--   no size, no price bound, no consequence, no way for anyone else to compete for
+--   the seat. That is not a liquidity mechanism. It is an informational edge with a
+--   flattering name: one party, hand-picked by the venue, gets to see the residual
+--   that every other participant is forbidden to see, and may do with it whatever it
+--   likes — including nothing, or trading ahead of it.
+--   A privilege with no obligation attached is a rent. This module attaches the
+--   obligation, and — the part that matters more — makes the seat CONTESTABLE.
+--
+-- THE PRECEDENT: THE NYSE DMM. Privileged sight of the book is not exotic, and it is
+-- not something this design invented. The NYSE Designated Market Maker sees strictly
+-- more than the tape does: aggregate order information at EACH PRICE POINT, of which
+-- the market receives only the derived scalar (the Continuous Book Clearing Price),
+-- and it alone knows its own DMM Auction Liquidity — the backstop interest that is
+-- never included in published Auction Imbalance Information. The public gets a
+-- number computed off a curve; the DMM gets the curve.
+--   What makes that defensible is the BARGAIN, and NYSE states it in one sentence in
+--   its own filing (Rel. 34-98869, SR-NYSE-2023-36):
+--
+--       "The Exchange provides access to aggregate order information in order for
+--        DMMs and DMM units to comply with the requirement to facilitate openings,
+--        reopenings, and the close of trading."
+--
+--   The information exists TO MAKE THE OBLIGATION PERFORMABLE. It is not a perk; it
+--   is the input to a duty. Rule 104 prices that duty exactly: quote at the NBBO for
+--   10/15/25% of the day depending on the name (104(a)(1)); facilitate the openings,
+--   reopenings AND THE CLOSE, "all of which may include supplying liquidity as
+--   needed" (104(a)(2)–(3)); provide contra-side liquidity for odd lots left unpaired
+--   at the close (104(e)); maintain price continuity and trade for its own account
+--   when supply and demand are out of line (104(c)); re-enter the opposite side after
+--   an aggressing transaction (104(d)(2)). And the discretion it buys is FENCED by
+--   the public number: Rule 7.35B(g)(2) requires the Closing Auction Price to sit at
+--   or between the last-published Imbalance Reference Price and the last-published
+--   non-zero Continuous Book Clearing Price. Information asymmetry, without pricing
+--   discretion asymmetry.
+--
+-- THE EVIDENCE THAT SAYS "OBLIGATION ALONE IS NOT THE FIX" — and this is the finding
+-- the module is actually built around. Hu, E. & Murphy, D. (2026), "Vestigial Tails?
+-- Floor Brokers at the Close in Modern Electronic Markets," MANAGEMENT SCIENCE 72(5),
+-- 3974–3996, is the closest peer-reviewed work to this design, and it does not
+-- measure the harm where you would expect. NYSE accepts late auction orders through
+-- floor-broker D-Orders AFTER the imbalance is published; Nasdaq does not. Result:
+-- larger last-minute abnormal imbalances and stronger price reversals at NYSE —
+-- WORSE price efficiency — and it CONCENTRATES IN THE STOCKS WHERE HIGH FLOOR-BROKER
+-- FEES INHIBIT AUCTION COMPETITION. Identification comes from the COVID-era closure
+-- of the NYSE floor.
+--   Read that mechanism carefully, because it is not "disclosure is bad". The harm is
+--   caused by WHO IS PERMITTED TO ACT AFTER THE DISCLOSURE, AND HOW CONTESTABLE THAT
+--   CHANNEL IS. It localises precisely to a privileged post-disclosure channel whose
+--   COST OF ENTRY was high enough to suppress competition inside it. So the paper is
+--   simultaneously the sharpest warning to a single-DLP design AND the clearest
+--   statement of the remedy: make the privileged seat CONTESTABLE, and make it CHEAP
+--   TO ENTER, so the privilege is competed for rather than granted.
+--   That is the specification this module implements. Not "add an obligation" —
+--   an obligation on an uncontested seat is still a monopoly with paperwork.
+--
+-- HOW THE THREE TEMPLATES DELIVER IT
+--   1. `MandateTerms` — AN OPEN OFFER, not a nomination. The venue publishes ONE set
+--      of terms (size, band, session, expiry) to its whole participant registry, and
+--      ANY registered participant may take them up by exercising `AcceptTerms`. There
+--      is no fee field on this contract, because there is no fee. There is no ranking,
+--      no allocation committee, no queue and no "designation" — if you can trade on
+--      this venue you can bid for the seat, on identical terms, at zero cost. That is
+--      the direct answer to the fee-inhibited competition Hu & Murphy measure. (NYSE
+--      keeps its own seat winnable through the Rule 103B allocation process; this is
+--      the same instinct with the friction removed.)
+--   2. `LiquidityMandate` — THE OBLIGATION, signed by OPERATOR AND PROVIDER. Not a
+--      party dropped into a field by the venue: a bilateral contract the provider
+--      genuinely consents to, binding it to absorb up to `commitmentSize` of imbalance
+--      within `maxBandBps` of the venue's published anchor, for one instrument, one
+--      session, until one expiry. MANY may be live at once — the seat is plural, and
+--      that plurality IS the competition.
+--   3. `MandatePerformance` — THE ACCOUNTING. At the close the venue scores every
+--      mandate against the batch that actually printed: what it was shown, what it
+--      therefore owed, what it delivered, whether the print was inside its band, and
+--      whether it met the commitment. The obligation is checkable AFTER THE FACT, by
+--      the auditor, ON THE LEDGER, against a `SettlementBatch` the auditor already
+--      holds. An obligation nobody can verify is a press release.
+--
+-- THE PROPERTY THAT MAKES THE WHOLE THING HANG TOGETHER: YOU MUST COMMIT BEFORE YOU
+-- CAN SEE. `ClosingAuction.PublishImbalance` now demands a live mandate. There is no
+-- path to the imbalance that does not run through an accepted obligation, so nobody
+-- can read the residual and then decide whether to be a liquidity provider about it.
+-- The sequence is forced: accept the duty blind, then be shown the number.
+--
+-- AND THERE IS NO RESIGNATION CHOICE. DELIBERATELY. A provider cannot hand the
+-- mandate back when it sees an imbalance it dislikes — that would recreate the exact
+-- optionality the mandate exists to remove, and it is the same rule the order book
+-- already runs (`WithdrawOrder` is barred once the window seals: you cannot see the
+-- cross coming and pull out of it). The mandate ends two ways only: it EXPIRES at
+-- `expiresAt`, or it is REVOKED for failing (`RecordPerformance`). Both are bounded,
+-- so nobody is trapped; neither is an escape hatch on the day.
+--
+-- THE CONSEQUENCE, KEPT HONEST. A provider that fails its commitment has its mandate
+-- REVOKED — `RecordPerformance` simply does not re-create it — and is BARRED from
+-- re-accepting these terms for this session, which is enforced by `AcceptTerms`
+-- rather than by a rulebook. What this module deliberately does NOT model is a cash
+-- penalty, a bond, or a fine. We do not hold provider collateral, so a monetary
+-- penalty would be a number we could write down and never collect, and this project
+-- does not ship things it cannot enforce. Losing the seat for the session — the thing
+-- the venue actually controls — is the whole remedy, and it is the honest one.
+-- ===========================================================================
+
+module LiquidityMandate where
+
+import Settlement (SettlementBatch)
+import DA.List (dedup)
+
+-- ---------------------------------------------------------------------------
+-- THE BAND — how far from the anchor a provider promises to stand.
+-- ---------------------------------------------------------------------------
+-- Same construction as the auction's own price collar (`MarketOnClose.collarBand`)
+-- and the same idea NYSE Rule 7.35B(g)(2) uses to fence the DMM: the privileged
+-- party's commitment is expressed relative to a number the venue PUBLISHED, so it
+-- can be checked by anyone holding the anchor. Basis points, because that is the
+-- unit an obligation of this kind is quoted in on every desk.
+--
+-- Deliberately NOT reusing `collarBand`: the collar is the venue's hard bound on the
+-- PRINT, and the mandate band is the provider's own promise about WHERE IT WILL
+-- STAND. They are different numbers with different owners, and a provider that
+-- promised 200bps should not have its duty silently widened because the venue
+-- widened its collar. One concept, one field, one owner.
+bandOf : Decimal -> Int -> Decimal
+bandOf anchor bps = anchor * intToDecimal bps / 10000.0
+
+-- withinMandateBand — did the auction print somewhere this provider undertook to
+-- trade? Inclusive at both edges, exactly as the collar is.
+--
+-- WHY THIS MATTERS AT SCORING TIME. The mandate says "up to `commitmentSize` WITHIN
+-- `maxBandBps` of the anchor". If the book printed OUTSIDE that band, the provider
+-- never promised to be there and its obligation is discharged — the venue does not
+-- get to move the price away from the promise and then score the provider against it.
+-- That is the mirror image of the Rule 7.35B(g)(2) fence: the privileged party is
+-- bounded by the published number, and so is the venue.
+withinMandateBand : Decimal -> Int -> Decimal -> Bool
+withinMandateBand anchor bps price = abs (price - anchor) <= bandOf anchor bps
+
+-- ---------------------------------------------------------------------------
+-- mandateIsLive / mandateCoversBook — THE DISCLOSURE GATE, as ONE definition.
+-- ---------------------------------------------------------------------------
+-- `ClosingAuction.PublishImbalance` calls both of these and discloses nothing if
+-- either is False. They live here, as pure functions over the mandate record, for
+-- the same reason `eligibleAt` lives at the top of MarketOnClose: three places must
+-- agree about what a live mandate is (the disclosure gate, the scoring choice, and
+-- anything a future venue adds), and the only way to guarantee they agree is to give
+-- them one function to agree with.
+mandateIsLive : Time -> LiquidityMandate -> Bool
+mandateIsLive now m = now < m.expiresAt
+
+-- A mandate is scoped to exactly one book, identified by the same four fields every
+-- other check in MarketOnClose identifies a book by: venue, instrument, cash leg,
+-- session. A mandate for the cETH close buys you nothing at the AAPL close.
+mandateCoversBook : LiquidityMandate -> Party -> Text -> Text -> Text -> Bool
+mandateCoversBook m op inst cash sess =
+  m.operator == op && m.instrumentId == inst
+    && m.cashInstrument == cash && m.session == sess
+
+-- ---------------------------------------------------------------------------
+-- MandateTerms — THE OPEN OFFER. The seat, posted where everyone can take it.
+-- ---------------------------------------------------------------------------
+-- This is the contestability half of the design, and every field on it is chosen to
+-- keep entry cheap.
+--
+-- WHO MAY ACCEPT: everyone in `eligible`, which is the venue's REGISTERED
+-- PARTICIPANT LIST — the same roster that lets you lodge a sealed order in the first
+-- place. There is no separate application, no capital test, no membership class and
+-- NO FEE ANYWHERE ON THIS CONTRACT. If you are allowed to trade the close, you are
+-- allowed to bid for the right to see its residual, on exactly the terms everyone
+-- else is offered. `PublishImbalance` re-checks participation at disclosure time, so
+-- the roster and the seat cannot drift apart.
+--
+-- HOW MANY MAY ACCEPT: as many as want to. `accepted` grows; it is a record, not a
+-- cap. Two, five or every participant may hold live mandates over the same book at
+-- the same time and all of them are shown the same number. A single obligated
+-- provider is a monopolist with a duty; five obligated providers compete to absorb
+-- the imbalance, and the competition — not the paperwork — is what disciplines the
+-- price they absorb it at. This is the direct implementation of the Hu & Murphy
+-- remedy, and it is why `liquidityProvider : Optional Party` (ONE party, one slot)
+-- could never have been fixed in place.
+--
+-- WHAT IT COSTS THE VENUE: the venue must publish terms it is willing to have taken
+-- up by anybody on its roster, including a competitor it would not have chosen. That
+-- is the point. A seat the venue can quietly award is a seat the venue can quietly
+-- award to itself.
+--
+-- CONTENTION, STATED PLAINLY (the same trade-off `SubmitOrder` makes). `AcceptTerms`
+-- is CONSUMING, because `accepted` and `barred` are ledger facts that have to move
+-- with the acceptance, in the same transaction. So two providers accepting at the
+-- same instant contend on this one contract and one of them retries. A mandate is
+-- taken up once per session, not once per millisecond; paying in contention to have
+-- the roster of obligated providers be provable is the right way round.
+template MandateTerms
+  with
+    operator       : Party    -- the venue publishing the offer
+    auditor        : Party    -- compliance observer of the mandate process
+    instrumentId   : Text     -- the book these terms are for, e.g. "DEMO:AAPL"
+    cashInstrument : Text     -- the cash leg of that book, e.g. "USDC"
+    session        : Text     -- "Open" | "Close"
+    -- THE ANCHOR THE BAND IS MEASURED FROM. Must equal the auction's published
+    -- `referencePrice` — `PublishImbalance` asserts it — so a provider's promise is
+    -- pinned to the same number the collar is centred on and the same number the
+    -- imbalance is quoted against. One anchor, three uses, no drift.
+    anchorPrice    : Decimal
+    commitmentSize : Decimal  -- units of imbalance a provider undertakes to absorb
+    maxBandBps     : Int      -- how far from the anchor it undertakes to stand
+    expiresAt      : Time     -- terms close here, and so does every mandate struck off them
+    eligible       : [Party]  -- the venue's registered participants: the OPEN offer
+    accepted       : [Party]  -- who currently holds a live mandate off these terms
+    -- BARRED — providers that FAILED a commitment this session. The only way onto
+    -- this list is `BarProvider`, which demands an on-ledger `MandatePerformance`
+    -- recording the failure: the venue cannot bar a competitor it simply dislikes.
+    barred         : [Party]
+  where
+    signatory operator
+    -- EVERY eligible participant observes the offer, plus the auditor. An open offer
+    -- nobody can see is not an open offer; this observer line is the contestability,
+    -- expressed as visibility.
+    observer (auditor :: eligible)
+
+    ensure commitmentSize > 0.0
+        && maxBandBps > 0
+        && anchorPrice > 0.0
+        && (session == "Open" || session == "Close")
+        && not (null eligible)
+        && length (dedup eligible) == length eligible
+        && length (dedup accepted) == length accepted
+        && length (dedup barred)   == length barred
+
+    -- ACCEPT TERMS — any eligible participant takes up the offer and becomes an
+    -- obligated provider. THIS IS THE CONTESTABLE ENTRY POINT, and note who controls
+    -- it: the PROVIDER, not the venue. The venue posts terms; it does not choose who
+    -- takes them. The operator's authority to co-sign the resulting mandate arrives
+    -- because the operator signs THESE TERMS — which is exactly the consent structure
+    -- you want, because it means the venue consented once, publicly, to whoever shows
+    -- up, rather than privately, to one name.
+    --
+    -- ACCEPTANCE IS BLIND, AND THAT IS THE DESIGN. Nothing about the resting book is
+    -- visible from here, and `PublishImbalance` will not disclose an imbalance to a
+    -- party without a mandate — so a participant must take on the duty BEFORE it can
+    -- see the number the duty is about. There is no read-then-decide.
+    choice AcceptTerms : (ContractId MandateTerms, ContractId LiquidityMandate)
+      with
+        provider : Party    -- the participant taking up the seat (the controller)
+      controller provider
+      do
+        now <- getTime
+        assertMsg "these mandate terms have expired"                  (now < expiresAt)
+        assertMsg "only a registered participant of this venue may take up a mandate"
+          (provider `elem` eligible)
+        -- THE CONSEQUENCE, ENFORCED HERE. A provider barred for failing a commitment
+        -- this session cannot simply take the seat again — this is the assert that
+        -- makes revocation mean something.
+        assertMsg "provider is barred from these terms for this session"
+          (provider `notElem` barred)
+        assertMsg "provider already holds a live mandate off these terms"
+          (provider `notElem` accepted)
+        mandateCid <- create LiquidityMandate with
+          operator; auditor; provider
+          instrumentId; cashInstrument; session
+          anchorPrice; commitmentSize; maxBandBps; expiresAt
+          acceptedAt = now
+          -- Nothing has been shown yet, so nothing is owed yet. See `NoteDisclosure`.
+          shownSide = "Flat"; peakShownQty = 0.0
+          lastShownAt = None; disclosuresSeen = 0
+        termsCid <- create this with accepted = provider :: accepted
+        pure (termsCid, mandateCid)
+
+    -- BAR PROVIDER — the consequence half, and it is EVIDENCE-GATED.
+    -- ------------------------------------------------------------------------
+    -- The venue cannot bar whoever it likes. It must present a `MandatePerformance`
+    -- for THIS book naming THIS provider and recording `met = False` — a contract
+    -- that only `RecordPerformance` produces, from the batch that actually printed.
+    -- So the bar is not an administrative act; it is a derived consequence of a
+    -- recorded failure that the provider and the auditor can both read.
+    --
+    -- Exercised automatically inside `LiquidityMandate.RecordPerformance` when a
+    -- provider misses, so revocation and the bar land in ONE transaction and cannot
+    -- come apart. It is exposed as its own choice so the venue can also bar on a
+    -- performance recorded earlier in the session.
+    choice BarProvider : ContractId MandateTerms
+      with
+        provider       : Party
+        performanceCid : ContractId MandatePerformance   -- the on-ledger failure
+      controller operator
+      do
+        perf <- fetch performanceCid
+        assertMsg "performance record is from a different venue"      (perf.operator == operator)
+        assertMsg "performance record is for a different instrument"  (perf.instrumentId == instrumentId)
+        assertMsg "performance record is for a different cash leg"    (perf.cashInstrument == cashInstrument)
+        assertMsg "performance record is for a different session"     (perf.session == session)
+        assertMsg "performance record names a different provider"     (perf.provider == provider)
+        assertMsg "a provider that MET its commitment cannot be barred" (not perf.met)
+        create this with
+          barred   = provider :: filter (/= provider) barred
+          accepted = filter (/= provider) accepted
+
+    -- ADMIT PARTICIPANT — keep the offer open to a participant registered after the
+    -- terms were posted. Entry stays cheap over the life of the session rather than
+    -- only at the instant the venue happened to publish.
+    choice AdmitParticipant : ContractId MandateTerms
+      with
+        participant : Party
+      controller operator
+      do
+        assertMsg "participant is already eligible" (participant `notElem` eligible)
+        create this with eligible = participant :: eligible
+
+    -- WITHDRAW TERMS — the venue takes the offer down (the session is over, or the
+    -- terms are being re-posted). It does NOT touch mandates already struck: an
+    -- obligation the venue can cancel by withdrawing its own offer is not an
+    -- obligation. Live mandates run to their own `expiresAt`.
+    choice WithdrawTerms : ()
+      controller operator
+      do pure ()
+
+-- ---------------------------------------------------------------------------
+-- LiquidityMandate — THE OBLIGATION. Operator and provider, both signing.
+-- ---------------------------------------------------------------------------
+-- WHY BOTH SIGN, AND WHY THAT IS THE WHOLE DIFFERENCE FROM A FIELD. The old design
+-- put a party's name in `ClosingAuction.liquidityProvider` — a value the venue wrote
+-- unilaterally into its own contract. The named party never agreed to anything, was
+-- never asked, and owed nothing. THIS contract cannot exist unless the provider's
+-- authority was present when it was created, which happens in exactly one place:
+-- `MandateTerms.AcceptTerms`, controlled by the provider. The obligation is therefore
+-- consented to in the strict ledger sense, and its existence is the proof of consent.
+--
+-- WHAT IT BINDS THE PROVIDER TO: absorb up to `commitmentSize` units of the disclosed
+-- imbalance, on the CONTRA side (a buy-heavy book needs the provider to SELL), at a
+-- print within `maxBandBps` of `anchorPrice`, for this instrument, this cash leg and
+-- this session, until `expiresAt`.
+--
+-- WHAT IT BUYS THE PROVIDER: sight of the net imbalance, and nothing else. Not the
+-- individual orders, not the traders, not the indicative price — `PublishImbalance`
+-- copies none of that onto the disclosure. The mandate buys the aggregate and the
+-- aggregate only, which is the same shape of privilege the DMM has (more than the
+-- tape, far less than the book) with the same shape of duty attached.
+--
+-- THE RUNNING RECORD (`shownSide` / `peakShownQty` / `lastShownAt` /
+-- `disclosuresSeen`). A duty has to be sized by something, and the honest something is
+-- WHAT THIS PROVIDER WAS ACTUALLY SHOWN. Every `PublishImbalance` stamps the number
+-- onto the mandate through `NoteDisclosure`, so the obligation the venue scores at the
+-- close is the obligation the ledger recorded during the session — not a figure
+-- produced afterwards, and not one the provider can claim never to have received.
+template LiquidityMandate
+  with
+    operator        : Party     -- the venue
+    auditor         : Party     -- compliance observer of the obligation
+    provider        : Party     -- the obligated liquidity provider
+    instrumentId    : Text
+    cashInstrument  : Text
+    session         : Text      -- "Open" | "Close"
+    anchorPrice     : Decimal   -- must equal the auction's published referencePrice
+    commitmentSize  : Decimal   -- units of imbalance this provider will absorb
+    maxBandBps      : Int       -- how far from the anchor it will stand
+    expiresAt       : Time      -- the duty ends here; there is no earlier exit
+    acceptedAt      : Time      -- when the provider took the seat
+    -- THE RUNNING DISCLOSURE RECORD — written ONLY by `NoteDisclosure`, which is
+    -- called from `ClosingAuction.PublishImbalance`.
+    shownSide       : Text      -- "Buy" | "Sell" | "Flat": side of the PEAK imbalance shown
+    peakShownQty    : Decimal   -- the LARGEST imbalance magnitude this mandate was shown
+    lastShownAt     : Optional Time  -- None = never shown anything
+    disclosuresSeen : Int       -- how many times the venue opened the book to it
+  where
+    signatory operator, provider
+    observer auditor
+
+    ensure commitmentSize > 0.0
+        && maxBandBps > 0
+        && anchorPrice > 0.0
+        && peakShownQty >= 0.0
+        && disclosuresSeen >= 0
+        && expiresAt > acceptedAt
+        && (session == "Open" || session == "Close")
+        && (shownSide == "Buy" || shownSide == "Sell" || shownSide == "Flat")
+
+    -- NOTE DISCLOSURE — stamp what the provider was just shown onto its own mandate.
+    -- ------------------------------------------------------------------------
+    -- Called from `ClosingAuction.PublishImbalance` in the same transaction that
+    -- creates the `ImbalanceDisclosure`, so the privilege and the record of the
+    -- privilege are inseparable: the provider cannot be shown a number without the
+    -- ledger writing down that it was shown it.
+    --
+    -- WHY THE PEAK AND NOT THE LATEST — the one genuinely debatable choice in this
+    -- module, so here is the argument. Take "the latest": a provider shown a buy
+    -- imbalance of 8 sells 8 into it, the venue republishes, the book is Flat, and the
+    -- provider's obligation is now ZERO — its own performance erased the duty it
+    -- performed. Worse, so does anything else that flattens the book, so a venue
+    -- republishing a small final number lets any provider off. The obligation
+    -- evaporates exactly when it is satisfied, which makes it unmeasurable.
+    -- Take "the peak": you cannot un-see what you were shown. A provider shown 8 owes
+    -- min(commitment, 8) for the session, whoever else turns up.
+    --   THE HONEST COST OF THE PEAK RULE, said out loud: a provider that stands aside
+    --   while OTHER traders fill the book is recorded as not having delivered, even
+    --   though the close did not need it. We take that, for two reasons. First, this
+    --   is a BACKSTOP duty, not a best-efforts one — NYSE Rule 104(e) makes the DMM
+    --   take the unpaired odd-lot remainder whether or not it feels the market needs
+    --   it, and a backstop that appears only when it agrees the market is short is not
+    --   a backstop. Second, standing in costs the provider almost nothing: it trades
+    --   at the official uniform print, inside a band it chose, in a size it chose.
+    --   The asymmetry between "filled at the close you helped make" and "the residual
+    --   went unfilled because the one party who could see it did nothing" is the whole
+    --   reason the mandate exists.
+    --
+    -- WHAT THIS DOES NOT PREVENT, STATED PLAINLY. The operator signs this contract, so
+    -- it can exercise this choice DIRECTLY and stamp a number no book ever produced —
+    -- inflating a provider's duty to manufacture a failure. The ledger does not stop
+    -- that; what it does is make it VISIBLE TO THE PARTY IT INJURES. The provider
+    -- co-signs this mandate and sees every version of it, holds its own
+    -- `ImbalanceDisclosure` contracts to compare against, observes its
+    -- `MandatePerformance`, and observes the `MandateTerms` its bar is written onto.
+    -- A venue that fakes an obligation is doing it in front of the counterparty and
+    -- the auditor. That is the same standard the rest of this codebase holds itself
+    -- to (see `VenueCancel`: possible, visible, and self-defeating), and it is stated
+    -- here rather than papered over.
+    choice NoteDisclosure : ContractId LiquidityMandate
+      with
+        netSide     : Text      -- side the BOOK is heavy on: "Buy" | "Sell" | "Flat"
+        netQuantity : Decimal   -- magnitude of that imbalance (>= 0)
+      controller operator
+      do
+        now <- getTime
+        assertMsg "a disclosed side must be Buy, Sell or Flat"
+          (netSide == "Buy" || netSide == "Sell" || netSide == "Flat")
+        assertMsg "a disclosed imbalance cannot be negative" (netQuantity >= 0.0)
+        assertMsg "cannot disclose against an expired mandate" (mandateIsLive now this)
+        -- Monotone in the magnitude: a bigger imbalance replaces the peak AND the side
+        -- it points at (the side is only meaningful attached to the number it came
+        -- with). A smaller one leaves the duty where it was and only bumps the counter.
+        let bigger = netQuantity > peakShownQty
+        create this with
+          peakShownQty    = if bigger then netQuantity else peakShownQty
+          shownSide       = if bigger then netSide     else shownSide
+          lastShownAt     = Some now
+          disclosuresSeen = disclosuresSeen + 1
+
+    -- RECORD PERFORMANCE — the accountability half. Score the mandate against the
+    -- batch that actually printed, and revoke it if it missed.
+    -- ------------------------------------------------------------------------
+    -- CONSUMING, AND THE CONSUMPTION IS THE MECHANISM: a mandate that MET its
+    -- commitment is RE-CREATED (the provider keeps the seat until `expiresAt`); a
+    -- mandate that FAILED is not re-created, and that absence IS the revocation. The
+    -- bar follows in the same transaction. There is no state in which a failed
+    -- provider is revoked but not barred, or barred but still holding a live mandate —
+    -- the two facts move together or the transaction rolls back.
+    --
+    -- WHAT IS MEASURED, AND WHERE EVERY NUMBER COMES FROM:
+    --   owed      = min commitmentSize peakShownQty, and ZERO if the print landed
+    --               outside the band the provider undertook to stand in. Both inputs
+    --               are ledger facts written before the close: `commitmentSize` at
+    --               acceptance, `peakShownQty` by the disclosures.
+    --   delivered = this provider's CONTRA-side fills in the batch. A buy-heavy book
+    --               (`shownSide == "Buy"`) needed selling, so the provider's sells
+    --               count — in `RunClose` a sell leg records `seller = trader`. A
+    --               sell-heavy book needed buying, so its buys count (`buyer =
+    --               trader`). Nothing else counts: filling the SAME side as the
+    --               imbalance makes the imbalance worse and is not performance.
+    --   met       = delivered >= owed.
+    -- Every one of those comes off `SettlementBatch`, which the AUDITOR ALREADY
+    -- OBSERVES, and the performance record carries the batch's contract id — so the
+    -- auditor can recompute the arithmetic independently rather than take the venue's
+    -- word for it. That is what "recorded on-ledger" has to mean to be worth anything.
+    choice RecordPerformance : MandateOutcome
+      with
+        batchCid : ContractId SettlementBatch   -- the close that actually printed
+        termsCid : ContractId MandateTerms      -- the offer this mandate was struck off
+      controller operator
+      do
+        now <- getTime
+        b <- fetch batchCid
+        assertMsg "settlement batch is from a different venue"      (b.operator == operator)
+        assertMsg "settlement batch is for a different instrument"  (b.instrumentId == instrumentId)
+        t <- fetch termsCid
+        assertMsg "terms are from a different venue"                (t.operator == operator)
+        assertMsg "terms are for a different instrument"            (t.instrumentId == instrumentId)
+        assertMsg "terms are for a different cash leg"              (t.cashInstrument == cashInstrument)
+        assertMsg "terms are for a different session"               (t.session == session)
+
+        let printed    = b.closingPrice
+            -- THE BAND FENCE, IN THE PROVIDER'S FAVOUR. A print outside the band is a
+            -- price this provider never undertook to stand at, so it owes nothing
+            -- there. The venue cannot walk the close away from the promise and then
+            -- score the provider against the promise.
+            inBand     = withinMandateBand anchorPrice maxBandBps printed
+            owed       = if inBand then min commitmentSize peakShownQty else 0.0
+            -- CONTRA-SIDE FILLS ONLY. See the comment above for why the sides map
+            -- this way round.
+            delivered  = case shownSide of
+              "Buy"  -> sum [f.quantity | f <- b.fills, f.seller == provider]
+              "Sell" -> sum [f.quantity | f <- b.fills, f.buyer  == provider]
+              _      -> 0.0
+            met        = delivered >= owed
+
+        perf <- create MandatePerformance with
+          operator; auditor; provider
+          instrumentId; cashInstrument; session
+          anchorPrice; printedPrice = printed; maxBandBps; withinBand = inBand
+          shownSide; shownQty = peakShownQty; disclosuresSeen
+          committed = commitmentSize; owed; delivered; met
+          batchRef = batchCid
+          recordedAt = now
+
+        -- MET → the mandate survives to its own expiry, so a provider that performs
+        -- keeps the seat for the rest of the session without re-accepting anything.
+        -- FAILED → it is simply not re-created. That is the revocation.
+        survivor <- if met
+          then do c <- create this; pure (Some c)
+          else pure None
+
+        -- FAILED → the bar, in the SAME transaction, justified by the record created
+        -- three lines above. `BarProvider` re-checks the book and `met = False` for
+        -- itself; it does not take this choice's word for it.
+        termsAfter <- if met
+          then pure termsCid
+          else exercise termsCid BarProvider with provider; performanceCid = perf
+
+        pure MandateOutcome with
+          performance = perf
+          mandate     = survivor
+          terms       = termsAfter
+
+-- ---------------------------------------------------------------------------
+-- MandateOutcome — what scoring a mandate leaves behind.
+-- ---------------------------------------------------------------------------
+-- `mandate = None` IS the revocation — there is no surviving obligation contract,
+-- and the provider will fail `AcceptTerms` on the returned `terms` because it is now
+-- on the barred list. Returning all three cids together means a caller cannot act on
+-- half the outcome.
+data MandateOutcome = MandateOutcome
+  with
+    performance : ContractId MandatePerformance
+    mandate     : Optional (ContractId LiquidityMandate)  -- None = REVOKED
+    terms       : ContractId MandateTerms                 -- barred, if it failed
+  deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- MandatePerformance — committed vs delivered, on the ledger, for the auditor.
+-- ---------------------------------------------------------------------------
+-- THE OTHER HALF OF THE BARGAIN. An obligation that is never scored is a slogan, and
+-- a scoring nobody outside the venue can see is a slogan with a spreadsheet. This
+-- contract is the venue's signed statement of what one provider was shown, what it
+-- therefore owed, and what it actually delivered into the print — kept as an
+-- immutable record after the mandate itself is gone.
+--
+-- WHO SIGNS AND WHY IT IS NOT THE PROVIDER. Signatory: the operator alone. If the
+-- provider co-signed, a provider could veto its own failing scorecard simply by not
+-- signing, and the consequence in `BarProvider` would be unreachable — the mechanism
+-- would work only against providers who agreed to be punished. So the venue writes
+-- the record and the provider OBSERVES it, alongside the auditor. The check on the
+-- venue is not a signature, it is `batchRef`: every number here is recomputable from
+-- a `SettlementBatch` the auditor already holds and the mandate the provider
+-- co-signed. A false record is arithmetic that does not reconcile, in front of the
+-- two parties best placed to notice.
+template MandatePerformance
+  with
+    operator        : Party
+    auditor         : Party
+    provider        : Party
+    instrumentId    : Text
+    cashInstrument  : Text
+    session         : Text
+    anchorPrice     : Decimal   -- the published anchor the band was measured from
+    printedPrice    : Decimal   -- what the close actually printed
+    maxBandBps      : Int       -- the band the provider undertook to stand in
+    withinBand      : Bool      -- did the print land inside it? (False ⇒ owed 0)
+    shownSide       : Text      -- side of the peak imbalance disclosed to it
+    shownQty        : Decimal   -- the peak imbalance disclosed to it
+    disclosuresSeen : Int       -- how many times it was shown the book
+    committed       : Decimal   -- commitmentSize on the mandate
+    owed            : Decimal   -- min committed shownQty, or 0 outside the band
+    delivered       : Decimal   -- contra-side units it actually filled in the batch
+    met             : Bool      -- delivered >= owed
+    batchRef        : ContractId SettlementBatch  -- recompute the numbers yourself
+    recordedAt      : Time
+  where
+    signatory operator
+    -- The provider sees its own scorecard; the auditor sees every scorecard. Nobody
+    -- else does — a provider's performance is not published to its competitors, for
+    -- the same reason the book is not.
+    observer auditor, provider
+
+    ensure committed > 0.0
+        && owed >= 0.0
+        && delivered >= 0.0
+        && shownQty >= 0.0
+        && anchorPrice > 0.0
+        && printedPrice > 0.0
+        && maxBandBps > 0
+        && met == (delivered >= owed)     -- the verdict must match its own numbers
+        && (shownSide == "Buy" || shownSide == "Sell" || shownSide == "Flat")

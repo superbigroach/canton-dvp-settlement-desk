@@ -49,6 +49,9 @@ export interface TradeResponse {
 
 export type Session = 'Open' | 'Close';
 
+// Market = unpriced market-on-close; Limit = limit-on-close at a stated price.
+export type OrderType = 'Market' | 'Limit';
+
 export interface MocOrderRequest {
   trader: string;
   side: 'Buy' | 'Sell';
@@ -56,10 +59,17 @@ export interface MocOrderRequest {
   instrumentId: string;
   cashInstrument?: string; // defaults to USDC server-side
   session?: Session;       // Open (MOO) | Close (MOC); defaults to Close server-side
-  // Worst price this order accepts (Buy: max, Sell: min). Omit to pin it to the
-  // auction's published anchor, which guarantees the order crosses. Limits AWAY
-  // from the anchor are what let the uncross discover a different print.
-  // A BUY reserves quantity * limitPrice in cash (NOT quantity * anchor).
+  // The order TYPE. Omit it and the server infers: a stated limitPrice is a Limit
+  // order, and an ABSENT limit is a MARKET order (never a rejection).
+  orderType?: OrderType;
+  // Worst price this order accepts (Buy: max, Sell: min) — LIMIT ORDERS ONLY. Omit
+  // it (or send orderType:'Market') for an unpriced market-on-close order, which
+  // takes whatever the book prints and is allocated ahead of every limit order.
+  // Limits AWAY from the anchor are what let the uncross discover a different print.
+  //
+  // Buying power for a BUY is quantity * the worst price the order can execute at:
+  // that is the LIMIT for a limit order, and the TOP OF THE VENUE'S PRICE COLLAR
+  // for a market order (max(anchor * 1.10, anchor + 0.50)) — never quantity * anchor.
   limitPrice?: number;
 }
 
@@ -80,7 +90,10 @@ export interface MocOrderView {
   trader: string;
   side: 'Buy' | 'Sell';
   quantity: number;
-  limitPrice: number;
+  // NULL for an unpriced market-on-close order. That is the order TYPE showing
+  // through, not missing data — render it as "MOC", never as blank, 0, or the anchor.
+  limitPrice: number | null;
+  orderType: 'MOC' | 'LOC';
 }
 
 export interface MocState {
@@ -98,10 +111,15 @@ export interface ClearBookResponse {
   cleared: number;
 }
 
-// The NET imbalance of a sealed book — the Designated Liquidity Provider view.
-// `disclosed` is true ONLY when the acting party is entitled to see the aggregate
-// (the DLP, or the venue); a normal trader gets disclosed=false (HTTP 403). It
+// The NET imbalance of a sealed book — the MANDATED LIQUIDITY PROVIDER view.
+// `disclosed` is true ONLY when the acting party holds a LIVE LiquidityMandate over
+// this book (or is the venue); anyone else gets disclosed=false with HTTP 403. It
 // carries side + magnitude ONLY — never any individual order or trader identity.
+//
+// `mandateRequired` is the interesting one: it means the caller was refused because
+// it has not TAKEN THE SEAT, not because of who it is. The panel turns that into an
+// Accept action rather than a dead end — the privilege is contestable, and that is
+// the whole point of the redesign.
 export interface MocImbalance {
   disclosed: boolean;
   instrumentId: string;
@@ -110,7 +128,48 @@ export interface MocImbalance {
   netSide: 'Buy' | 'Sell' | 'Flat' | null;
   netQuantity: number | null;            // magnitude of the imbalance (>= 0)
   referencePrice: number | null;
-  liquidityProvider: string | null;      // the DLP's label (who may offset)
+  liquidityProvider: string | null;      // label of the provider it was disclosed to
+  mandateRequired: boolean;              // true = no live mandate; accept terms to see it
+  note: string | null;
+}
+
+// The venue's OPEN OFFER of the liquidity seat for one book. Posted, observable by
+// every eligible participant, and takeable by any of them — several providers may
+// hold live mandates over the same book at once and all see the same number.
+export interface MandateTerms {
+  contractId: string;
+  instrumentId: string;
+  cashInstrument: string;
+  session: string;                       // "Open" | "Close"
+  anchorPrice: number;                   // the published anchor the band is measured from
+  commitmentSize: number;                // units of imbalance a provider undertakes to absorb
+  maxBandBps: number;                    // how far from the anchor it undertakes to stand
+  expiresAt: string;                     // ISO-8601
+  eligible: string[];                    // labels: the venue's registered participants
+  accepted: string[];                    // labels: who already holds a mandate off these terms
+  barred: string[];                      // labels: who missed a commitment this session
+  openToActingParty: boolean;
+  note: string | null;
+}
+
+// The acting party's OWN signed obligation over a book. `held=false` means no
+// mandate — and therefore no imbalance. `expired=true` distinguishes "you never took
+// the seat" from "your seat ran out", which are different problems.
+export interface LiquidityMandate {
+  held: boolean;
+  contractId: string | null;
+  provider: string;                      // label
+  instrumentId: string;
+  cashInstrument: string;
+  session: string;
+  anchorPrice: number | null;
+  commitmentSize: number | null;
+  maxBandBps: number;
+  expiresAt: string | null;
+  shownSide: 'Buy' | 'Sell' | 'Flat' | null;  // side of the PEAK imbalance shown
+  peakShownQty: number | null;           // the largest imbalance this mandate has seen
+  disclosuresSeen: number;
+  expired: boolean;
   note: string | null;
 }
 
@@ -257,9 +316,14 @@ export const api = {
       body: JSON.stringify({ instrumentId, cashInstrument, session }),
     }),
 
-  // Designated Liquidity Provider view: the NET imbalance, disclosed BY THE LEDGER
-  // only to the DLP (and the venue). A normal trader is denied (HTTP 403) — we treat
-  // that as `disclosed:false` rather than an error, so the LP panel simply hides.
+  // Mandated-provider view: the NET imbalance, disclosed BY THE LEDGER only to a
+  // party holding a live LiquidityMandate over this book (and to the venue).
+  //
+  // A caller without one is denied — 403 for a participant that has not taken the
+  // seat, 409 for the venue when NOBODY has taken it. Both carry a
+  // `disclosed:false, mandateRequired:true` body, and both are returned rather than
+  // thrown: "you need a mandate" is an ANSWER the panel renders as an Accept action,
+  // not an error. Only a genuinely broken call throws.
   imbalance: async (
     instrumentId: string,
     session: Session = 'Close',
@@ -274,11 +338,60 @@ export const api = {
     );
     const text = await res.text();
     const body = text ? JSON.parse(text) : null;
-    // 403 carries a disclosed:false body — the ledger denied the acting party.
-    if (res.status === 403) return body as MocImbalance;
+    if (res.status === 403 || res.status === 409) return body as MocImbalance;
     if (!res.ok) throw new ApiError((body && (body.message || body.error)) || `HTTP ${res.status}`);
     return body as MocImbalance;
   },
+
+  // ---- The contestable liquidity mandate ----------------------------------
+  // The seat that buys sight of the residual is POSTED, not awarded: read the open
+  // terms, accept them, and the same number the incumbent sees is yours.
+
+  /** The venue's open offers of the liquidity seat for a book, as this party sees them. */
+  mandateTerms: (
+    instrumentId: string,
+    session: Session = 'Close',
+    actingAs = '',
+    cashInstrument = 'USDC',
+  ) =>
+    req<MandateTerms[]>(
+      `/moc/mandate/terms?instrumentId=${encodeURIComponent(instrumentId)}` +
+        `&cashInstrument=${encodeURIComponent(cashInstrument)}` +
+        `&session=${encodeURIComponent(session)}` +
+        (actingAs ? `&actingAs=${encodeURIComponent(actingAs)}` : ''),
+    ),
+
+  /**
+   * Take up the seat — the ACTING PARTY becomes an obligated liquidity provider.
+   *
+   * Acceptance is blind: nothing about the book is visible until the mandate exists,
+   * so you commit before you can see. That ordering is the property, not a limitation.
+   */
+  acceptMandate: (body: {
+    provider: string;
+    instrumentId: string;
+    cashInstrument?: string;
+    session?: Session;
+    termsCid?: string;
+  }) =>
+    req<{ contractId: string }>('/moc/mandate/accept', {
+      method: 'POST',
+      body: JSON.stringify({ cashInstrument: 'USDC', session: 'Close', ...body }),
+    }),
+
+  /** The acting party's own live obligation over a book (size, band, expiry). */
+  myMandate: (
+    instrumentId: string,
+    session: Session = 'Close',
+    actingAs = '',
+    cashInstrument = 'USDC',
+  ) =>
+    req<LiquidityMandate>(
+      `/moc/mandate?instrumentId=${encodeURIComponent(instrumentId)}` +
+        `&cashInstrument=${encodeURIComponent(cashInstrument)}` +
+        `&session=${encodeURIComponent(session)}` +
+        (actingAs ? `&actingAs=${encodeURIComponent(actingAs)}` : ''),
+    ),
 
   // ---- Decentralised operator: committee-attested NAV ----------------------
   // Stand up a K-of-N committee, propose a fix, gather member confirmations, then

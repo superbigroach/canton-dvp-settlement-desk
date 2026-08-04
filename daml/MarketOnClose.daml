@@ -53,6 +53,65 @@
 --   price. Sealed order book + atomic multilateral settlement + instant finality:
 --   a programmable dark pool with none of the leakage of a transparent chain.
 --
+-- ORDER TYPES — MOC (UNPRICED) AND LOC (PRICED): THE HALF OF THE BOOK THAT WAS MISSING
+--   Until now every `SealedOrder` carried a `limitPrice`, so every order resting in
+--   this book was really a LIMIT-on-close. An LOC is a price SETTER: it names the
+--   worst price it will accept and walks away from anything worse. That is not what
+--   the close is made of. The overwhelming majority of real closing volume is
+--   UNPRICED MARKET-ON-CLOSE — index funds tracking a benchmark that is STRUCK at
+--   the official close, rebalancers whose mandate is the print itself, ETF
+--   creation/redemption flow. None of them is expressing a view on price. They are
+--   BUYING THE CLOSE, whatever it turns out to be, because owning the print IS the
+--   trade and any deviation from it is tracking error. A venue that models only the
+--   price setters and not the price TAKERS is modelling half a market, and it is
+--   missing the bigger half.
+--   Every venue in `docs/REAL_AUCTION_MECHANICS.md` §1 carries the type, under four
+--   different names: Nasdaq MOC (Rule 4702(b) / 4754), NYSE MOC ("a Market Order
+--   traded only in a closing auction", Rule 7.31(c)(2)(B)), Xetra an ordinary MARKET
+--   order carrying the `closing auction only` trading restriction (T7 Market Model
+--   §8.1.4), Euronext a market order with VFCU validity (Trading Manual §2.2.7).
+--
+--   SO `limitPrice` IS NOW `Optional Decimal`. `Some p` is an LOC and behaves exactly
+--   as before. `None` is an unpriced MOC, and it changes exactly three things:
+--     1. ELIGIBILITY. An unpriced order is willing to trade at ANY price, so it
+--        counts in buyVol/sellVol at EVERY candidate the uncross scores. It can never
+--        be "away from the cross", and the close must never cancel it for being
+--        off-price — there is no price at which an MOC is off-price.
+--     2. PRIORITY. It ranks AHEAD of every limit order (see ALLOCATION below).
+--     3. RESERVATION. See immediately below — this is the part that could not be
+--        done before, and it is the reason MOC did not already exist here.
+--
+--   THE RESERVATION PROBLEM, AND WHY THE COLLAR SOLVES IT (the elegant part).
+--   A sealed order pre-commits the holding it will deliver, and the amount has to be
+--   pinned at SUBMISSION time — before the price exists. A SELL is easy either way:
+--   it delivers `quantity` of the asset, and that is price-independent, so an
+--   unpriced sell reserves exactly what a limited sell reserves. A BUY is the
+--   problem. A limited buy owes at most `quantity * limitPrice`, because it can only
+--   ever execute at or inside its own limit — the limit IS the bound. AN UNPRICED
+--   BUY HAS NO LIMIT, SO IT HAS NO NATURAL BOUND ON WHAT IT MAY OWE. On an
+--   unbounded-print venue that is unfundable: you would have to reserve infinity, or
+--   reserve at the anchor and discover at settlement time that the buyer is short.
+--   THE COLLAR SUPPLIES THE BOUND. The print is not unbounded here — the close is
+--   CLAMPED into `anchor ± collarBand anchor` and can never settle outside it. So the
+--   highest price this auction can print is `anchor + collarBand anchor`, exactly,
+--   and an unpriced buy reserving `quantity * (anchor + collarBand anchor)` is
+--   SUFFICIENT BY CONSTRUCTION — not by estimate, not by margin call, not by a
+--   haircut someone tuned. Whatever the book does, the print lands at or below that
+--   number and any unspent cash returns to the buyer as change in the settlement
+--   transaction. The anchor cannot move underneath the buyer either: no choice on
+--   `ClosingAuction` rewrites `referencePrice`, so the number the reservation was
+--   sized against at submission is the number the collar is centred on at the close.
+--   AND BECAUSE THE COLLAR CLAMPS RATHER THAN CANCELS, THAT BOUND IS TIGHT, NOT
+--   MERELY SAFE. The upper boundary is a REACHABLE print — a book that would have
+--   crossed above the band settles AT the boundary — so `quantity * collarHigh` is
+--   the exact worst case an unpriced buy can be presented with, the same way
+--   `quantity * limitPrice` is the exact worst case for a limited one. Neither
+--   over-reserves. See `Test:testUnpricedBuyFundedAtClampedBoundary`, where the buyer
+--   is minted exactly her reservation and spends every cent of it.
+--   That is the whole trick: a risk control written for price INTEGRITY turns out to
+--   be exactly the bound that makes an unpriced order FUNDABLE. The collar is not a
+--   tax on MOC; it is what lets MOC exist.
+--
 -- THE UNCROSS — HOW THE OFFICIAL PRICE IS DISCOVERED (the headline)
 --   SAY THIS PRECISELY, BECAUSE THE GENERIC VERSION IS FALSE. Nasdaq, Xetra and
 --   Euronext all print the price that TRADES THE MOST SHARES and settle the ties by
@@ -78,8 +137,20 @@
 --        auction's reference/anchor price. A uniform-price auction can only ever
 --        print at a price where somebody's limit sits (between two adjacent limits
 --        nothing changes hands), so this candidate set is exhaustive.
---     2. At each candidate P:  buyVol(P)  = Σ qty of BUYS  with limit >= P
---                              sellVol(P) = Σ qty of SELLS with limit <= P
+--        UNPRICED MOC ORDERS CONTRIBUTE NO CANDIDATE, AND THAT IS CORRECT, not an
+--        omission: a candidate price is a BREAKPOINT — a price at which the set of
+--        eligible orders changes — and an unpriced order is eligible everywhere, so
+--        it never changes anything as the price moves. Only limits break. The
+--        candidate set therefore stays exhaustive with MOC in the book.
+--        THE ALL-UNPRICED BOOK is the degenerate case of that: no limits, no
+--        breakpoints, so the only candidate left is the anchor — and the book prints
+--        THERE. That is not a fallback we invented; it is the published rule at both
+--        European venues. Xetra §11.1.1 step 5: "If only market orders are executable
+--        against one another, they are matched at the reference price." Euronext
+--        Trading Manual §3.1 says the same. MOC-vs-MOC has no price information in
+--        it, so the venue's anchor is the only honest answer.
+--     2. At each candidate P:  buyVol(P)  = Σ qty of BUYS  with limit >= P (or UNPRICED)
+--                              sellVol(P) = Σ qty of SELLS with limit <= P (or UNPRICED)
 --                              exec(P)    = min(buyVol, sellVol)
 --     3. MAXIMISE exec(P)                       — trade the most shares.
 --     4. TIE → MINIMISE |buyVol − sellVol|      — leave the least stranded interest.
@@ -108,7 +179,32 @@
 --   `exec == 0` at every candidate means the book does not cross at all: the close
 --   aborts and NOTHING settles.
 --
--- ALLOCATION — PRICE PRIORITY THROUGH THE PRINT, RATION ONLY THE MARGIN
+-- ALLOCATION — CLASS FIRST, THEN PRICE THROUGH THE PRINT, RATION ONLY THE MARGIN
+--   CLASS BEFORE PRICE, AND THE RULE IS NOT OURS. Nasdaq Rule 4754(b)(3) sets the
+--   closing-cross allocation ladder as ORDER CLASS → PRICE → display status → TIME,
+--   and the first rung is verbatim: "(A) MOC orders, with time as the secondary
+--   priority" — unpriced on-close interest is allocated FIRST, ahead of everything
+--   priced, and only then does price priority run. Euronext says the same thing in
+--   one sentence (Trading Manual §2.2.7): "Market orders have priority over all other
+--   orders. In particular, during uncrossing market orders have priority over orders
+--   limited at the uncrossing price."
+--   THE ECONOMICS, because the rule is not arbitrary. A market order has already
+--   given up the only protection it had — it accepted the print sight unseen. A limit
+--   order at exactly the print kept its protection right up to the last instant and
+--   is being filled at the best price it was ever willing to pay. Filling the one who
+--   took the risk before the one who did not is what makes MOC a usable instruction
+--   at all; rank them equally and no rational index fund sends an unpriced order.
+--   SO THE LADDER THIS FILE IMPLEMENTS IS:
+--     (a) UNPRICED MOC first, in full — and if unpriced interest ALONE exceeds the
+--         crossed volume, ration among the unpriced (pro-rata by size, see below) and
+--         every priced order behind them gets ZERO;
+--     (b) then priced orders strictly THROUGH the print, in full, best price first;
+--     (c) then the marginal AT-THE-PRINT level, rationed.
+--   Mechanically that is one line: the sort key gains a CLASS rung above the price
+--   rung, so the unpriced orders form a single top level and the existing
+--   price-priority waterfall walks the rest unchanged.
+--
+--   PRICE PRIORITY THROUGH THE PRINT, RATION ONLY THE MARGIN — rungs (b) and (c).
 --   The single rule every real closing auction agrees on. Sources, so it can be
 --   defended on stage:
 --     * Xetra (T7 §11.1.1): "price/time priority is valid so that the maximum of
@@ -160,15 +256,61 @@
 --   pure percentage is meaningless at the bottom of the price range: Nasdaq's
 --   $0.50, Euronext's ±€0.02 for sub-€0.20 penny stocks, NYSE's $0.15/$1.00
 --   variants. `collarBand` implements BOTH — `max collarFloor (anchor * bps)`.
---   ON A BREACH WE ABORT, and that is a considered choice, not a shortcut. The two
---   families are REJECT (Nasdaq, NYSE: the print simply cannot land outside the
---   band) and EXTEND (Xetra's volatility interruption, Euronext's reservation and
---   repeated uncrossing). The extend family needs a call phase and a clock, and its
---   documented end state on Xetra is termination "manually according to FWB
---   exchange rules" — a human. CrossDesk's close is ONE atomic Daml transaction,
---   and that finality is what it is selling, so the reject family is both the only
---   one implementable and the right one: the close aborts, nothing settles, and the
---   venue re-runs. Aborting is already all-or-nothing on this ledger.
+--
+--   ON A BREACH WE CLAMP — WE DO NOT CANCEL THE AUCTION. This used to abort the whole
+--   close, and that was wrong on the market structure and gets much worse once
+--   unpriced MOC exists. Read what the rulebooks actually bound: they bound the
+--   PRICE, and the auction still happens.
+--     * Nasdaq, verbatim on their own worked example (a 10.00 x 11.00 market, 10.50
+--       midpoint, 1.05 threshold, band 8.95 to 12.05): "$8.95 is the LOWEST PRICE AT
+--       WHICH THE CROSS CAN OCCUR and $12.05 is the HIGHEST PRICE AT WHICH IT CAN
+--       OCCUR." That is a bound on the print, not a cancellation of the cross. The
+--       cross occurs; it occurs inside the band.
+--     * NYSE Rule 7.35B(g)(2): the DMM "must select an Auction Price" at or above
+--       (below) the last-published Imbalance Reference Price and not above (below)
+--       the last-published non-zero Continuous Book Clearing Price — again a band the
+--       price is chosen INSIDE. NYSE's mechanical fallback (Rule 7.35C) is likewise
+--       an "Auction Collar" on the Indicative Match Price: a threshold, not an abort.
+--       Its percentage tiers are `[UNVERIFIED-3]` in docs/REAL_AUCTION_MECHANICS.md
+--       §12, so we do NOT guess them — the band stays Nasdaq's verified 10% / $0.50,
+--       which is the conservative reading: a published number we can defend.
+--   THE ECONOMIC REASON, WHICH IS THE ONE THAT MATTERS. An index fund sending MOC
+--   MUST own the closing price — that is the entire instruction. If one oversized
+--   order drags the indicative price past the band and the venue responds by
+--   cancelling the auction, EVERY participant gets nothing and a single account can
+--   deny the whole market its close. "One whale and nobody trades" is not a market
+--   structure; it is an outage with a rulebook. Bounding the price costs only the
+--   order that was reaching outside the band. Cancelling costs everybody else.
+--
+--   WHAT CLAMPING MEANS MECHANICALLY, AND WHY THE BOUNDARY IS THE RIGHT PRICE.
+--   `discoverPrice` still runs UNCONSTRAINED and returns the volume-maximising price.
+--   If that price is outside the band, the close prints at the NEARER BOUNDARY and
+--   RE-CROSSES THE BOOK THERE — both volumes are recomputed at the clamped price,
+--   because the quantity that actually crosses at the boundary is SMALLER than at the
+--   unconstrained price. The excess on the heavy side simply does not fill; the light
+--   side and everything through the clamped print settle exactly as normal, through
+--   the same class → price → margin ladder.
+--   The boundary is not an arbitrary place to stop. exec(P) = min(buyVol(P),
+--   sellVol(P)) is the min of a non-increasing and a non-decreasing function, so it is
+--   QUASI-CONCAVE in P: it rises to a peak and falls. Maximising a quasi-concave
+--   function over an interval that does not contain its peak puts the maximum at the
+--   endpoint NEAREST the peak. So "clamp to the nearer boundary" IS "the
+--   volume-maximising price inside the band" — the constrained form of rule 1, not a
+--   crude substitute for it.
+--   AND THE CORNER, STATED HONESTLY: if the boundary trades NOTHING, then by that
+--   same quasi-concavity nothing inside the band trades anything either, and the
+--   close aborts. That is not the collar refusing to print; it is a book with no
+--   willing counterparties anywhere inside the venue's own price band — the ordinary
+--   no-cross case (Xetra §11.1.1 step 6: "An auction price cannot be determined if
+--   orders are not executable against one another"). Clamping bounds the price; it
+--   does not conjure a counterparty, and it never drags anyone through their own
+--   limit — an order away from the CLAMPED print is cancelled on close like any other.
+--   WHAT WE STILL DO NOT DO is the EXTEND family (Xetra's volatility interruption,
+--   Euronext's reservation and repeated uncrossing). That needs a call phase and a
+--   clock, and its documented Xetra end state is termination "manually according to
+--   FWB exchange rules" — a human. CrossDesk's close is ONE atomic Daml transaction
+--   and that finality is what it sells. Nasdaq and NYSE bound the print and then
+--   print. So do we.
 --
 -- THE RESIDUAL RULE — why every receipt states what was actually delivered
 --   Pro-rata in a fixed-precision `Decimal` does not sum exactly: 3 buys of 100
@@ -257,8 +399,19 @@ module MarketOnClose where
 
 import Holding
 import Settlement
-import Governance (NavFixing)
-import DA.Optional (optionalToList)
+-- CONTINUOUS ACCRUAL. `navAt` is the ledger-computed NAV at an instant, derived from
+-- the committee's attested base + rate + day count + origin; `anchorConsistentWithNav`
+-- is the staleness band `RunClose` holds the auction's anchor to. Both are PURE, so
+-- every validator re-executing the close derives the same number.
+import Governance (NavFixing, navAt, anchorConsistentWithNav)
+-- THE CONTESTABLE MANDATE. `PublishImbalance` gates the residual on a live
+-- obligation instead of on a party the venue named in a field. The dependency runs
+-- ONE WAY (MarketOnClose -> LiquidityMandate) on purpose: a mandate is scoped to a
+-- book by (venue, instrument, cash leg, session) — the same four fields every other
+-- book check here uses — and never references the auction, so the obligation layer
+-- stays independently readable and cannot import its way back into the auction.
+import LiquidityMandate
+import DA.Optional (optionalToList, mapOptional)
 import DA.List (dedup, sortOn, groupOn)
 
 -- Order side. Deriving Eq/Show so choices can compare and reports can print it.
@@ -283,12 +436,34 @@ data Side = Buy | Sell
 -- BookOrder — the (side, size, limit) triple the uncross needs, and nothing else.
 -- Deliberately NOT the SealedOrder template: the algorithm must not be able to see
 -- who placed an order, so it is not given the trader.
+--
+-- `limitPrice = None` IS THE UNPRICED MARKET-ON-CLOSE ORDER. `Some p` is a
+-- limit-on-close. The uncross sees the distinction and nothing else about the order —
+-- it still cannot see who sent it.
 data BookOrder = BookOrder
   with
     side       : Side
     quantity   : Decimal
-    limitPrice : Decimal
+    limitPrice : Optional Decimal   -- None = unpriced MOC; Some p = LOC at p
   deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- eligibleAt — THE ONE DEFINITION OF "would this order trade at this price", used
+-- by the uncross (`crossAt`), by the close (`RunClose`'s eligibility split) and by
+-- the settlement leg (`SealedOrder.PledgeToVenue`). One function, so the three can
+-- never drift into disagreeing about whether an order crosses — which on a money
+-- path would mean scoring a price on interest that then refuses to settle.
+--
+--   * A LIMITED BUY  trades iff its limit is >= the print (it will pay at least P).
+--   * A LIMITED SELL trades iff its limit is <= the print (it will accept P).
+--   * AN UNPRICED MOC TRADES AT ANY PRICE. That is the definition of the order type,
+--     and it is why `None` returns True without even looking at the price. An MOC is
+--     never "away from the cross", on either side, at any candidate, ever.
+-- ---------------------------------------------------------------------------
+eligibleAt : Side -> Decimal -> Optional Decimal -> Bool
+eligibleAt _    _ None       = True          -- unpriced MOC: a price TAKER, always in
+eligibleAt Buy  p (Some lim) = lim >= p
+eligibleAt Sell p (Some lim) = lim <= p
 
 -- CrossResult — what the book would do at ONE candidate price. `imbalance` is
 -- SIGNED (buyVolume − sellVolume): positive is buy-heavy (excess demand), negative
@@ -303,14 +478,17 @@ data CrossResult = CrossResult
   deriving (Eq, Show)
 
 -- crossAt — evaluate ONE candidate price against the whole book.
--- A BUY is eligible at P iff its limit is >= P (it will pay at least P); a SELL is
--- eligible iff its limit is <= P (it will accept at most... at least P). Note both
--- volumes are monotone in P — buy interest falls as the price rises, sell interest
--- rises — which is why exec(P) is single-peaked and the winner is well behaved.
+-- Eligibility is `eligibleAt` and nothing else: a limited BUY is in at P iff its
+-- limit is >= P, a limited SELL iff its limit is <= P, and AN UNPRICED MOC IS IN AT
+-- EVERY P. Note both volumes are still monotone in P — buy interest falls as the
+-- price rises, sell interest rises — because the unpriced interest is a CONSTANT on
+-- each side, present at every price. Adding a constant to a monotone function leaves
+-- it monotone, so exec(P) stays single-peaked and the winner stays well behaved.
+-- MOC does not perturb the shape of the curve; it lifts both sides of it.
 crossAt : [BookOrder] -> Decimal -> CrossResult
 crossAt book p =
-  let buyVolume  = sum [o.quantity | o <- book, o.side == Buy,  o.limitPrice >= p]
-      sellVolume = sum [o.quantity | o <- book, o.side == Sell, o.limitPrice <= p]
+  let buyVolume  = sum [o.quantity | o <- book, o.side == Buy,  eligibleAt Buy  p o.limitPrice]
+      sellVolume = sum [o.quantity | o <- book, o.side == Sell, eligibleAt Sell p o.limitPrice]
   in CrossResult with
        price = p
        executedQty = min buyVolume sellVolume
@@ -382,7 +560,24 @@ discoverPrice referencePrice book =
   let
     -- 1. CANDIDATES: every limit resting in the book, plus the anchor. `dedup`
     --    keeps first occurrences, so the candidate list is order-deterministic.
-    candidates = dedup (referencePrice :: map (\o -> o.limitPrice) book)
+    --    `mapOptional` drops the unpriced MOC orders here — deliberately. A candidate
+    --    is a BREAKPOINT, a price at which the eligible set changes, and an unpriced
+    --    order is eligible at every price, so it breaks nothing. It is still counted
+    --    in the VOLUME at every candidate (see `crossAt`); it just does not propose
+    --    one. Dropping it from the candidate list is what keeps the set exhaustive
+    --    rather than what makes it incomplete.
+    limits     = mapOptional (\o -> o.limitPrice) book
+    -- MARKET ORDERS ONLY — the all-unpriced book, handled explicitly rather than by
+    -- luck. With no limits there are no breakpoints, so the anchor is the only price
+    -- in play and the book prints THERE, crossing min(unpriced buys, unpriced sells).
+    -- Xetra T7 §11.1.1 step 5, verbatim: "If only market orders are executable against
+    -- one another, they are matched at the reference price." Euronext §3.1 agrees.
+    -- (The two branches coincide — `dedup` of `anchor :: []` is `[anchor]` — but this
+    -- is a published rule of the market model, so it is written as one and not left
+    -- to fall out of a list operation.)
+    candidates
+      | null limits = [referencePrice]
+      | otherwise   = dedup (referencePrice :: limits)
     -- 2. Score every candidate; keep only the ones that actually trade something.
     crossable  = filter (\c -> c.executedQty > 0.0) (map (crossAt book) candidates)
     -- 3. MAXIMUM VOLUME — the primary rule of every real closing cross.
@@ -481,6 +676,29 @@ withinCollar anchor price =
   let band = collarBand anchor
   in price >= anchor - band && price <= anchor + band
 
+-- clampToCollar — pull a price into the band. Inside the band this is the IDENTITY,
+-- so a normal close is untouched by the collar and no existing behaviour moves.
+-- Outside it, the price becomes the NEARER boundary — which, because exec(P) is
+-- quasi-concave (min of a non-increasing and a non-decreasing function), is exactly
+-- the volume-maximising price available inside the band. See the module header.
+--
+-- THIS IS THE FUNCTION THAT REPLACED AN ABORT. The close used to assert
+-- `withinCollar` and take the whole auction down on a breach, which handed any single
+-- participant a denial of service on everybody else's print. Nasdaq bounds the cross
+-- ("$8.95 is the lowest price at which the Cross CAN OCCUR") and NYSE 7.35B(g)(2)
+-- bounds the DMM's selection; neither cancels the auction. Neither do we.
+--
+-- The two boundaries are also the exact worst cases a pre-committed order can face,
+-- which is what makes the unpriced-MOC reservation (`SubmitOrder`) tight rather than
+-- merely generous: `anchor + collarBand anchor` is a price the close can actually
+-- print, not a bound that is never attained.
+clampToCollar : Decimal -> Decimal -> Decimal
+clampToCollar anchor price =
+  let band = collarBand anchor
+      low  = anchor - band
+      high = anchor + band
+  in if price < low then low else if price > high then high else price
+
 -- ===========================================================================
 -- ALLOCATION — price priority through the print; ration only the margin.
 -- ===========================================================================
@@ -514,12 +732,16 @@ settleResidual target entries =
         else (done, acc ++ [(t, r)])
   in snd (foldl step (False, []) entries)
 
--- rationLevel — ration ONE price level pro-rata by size to exactly `remaining`
--- units. Every order at the level shares the same limit price, so size is the only
--- thing left to distinguish them. The shares are formed as `(q * remaining) / total`
--- — the multiplication FIRST, so an evenly-divisible ration stays exact — and
--- `settleResidual` then makes the list sum to `remaining` on the nose.
-rationLevel : Decimal -> [(a, Decimal, Decimal)] -> [(a, Decimal)]
+-- rationLevel — ration ONE level pro-rata by size to exactly `remaining` units.
+-- Every order at a level is economically identical — same class, same limit price —
+-- so size is the only thing left to distinguish them. (The UNPRICED orders form one
+-- level of their own, so this is also the function that rations MOC against MOC when
+-- unpriced interest alone exceeds the crossed volume: Nasdaq's rung (A).) The shares
+-- are formed as `(q * remaining) / total` — the multiplication FIRST, so an evenly
+-- divisible ration stays exact — and `settleResidual` then makes the list sum to
+-- `remaining` on the nose. Polymorphic in the middle (price) slot because it never
+-- reads it: at one level every price is the same, or there is none at all.
+rationLevel : Decimal -> [(a, p, Decimal)] -> [(a, Decimal)]
 rationLevel remaining lvl =
   let
     lvlTotal = sum [q | (_, _, q) <- lvl]
@@ -527,16 +749,24 @@ rationLevel remaining lvl =
            | (t, _, q) <- lvl ]
   in settleResidual remaining raws
 
--- allocateSide — walk ONE side of the book in strict PRICE PRIORITY and hand out
+-- allocateSide — walk ONE side of the book in CLASS-then-PRICE priority and hand out
 -- exactly `crossQty` units.
---   side     — fixes the direction of priority: a BUY priced HIGHER is more
+--   side     — fixes the direction of price priority: a BUY priced HIGHER is more
 --              aggressive, a SELL priced LOWER is.
 --   crossQty — the volume the uncross says this side must deliver.
---   orders   — every ELIGIBLE order on the side, as (tag, limitPrice, quantity).
+--   orders   — every ELIGIBLE order on the side, as (tag, limitPrice, quantity),
+--              where `limitPrice = None` is an unpriced MOC.
 -- Returns one (tag, fillQty) per input order, summing EXACTLY to `crossQty`.
 --
--- Levels priced THROUGH the print fill in FULL, in order, until the crossed volume
--- runs out; the level it runs out ON is rationed; every level behind it gets zero.
+-- THE LADDER, and it is Nasdaq Rule 4754(b)(3)'s: class → price → time.
+--   (a) UNPRICED MOC — one single level at the very top, ahead of every limit order
+--       regardless of how aggressively that limit is priced. Fills in full if the
+--       crossed volume reaches; rationed AMONG THE UNPRICED if it does not, in which
+--       case nothing priced fills at all.
+--   (b) PRICED, THROUGH THE PRINT — level by level, best price first, each in full
+--       until the crossed volume runs out.
+--   (c) THE MARGINAL LEVEL — the one the volume runs out on, rationed. Everything
+--       behind it gets zero.
 -- On the LIGHT side `crossQty` equals the side's own total, so every level fills in
 -- full and the function is a no-op — which is why both sides can go through the
 -- same code path with no special case for "which side is heavy".
@@ -545,13 +775,26 @@ rationLevel remaining lvl =
 -- than is left, so it cannot over-fill even in the pathological book that the
 -- mixed-surplus tie-break (`discoverPrice` rule 4) exists to prevent. That rule
 -- makes "through-the-print always fits" a property of the price; this function does
--- not depend on it being one.
-allocateSide : Side -> Decimal -> [(a, Decimal, Decimal)] -> [(a, Decimal)]
+-- not depend on it being one — which is exactly why a COLLAR-CLAMPED print, which
+-- was never chosen by the tie-break ladder at all, goes through the same code path
+-- with nothing special done to it. Nor does it depend on the mix of MOC and LOC: unpriced
+-- interest larger than the whole cross is a normal book (an index rebalance day is
+-- exactly that), and it rations rather than over-filling.
+allocateSide : Side -> Decimal -> [(a, Optional Decimal, Decimal)] -> [(a, Decimal)]
 allocateSide side crossQty orders = walkLevels (groupOn keyOf (sortOn keyOf orders)) crossQty
   where
-    -- `sortOn` is STABLE, so within one price level the book keeps the order the
-    -- close was handed — which only ever breaks an exact size tie in the residual.
-    keyOf (_, p, _) = case side of
+    -- THE WHOLE CLASS RULE IS THIS KEY. The first rung is the ORDER CLASS — 0 for
+    -- unpriced MOC, 1 for everything limited — so every MOC sorts above every LOC no
+    -- matter what the limits are, and `groupOn` collects them into ONE level. The
+    -- second rung is the familiar price priority, and it only ever compares orders
+    -- that are already in the same class. Nasdaq 4754(b)(3): "(A) MOC orders... (B)
+    -- Displayed Orders, with price as the primary priority."
+    -- `sortOn` is STABLE, so within one level the book keeps the order the close was
+    -- handed — which only ever breaks an exact size tie in the residual.
+    keyOf (_, mLimit, _) = case mLimit of
+      None       -> (0, 0.0)              -- class 0: unpriced MOC, ahead of all limits
+      Some p     -> (1, priceRank p)      -- class 1: limits, ranked by aggressiveness
+    priceRank p = case side of
       Buy  -> negate p    -- buys: highest limit first
       Sell -> p           -- sells: lowest limit first
 
@@ -559,13 +802,13 @@ allocateSide side crossQty orders = walkLevels (groupOn keyOf (sortOn keyOf orde
 -- levels in priority order, and ration the one it runs out on. A TOP-LEVEL function
 -- because Daml permits recursion only at the top level (a recursive `let`/`where`
 -- is rejected outright), not because it is meant to be called directly.
-walkLevels : [[(a, Decimal, Decimal)]] -> Decimal -> [(a, Decimal)]
+walkLevels : [[(a, p, Decimal)]] -> Decimal -> [(a, Decimal)]
 walkLevels [] _ = []
 walkLevels (lvl :: rest) remaining =
   let lvlTotal = sum [q | (_, _, q) <- lvl]
   in if remaining >= lvlTotal
-       -- Priced THROUGH the print (or the last level that still fits): every order
-       -- here is GUARANTEED to participate, in full.
+       -- Unpriced MOC, or priced THROUGH the print (or the last level that still
+       -- fits): every order here is GUARANTEED to participate, in full.
        then [(t, q) | (t, _, q) <- lvl] ++ walkLevels rest (remaining - lvlTotal)
        -- THE MARGINAL LEVEL — the only one that is ever rationed. Everything behind
        -- it is priced worse than the print can pay and gets nothing, which
@@ -594,14 +837,34 @@ template ClosingAuction
     -- ORDERS agree.
     referencePrice : Decimal  -- the published reference / anchor price
     participants   : [Party]  -- traders permitted to submit sealed orders
-    -- LIQUIDITY WITHOUT LEAKAGE. Optionally, the venue designates ONE party as the
-    -- auction's Designated Liquidity Provider (DLP). The DLP — and ONLY the DLP
-    -- (plus the venue) — is shown the NET imbalance of the sealed book (see
-    -- `PublishImbalance` / `ImbalanceDisclosure`), so it can commit offsetting
-    -- interest to clear the cross. A lit auction publishes that imbalance to the
-    -- WHOLE market (attracting liquidity but leaking it to front-runners); a pure
-    -- dark pool leaks nothing but risks no-fill. Canton lets the venue do BOTH:
-    -- reveal the aggregate to the one committed provider, and to nobody else.
+    -- ⚠️ VESTIGIAL. THIS FIELD NO LONGER GRANTS ANYTHING. Read this before you
+    -- reason about who can see the imbalance.
+    --
+    -- It used to name the venue's Designated Liquidity Provider, and naming a party
+    -- here was ALL IT TOOK to be shown the net imbalance of the sealed book. That was
+    -- the design's sharpest flaw: privileged sight of the residual, handed to one
+    -- hand-picked party, with NO obligation demanded in return and no way for anyone
+    -- else to compete for the seat. A privilege without a duty is not a liquidity
+    -- mechanism; it is an informational edge, and Hu & Murphy (2026, Management
+    -- Science 72(5)) measure the damage that shape of channel does at NYSE —
+    -- concentrated, tellingly, exactly where FEES SUPPRESS COMPETITION for it.
+    --
+    -- The privilege now lives on a `LiquidityMandate` (see LiquidityMandate.daml):
+    -- an open offer any registered participant may accept at zero cost, binding the
+    -- accepting provider to absorb a stated size within a stated band, scored on the
+    -- ledger after the close. `PublishImbalance` gates on THAT contract and does not
+    -- read this field at all. Many providers can hold live mandates at once — which
+    -- one `Optional Party` could never express, and which is the whole point.
+    --
+    -- WHY THE FIELD IS STILL HERE, STATED HONESTLY: `ClosingAuction`'s field list is
+    -- the wire format the Java backends construct POSITIONALLY through Daml codegen
+    -- (`LedgerCommands.createAuction`), and removing a field breaks that constructor
+    -- in two committed, currently-green services. Deleting it buys correctness we
+    -- already have — the behaviour is gated on the mandate — at the cost of a build
+    -- break in code this change has no business touching. So it stays, inert, with
+    -- this sign on it. It is observed below purely so an existing DLP party keeps
+    -- seeing the auction it was pointed at; seeing the AUCTION was never the
+    -- privilege, and seeing the IMBALANCE now requires a mandate.
     liquidityProvider : Optional Party
     -- COMMITTEE-ATTESTED CLOSE (the decentralised-operator binding, see Governance.daml).
     -- Optionally, the auction's official price is not the venue's unilateral number
@@ -663,13 +926,21 @@ template ClosingAuction
         trader     : Party              -- the submitting participant
         side       : Side               -- Buy or Sell
         quantity   : Decimal            -- units of the asset to buy/sell
-        limitPrice : Decimal            -- worst acceptable price (buy: max, sell: min)
+        -- THE ORDER TYPE, EXPRESSED AS A TYPE.
+        --   Some p — LIMIT-ON-CLOSE: the worst acceptable price (buy: max, sell: min).
+        --   None   — MARKET-ON-CLOSE: unpriced. Trades at whatever the book prints,
+        --            counts at every candidate price, ranks ahead of every limit
+        --            order, and can never be cancelled for being away from the cross.
+        limitPrice : Optional Decimal
         holdingCid : ContractId Holding -- pre-committed: cash (Buy) or asset (Sell)
       controller trader
       do
         assertMsg "the sealed-order window is closed"          isOpen
         assertMsg "quantity must be positive"                  (quantity > 0.0)
-        assertMsg "limit price must be positive"               (limitPrice > 0.0)
+        -- A limit, IF one is given, must be positive. `None` is not a missing field
+        -- to be defaulted or rejected — it is the MOC order type, and it is valid.
+        assertMsg "a stated limit price must be positive (omit it entirely for MOC)"
+          (case limitPrice of None -> True; Some p -> p > 0.0)
         assertMsg "submitter must be a registered participant"  (trader `elem` participants)
         -- Sanity-check the pre-committed holding actually belongs to the trader.
         h <- fetch holdingCid
@@ -681,19 +952,38 @@ template ClosingAuction
         -- trader immediately. Because each order owns its own reserved slice, no
         -- later order, split/merge, or re-submission can consume or re-create the
         -- holding this order pinned — so the cross always finds valid backing.
-        --   * a SELL reserves `quantity` of the ASSET it will deliver;
-        --   * a BUY reserves `quantity * limitPrice` of CASH.
-        -- BUYING POWER IS CHECKED AGAINST THE LIMIT, NOT THE REFERENCE — this is a
-        -- direct consequence of price discovery, and it is how a real desk does it.
-        -- The print is no longer pinned to `referencePrice`, so reserving at the
-        -- reference would leave a buyer short the moment the cross uncrossed above
-        -- it. A buy can only ever execute at a price <= its own limit, so
-        -- `quantity * limitPrice` is the exact worst case: enough at every price the
-        -- order can trade at, and never more. Any unspent cash comes straight back
-        -- to the buyer as change in the settlement transaction.
-        let reserveAmount = case side of
-              Sell -> quantity
-              Buy  -> quantity * limitPrice
+        --   * a SELL reserves `quantity` of the ASSET it will deliver — the same for
+        --     an MOC as for an LOC, because the asset leg is PRICE-INDEPENDENT. An
+        --     unpriced sell delivers exactly the units it offered, whatever it prints.
+        --   * a LIMITED BUY reserves `quantity * limitPrice` of CASH.
+        --   * AN UNPRICED BUY reserves `quantity * (anchor + collarBand anchor)`.
+        --
+        -- BUYING POWER IS CHECKED AGAINST THE WORST PRICE THE ORDER CAN LEGALLY
+        -- EXECUTE AT — which for an LOC is its own limit, and for an MOC is the top of
+        -- the venue's price collar. This is how a real desk sizes buying power, and
+        -- both cases are the SAME rule, just with different sources for the bound.
+        --   LOC: a buy can only ever execute at a price <= its own limit, so
+        --        `quantity * limitPrice` is the exact worst case.
+        --   MOC: an unpriced buy has NO limit, and that is precisely why this order
+        --        type could not exist here before — there was no bound on what it
+        --        might owe, and you cannot reserve an unbounded amount. THE COLLAR IS
+        --        THE BOUND. `RunClose` will not settle a print outside
+        --        `referencePrice ± collarBand referencePrice`, so the highest price
+        --        this auction can legally print is `referencePrice + collarBand
+        --        referencePrice`, exactly. Reserving there is SUFFICIENT BY
+        --        CONSTRUCTION, not by estimate: either the print lands inside the band
+        --        and the reservation covers it (unspent cash returns as change in the
+        --        settlement transaction), or the print lands outside it and NOTHING
+        --        settles, so the buyer keeps every cent. There is no third case, and
+        --        there is no margin call.
+        --        The anchor cannot move out from under the reservation either: no
+        --        choice on this template rewrites `referencePrice`, so the number the
+        --        reservation is sized against here is the number the collar is
+        --        centred on at the close.
+        let reserveAmount = case (side, limitPrice) of
+              (Sell, _)       -> quantity
+              (Buy, Some lim) -> quantity * lim
+              (Buy, None)     -> quantity * (referencePrice + collarBand referencePrice)
         reserved <- reserveExact holdingCid reserveAmount operator
         orderCid <- create SealedOrder with
           operator; auditor; trader
@@ -766,13 +1056,45 @@ template ClosingAuction
         exercise orderCid VenueCancel
         create this with cancelledCount = cancelledCount + 1
 
-    -- PUBLISH IMBALANCE — SELECTIVE NET-IMBALANCE DISCLOSURE (the DLP feature).
-    -- The operator computes the NET imbalance of the resting sealed book — the
-    -- signed sum totalBuyQty − totalSellQty at the reference price — and discloses
-    -- ONLY that aggregate to the auction's Designated Liquidity Provider via an
-    -- `ImbalanceDisclosure` (signatory operator, observer = the DLP). Requires a
-    -- DLP to be designated; aborts otherwise. Nonconsuming so the venue can refresh
-    -- the disclosure as the book evolves without disturbing the auction.
+    -- PUBLISH IMBALANCE — SELECTIVE NET-IMBALANCE DISCLOSURE, GATED ON A MANDATE.
+    -- ------------------------------------------------------------------------
+    -- WHAT CHANGED, AND WHY IT IS THE MOST IMPORTANT LINE IN THIS FILE. This choice
+    -- used to read `liquidityProvider` off the auction and disclose the residual to
+    -- whoever the venue had written there, demanding nothing. It now demands a LIVE
+    -- `LiquidityMandate` — an obligation the recipient signed, sized and banded — and
+    -- discloses to that mandate's provider and to nobody else. The auction's
+    -- `liquidityProvider` field is not consulted anywhere below.
+    --
+    -- THE SEQUENCE THIS FORCES, which is the property to say out loud on stage:
+    -- YOU MUST COMMIT BEFORE YOU CAN SEE. A mandate is accepted blind — `AcceptTerms`
+    -- shows the acceptor nothing about the book — and there is no other route to the
+    -- imbalance. So nobody reads the residual and then decides whether to be a
+    -- liquidity provider about it. The privilege is the input to a duty already
+    -- undertaken, which is precisely the doctrine NYSE states for the DMM's aggregate
+    -- order access (Rel. 34-98869): the information exists to make the obligation
+    -- performable.
+    --
+    -- AND IT IS PLURAL. One mandate per call, so the venue publishes once per
+    -- obligated provider — but any number of providers may hold live mandates over
+    -- the same book, and each gets the same number at the same time. That is
+    -- deliberate: Hu & Murphy (2026) locate the measured harm of a privileged
+    -- post-disclosure channel in the stocks where high fees INHIBIT COMPETITION for
+    -- it, so the fix is a seat that is cheap to enter and held by several parties at
+    -- once, not one seat with better paperwork.
+    --
+    -- COMPLETE-BOOK COMMITMENT, NEW HERE AND LOAD-BEARING. `RunClose` has always
+    -- asserted that the orders it is handed ARE the whole book. This choice did not,
+    -- which meant a venue could publish an imbalance computed over a hand-picked
+    -- subset — and now that the disclosed number SIZES A PROVIDER'S OBLIGATION
+    -- (`NoteDisclosure`), an understated or overstated imbalance is no longer just
+    -- misleading, it is a lever on someone's duty. So the same counter arithmetic and
+    -- the same distinctness check `RunClose` uses apply here too.
+    --
+    -- Nonconsuming ON THE AUCTION, so the venue can refresh the disclosure as the
+    -- book evolves. It DOES consume the mandate (via `NoteDisclosure`, which stamps
+    -- what was shown onto it) and returns only the disclosure cid, so a venue
+    -- publishing twice to the same provider re-reads that provider's mandate first —
+    -- the same cid-threading discipline `SubmitOrder` already imposes.
     --
     -- CRITICAL PRIVACY PROPERTY: this reveals the AGGREGATE ONLY. The individual
     -- SealedOrders are fetched here (the operator signs every one, so it may read
@@ -793,12 +1115,44 @@ template ClosingAuction
     nonconsuming choice PublishImbalance : ContractId ImbalanceDisclosure
       with
         restingOrders : [ContractId SealedOrder]  -- every resting order for THIS book
+        -- THE GATE. A live mandate for THIS book, held by the party about to be shown
+        -- the residual. There is no `Optional` here and no bypass: no mandate, no
+        -- number. (This argument is the ONE signature change this work required —
+        -- Daml-LF 2.x has no contract keys, so a mandate can only be reached by
+        -- contract id, and `ClosingAuction`'s field list was correctly frozen.)
+        mandateCid    : ContractId LiquidityMandate
       controller operator
       do
         assertMsg "imbalance disclosure needs an open window" isOpen
-        lp <- case liquidityProvider of
-          Some p  -> pure p
-          None    -> abort "this auction has no designated liquidity provider"
+        now <- getTime
+        -- ------------------------------------------------------------------
+        -- THE MANDATE GATE — one live obligation, for this book, held by a
+        -- registered participant. Every check reads through the shared predicates in
+        -- LiquidityMandate so the gate and the scoring cannot drift apart.
+        -- ------------------------------------------------------------------
+        m <- fetch mandateCid
+        assertMsg "mandate is for a different venue / instrument / cash leg / session"
+          (mandateCoversBook m operator instrumentId cashInstrument session)
+        assertMsg "mandate has expired: an expired obligation buys no disclosure"
+          (mandateIsLive now m)
+        -- The band a provider promised to stand in is measured from the venue's
+        -- PUBLISHED anchor, so the two numbers have to be the same number. A mandate
+        -- struck against a different anchor is a promise about a different auction.
+        assertMsg "mandate anchor does not match this auction's published anchor"
+          (m.anchorPrice == referencePrice)
+        -- ELIGIBILITY IS THE TRADING ROSTER AND NOTHING MORE — the cheap-entry
+        -- property, re-checked at the moment of disclosure so the roster and the seat
+        -- cannot drift. If you may lodge an order here, you may hold a mandate here.
+        assertMsg "a mandated provider must be a registered participant of this book"
+          (m.provider `elem` participants)
+        -- ------------------------------------------------------------------
+        -- COMPLETE-BOOK COMMITMENT — the disclosed number sizes an obligation, so it
+        -- has to be computed over the WHOLE book, exactly as `RunClose` demands.
+        -- ------------------------------------------------------------------
+        assertMsg "the imbalance must be computed over the COMPLETE book"
+          (length restingOrders == submittedCount - cancelledCount)
+        assertMsg "the same order was supplied more than once"
+          (length (dedup restingOrders) == length restingOrders)
         -- Read every resting order and confirm it belongs to THIS auction's book
         -- (same operator / instrument / cash leg / session). Only their side+size
         -- feed the aggregate — never their identity.
@@ -809,6 +1163,9 @@ template ClosingAuction
           assertMsg "order uses a different cash instrument"    (o.cashInstrument == cashInstrument)
           assertMsg "order rests in a different session"        (o.session == session)
           pure o)
+        -- Every resting order counts at full size, MOC and LOC alike — this aggregate
+        -- is deliberately price-blind (see SCOPE above), and an unpriced order is in
+        -- the book at every price anyway, so there is nothing to filter it against.
         let totalBuy  = sum [o.quantity | o <- orders, o.side == Buy]
         let totalSell = sum [o.quantity | o <- orders, o.side == Sell]
         let net = totalBuy - totalSell   -- signed: + is buy-heavy, − is sell-heavy
@@ -818,9 +1175,18 @@ template ClosingAuction
               | net > 0.0 = ("Buy",  net)
               | net < 0.0 = ("Sell", negate net)
               | otherwise = ("Flat", 0.0)
-        now <- getTime
+        -- STAMP THE OBLIGATION IN THE SAME TRANSACTION AS THE PRIVILEGE. The provider
+        -- cannot be shown a number without the ledger recording that it was shown it,
+        -- because the disclosure and the record commit together or not at all. This
+        -- is what `MandatePerformance` scores against at the close — the duty is
+        -- sized by what was actually disclosed during the session, not by a figure
+        -- assembled afterwards.
+        _ <- exercise mandateCid NoteDisclosure with netSide; netQuantity
+        -- `liquidityProvider` on the DISCLOSURE is the MANDATED provider — the field
+        -- name is unchanged (the Java bindings read it), but the party in it is now
+        -- one that signed an obligation rather than one the venue named.
         create ImbalanceDisclosure with
-          operator; liquidityProvider = lp; instrumentId; cashInstrument; session
+          operator; liquidityProvider = m.provider; instrumentId; cashInstrument; session
           netSide; netQuantity; referencePrice; computedAt = now
 
     -- CLOSE BIDDING — the operator seals the window (no more orders). Recreates
@@ -830,10 +1196,11 @@ template ClosingAuction
       do create this with isOpen = False
 
     -- RUN CLOSE — the headline. The operator supplies the WHOLE sealed book; the
-    -- auction UNCROSSES it, prints the volume-maximising price, and crosses
-    -- `min(buyVol, sellVol)` at that one price, pro-rating the heavy side. Every
-    -- fill settles in THIS single transaction. All-or-nothing: if any leg fails a
-    -- check, the WHOLE close rolls back — no partial print.
+    -- auction UNCROSSES it, prints the volume-maximising price (BOUNDED into the
+    -- venue's price collar), and crosses `min(buyVol, sellVol)` at that one price,
+    -- rationing the heavy side by class then price. Every fill settles in THIS single
+    -- transaction. All-or-nothing: if any leg fails a check, the WHOLE close rolls
+    -- back — no partial print.
     --
     -- The operator supplies the ORDERS. It does not supply the PRICE, and it cannot
     -- supply a subset of the orders (see the completeness assertion below).
@@ -895,12 +1262,9 @@ template ClosingAuction
         -- there is no auction price and the whole close aborts.
         let book = [ BookOrder with side = o.side; quantity = o.quantity; limitPrice = o.limitPrice
                    | (_, o) <- buys ++ sells ]
-        cross <- case discoverPrice referencePrice book of
+        raw <- case discoverPrice referencePrice book of
           Some c -> pure c
           None   -> abort "there is no crossing volume"
-        let closingPrice = cross.price
-        let matched      = cross.executedQty
-        assertMsg "there is no crossing volume" (matched > 0.0)
 
         -- COMMITTEE-ATTESTED CLOSE. If this auction is bound to a governance fixing,
         -- prove the ANCHOR is a genuine K-of-N attestation for THIS book before any
@@ -917,6 +1281,27 @@ template ClosingAuction
         -- to print away from the book. Both halves are ledger-enforced, and
         -- Test:testCommitteeAttestedClose proves the print can legitimately land
         -- AWAY from the attested number when the book says so.
+        --
+        -- AND THE ANCHOR IS CHECKED AGAINST THE ACCRUED NAV, NOT THE STRUCK PRICE.
+        -- This assert used to be `f.price == referencePrice` — exact equality with the
+        -- number the committee signed. Continuous accrual (Governance.daml) makes that
+        -- WRONG rather than merely strict: a treasury or money-market fund's value
+        -- between marks is not discovered, it is EARNED, so the correct anchor for a
+        -- close at 16:00 is the NAV ACCRUED TO 16:00 and that is by construction not
+        -- equal to a base struck earlier in the day. Demanding equality would force
+        -- every venue to anchor on a stale number and would make a fixing unusable the
+        -- moment it aged.
+        -- So: recompute the NAV at the close's own ledger time and require the anchor
+        -- to be CONSISTENT with it — at or below it (an anchor ABOVE the accrual is a
+        -- venue pricing value the fund has not earned, which no elapsed time explains)
+        -- and no more than `anchorAccrualToleranceBps` behind (the staleness budget:
+        -- 1bp, which at a 3.6% ACT/360 money-market rate is exactly one day of
+        -- accrual). The reasoning for both the width and the asymmetry is written out
+        -- at `anchorConsistentWithNav`.
+        -- A NON-ACCRUING FIXING (`ratePerAnnum = 0.0`, the default `ProposeFixing`
+        -- path) accrues nothing at any instant, so `navAt` returns the struck price and
+        -- this check collapses to the old equality-within-a-hair — every existing
+        -- snapshot-bound auction behaves exactly as it did.
         case fixingRef of
           None -> pure ()
           Some fCid -> do
@@ -924,41 +1309,81 @@ template ClosingAuction
             assertMsg "attested fix is for a different instrument" (f.instrumentId == instrumentId)
             assertMsg "attested fix uses a different cash unit"     (f.cashInstrument == cashInstrument)
             assertMsg "attested fix is for a different session"     (f.session == session)
-            assertMsg "auction anchor does not match the attested NAV" (f.price == referencePrice)
+            closeTime <- getTime
+            assertMsg "auction anchor is not consistent with the attested NAV accrued to the close"
+              (anchorConsistentWithNav (navAt f closeTime) referencePrice)
             assertMsg "fix does not carry enough member attestations"
               (length f.attestors >= f.threshold)
 
         -- ------------------------------------------------------------------
-        -- THE PRICE COLLAR — the print has to land inside the band.
+        -- THE PRICE COLLAR — BOUND THE PRINT, THEN RE-CROSS AT IT.
         -- ------------------------------------------------------------------
-        -- Deliberately AFTER the fixing check, because a band is only as good as
-        -- what it is centred on: prove the anchor is the committee's attested number
-        -- first, THEN require the print to sit within `collarBand` of it. Nasdaq's
-        -- construction, greater of the floor or the percentage; see the module
-        -- header for why we abort rather than extend a call phase we do not have.
-        -- A thin book can no longer print anywhere and have the venue sign a
-        -- SettlementBatch calling it the official close.
-        assertMsg
-          ("discovered price is outside the venue's price collar around the anchor"
-           <> " — no close printed")
-          (withinCollar referencePrice closingPrice)
+        -- Deliberately AFTER the fixing check, because a band is only as good as what
+        -- it is centred on: prove the anchor is the committee's attested number first,
+        -- and only THEN let that anchor decide the band the print lives in. That
+        -- ordering matters more now than it did when the collar merely vetoed a price,
+        -- because the band can now SET the price.
+        --
+        -- WE CLAMP, WE DO NOT CANCEL. Nasdaq bounds the cross and lets it happen —
+        -- "$8.95 is the lowest price at which the Cross can occur and $12.05 is the
+        -- highest price at which it can occur" — and NYSE Rule 7.35B(g)(2) bounds the
+        -- price the DMM may select rather than calling the auction off. This close
+        -- used to abort on a breach, which meant one oversized order could deny every
+        -- other participant their print; for an index fund whose entire instruction is
+        -- "own the closing price", cancelling the close is the one outcome that cannot
+        -- be hedged. So: clamp to the nearer boundary, and print.
+        --
+        -- AND THEN RE-CROSS, WHICH IS THE PART THAT IS EASY TO GET WRONG. The volume
+        -- that changes hands at the boundary is NOT the volume the unconstrained price
+        -- would have traded — it is smaller, because the orders that were reaching
+        -- beyond the band are no longer eligible at it. So both sides are RE-SCORED at
+        -- the clamped price by the same `crossAt` that scored every candidate, and
+        -- everything downstream (eligibility, the allocation ladder, the conservation
+        -- asserts, the receipts) runs off that re-scored result. The excess on the
+        -- heavy side simply does not fill and goes home intact.
+        -- When the discovered price is already inside the band this is the IDENTITY:
+        -- `clampToCollar` returns it unchanged and `crossAt` reproduces exactly the
+        -- CrossResult `discoverPrice` already computed, because it is literally the
+        -- function that computed it. An ordinary close does not notice the collar.
+        let closingPrice = clampToCollar referencePrice raw.price
+        let cross        = crossAt book closingPrice
+        let matched      = cross.executedQty
+        -- TRIPWIRE, not a gate: `clampToCollar` cannot return a price outside the
+        -- band. If this ever fires the band arithmetic is broken and nothing should
+        -- settle.
+        assertMsg "the clamped print is not inside the collar" (withinCollar referencePrice closingPrice)
+        -- THE HONEST CORNER. If the boundary trades nothing then — exec(P) being
+        -- quasi-concave — nothing anywhere inside the band trades anything either, and
+        -- there is no auction price to print. That is the ordinary no-cross case
+        -- (Xetra §11.1.1 step 6), not the collar refusing to work: clamping bounds the
+        -- price, it does not manufacture a willing counterparty, and it never drags an
+        -- order through its own limit.
+        assertMsg "the book does not cross anywhere inside the venue's price collar"
+          (matched > 0.0)
 
-        -- ELIGIBILITY AT THE DISCOVERED PRICE. A buy trades iff its limit is >= the
-        -- print; a sell iff its limit is <= it. Everything else is away from the
-        -- cross and is cancelled on close further down.
-        let eligibleBuys  = filter (\(_, o) -> o.limitPrice >= closingPrice) buys
-        let eligibleSells = filter (\(_, o) -> o.limitPrice <= closingPrice) sells
-        let awayFromCross = filter (\(_, o) -> o.limitPrice <  closingPrice) buys
-                         ++ filter (\(_, o) -> o.limitPrice >  closingPrice) sells
+        -- ELIGIBILITY AT THE PRINTED PRICE, through the SAME `eligibleAt` the
+        -- uncross scored the price with — so the book that set the price and the book
+        -- that settles at it cannot disagree. A limited buy trades iff its limit is >=
+        -- the print, a limited sell iff its limit is <= it, and AN UNPRICED MOC TRADES
+        -- EITHER WAY: it is eligible at every price by construction, so it is never in
+        -- `awayFromCross` and is never cancelled for being off-price. There is no
+        -- price at which a market order is away from the cross — that is the order
+        -- type, not a special case bolted on here.
+        let eligibleBuys  = filter (\(_, o) ->      eligibleAt Buy  closingPrice o.limitPrice) buys
+        let eligibleSells = filter (\(_, o) ->      eligibleAt Sell closingPrice o.limitPrice) sells
+        let awayFromCross = filter (\(_, o) -> not (eligibleAt Buy  closingPrice o.limitPrice)) buys
+                         ++ filter (\(_, o) -> not (eligibleAt Sell closingPrice o.limitPrice)) sells
 
         let totalBuy  = sum [o.quantity | (_, o) <- eligibleBuys]
         let totalSell = sum [o.quantity | (_, o) <- eligibleSells]
         -- Belt and braces: the volumes the settlement is about to move MUST be the
-        -- volumes the uncross scored this price on. If these ever disagreed, the
-        -- print and the fills would be describing two different books.
-        assertMsg "settled buy volume does not match the discovered cross"
+        -- volumes the uncross scored THE PRINTED PRICE on — `cross`, the re-scored
+        -- result at the possibly-clamped price, never the unconstrained `raw`. If
+        -- these ever disagreed, the print and the fills would be describing two
+        -- different books.
+        assertMsg "settled buy volume does not match the printed cross"
           (totalBuy == cross.buyVolume)
-        assertMsg "settled sell volume does not match the discovered cross"
+        assertMsg "settled sell volume does not match the printed cross"
           (totalSell == cross.sellVolume)
 
         -- ------------------------------------------------------------------
@@ -1091,7 +1516,11 @@ template SealedOrder
     session        : Text             -- "Open" | "Close": the cross this order rests in
     side           : Side
     quantity       : Decimal
-    limitPrice     : Decimal
+    -- THE ORDER TYPE. `Some p` = LIMIT-ON-CLOSE at p. `None` = UNPRICED
+    -- MARKET-ON-CLOSE: eligible at every price, ranked ahead of every limit order,
+    -- and — for a BUY — backed by a reservation sized at the top of the price collar,
+    -- which is the highest price the close can legally print.
+    limitPrice     : Optional Decimal
     holdingCid     : ContractId Holding -- pre-committed cash (Buy) or asset (Sell),
                                         -- disclosed to the operator at submission
   where
@@ -1120,13 +1549,21 @@ template SealedOrder
         -- an invariant of the choice rather than a liveness hazard for the venue.
         assertMsg "fill quantity must be positive"        (fillQty > 0.0)
         assertMsg "fill cannot exceed the order quantity" (fillQty <= quantity)
+        -- PRICE ELIGIBILITY, through the same `eligibleAt` the uncross and the close
+        -- use. For an LOC this is the old assert unchanged. FOR AN UNPRICED MOC IT IS
+        -- ALWAYS TRUE, and it must be: an order that accepted the print sight unseen
+        -- cannot then be refused settlement for being off-price. This is the last of
+        -- the three price gates an MOC has to pass through, and all three now read
+        -- from one definition, so none of them can quietly disagree with the others.
         case side of
           Sell -> do
-            assertMsg "sell limit must be <= the closing price" (limitPrice <= closingPrice)
+            assertMsg "a limited sell must be priced <= the closing price (an MOC is always eligible)"
+              (eligibleAt Sell closingPrice limitPrice)
             -- deliver the matched ASSET to the venue; unsold residual stays put.
             deliverExact holdingCid fillQty operator
           Buy -> do
-            assertMsg "buy limit must be >= the closing price"  (limitPrice >= closingPrice)
+            assertMsg "a limited buy must be priced >= the closing price (an MOC is always eligible)"
+              (eligibleAt Buy closingPrice limitPrice)
             -- deliver exactly the CASH owed to the venue; change back to the buyer.
             deliverExact holdingCid (fillQty * closingPrice) operator
 
@@ -1171,9 +1608,14 @@ template SealedOrder
 -- ---------------------------------------------------------------------------
 -- ImbalanceDisclosure — the NET imbalance of the sealed book, shown to ONE party.
 -- ---------------------------------------------------------------------------
--- LIQUIDITY WITHOUT LEAKAGE. This is the whole point of the Designated Liquidity
--- Provider feature. Emitted by `ClosingAuction.PublishImbalance`, it carries the
--- AGGREGATE order imbalance for one instrument's book and NOTHING else:
+-- LIQUIDITY WITHOUT LEAKAGE, AND NOW WITHOUT A FREE LUNCH. Emitted by
+-- `ClosingAuction.PublishImbalance` — which will not emit one at all unless the
+-- recipient holds a live `LiquidityMandate` for this book (see LiquidityMandate.daml).
+-- The `liquidityProvider` field below therefore names a party that SIGNED an
+-- obligation to absorb up to a stated size within a stated band, not a party the
+-- venue picked; and several such parties can be holding mandates, and receiving
+-- these disclosures, at the same time. It carries the AGGREGATE order imbalance for
+-- one instrument's book and NOTHING else:
 --   * netSide     — "Buy" | "Sell" | "Flat": the side the book is HEAVY on.
 --   * netQuantity — the magnitude of that imbalance (>= 0), at the reference price.
 --

@@ -2,6 +2,7 @@ package com.lucilla.settlement.model.marketonclose;
 
 import static com.daml.ledger.javaapi.data.codegen.json.JsonLfEncoders.apply;
 
+import com.daml.ledger.javaapi.data.DamlOptional;
 import com.daml.ledger.javaapi.data.Numeric;
 import com.daml.ledger.javaapi.data.Party;
 import com.daml.ledger.javaapi.data.Value;
@@ -23,9 +24,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 public class SubmitOrder extends DamlRecord<SubmitOrder> {
-  public static final String _packageId = "cd6202b647482a998c93612fd615750e35250bcfb57272e00d9198ebe014161a";
+  public static final String _packageId = "5ac8f47b9e28322096bc4c9c58f8449ead13792c4a30aad95cd1e80669894a79";
 
   public final String trader;
 
@@ -33,11 +35,11 @@ public class SubmitOrder extends DamlRecord<SubmitOrder> {
 
   public final BigDecimal quantity;
 
-  public final BigDecimal limitPrice;
+  public final Optional<BigDecimal> limitPrice;
 
   public final Holding.ContractId holdingCid;
 
-  public SubmitOrder(String trader, Side side, BigDecimal quantity, BigDecimal limitPrice,
+  public SubmitOrder(String trader, Side side, BigDecimal quantity, Optional<BigDecimal> limitPrice,
       Holding.ContractId holdingCid) {
     this.trader = trader;
     this.side = side;
@@ -54,7 +56,8 @@ public class SubmitOrder extends DamlRecord<SubmitOrder> {
       String trader = PrimitiveValueDecoders.fromParty.decode(fields$.get(0).getValue());
       Side side = Side.valueDecoder().decode(fields$.get(1).getValue());
       BigDecimal quantity = PrimitiveValueDecoders.fromNumeric.decode(fields$.get(2).getValue());
-      BigDecimal limitPrice = PrimitiveValueDecoders.fromNumeric.decode(fields$.get(3).getValue());
+      Optional<BigDecimal> limitPrice = PrimitiveValueDecoders.fromOptional(
+            PrimitiveValueDecoders.fromNumeric).decode(fields$.get(3).getValue());
       Holding.ContractId holdingCid =
           new Holding.ContractId(fields$.get(4).getValue().asContractId().orElseThrow(() -> new IllegalArgumentException("Expected holdingCid to be of type com.daml.ledger.javaapi.data.ContractId")).getValue());
       return new SubmitOrder(trader, side, quantity, limitPrice, holdingCid);
@@ -66,7 +69,7 @@ public class SubmitOrder extends DamlRecord<SubmitOrder> {
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("trader", new Party(this.trader)));
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("side", this.side.toValue()));
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("quantity", new Numeric(this.quantity)));
-    fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("limitPrice", new Numeric(this.limitPrice)));
+    fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("limitPrice", DamlOptional.of(this.limitPrice.map(v$0 -> new Numeric(v$0)))));
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("holdingCid", this.holdingCid.toValue()));
     return new com.daml.ledger.javaapi.data.DamlRecord(fields);
   }
@@ -77,7 +80,7 @@ public class SubmitOrder extends DamlRecord<SubmitOrder> {
             case "trader": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
             case "side": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(1, new com.lucilla.settlement.model.marketonclose.Side.JsonDecoder$().get());
             case "quantity": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(2, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10));
-            case "limitPrice": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(3, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10));
+            case "limitPrice": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(3, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10)), java.util.Optional.empty());
             case "holdingCid": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(4, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.contractId(com.lucilla.settlement.model.holding.Holding.ContractId::new));
             default: return null;
           }
@@ -94,7 +97,7 @@ public class SubmitOrder extends DamlRecord<SubmitOrder> {
         JsonLfEncoders.Field.of("trader", apply(JsonLfEncoders::party, trader)),
         JsonLfEncoders.Field.of("side", apply(Side::jsonEncoder, side)),
         JsonLfEncoders.Field.of("quantity", apply(JsonLfEncoders::numeric, quantity)),
-        JsonLfEncoders.Field.of("limitPrice", apply(JsonLfEncoders::numeric, limitPrice)),
+        JsonLfEncoders.Field.of("limitPrice", apply(JsonLfEncoders.optional(JsonLfEncoders::numeric), limitPrice)),
         JsonLfEncoders.Field.of("holdingCid", apply(JsonLfEncoders::contractId, holdingCid)));
   }
 

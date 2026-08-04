@@ -24,7 +24,7 @@ import java.util.Map;
 import java.util.Objects;
 
 public class TokenStandardDvp_Settle extends DamlRecord<TokenStandardDvp_Settle> {
-  public static final String _packageId = "cd6202b647482a998c93612fd615750e35250bcfb57272e00d9198ebe014161a";
+  public static final String _packageId = "5ac8f47b9e28322096bc4c9c58f8449ead13792c4a30aad95cd1e80669894a79";
 
   public final Map<String, Allocation.ContractId> allocations;
 

@@ -15,6 +15,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -36,6 +38,11 @@ import java.util.Optional;
  *   POST /api/auction                     open a ClosingAuction (actAs operator)
  *   POST /api/auction/{cid}/order         submit a sealed order (actAs trader)
  *   POST /api/auction/{cid}/close         seal + run the uniform-price cross (actAs operator)
+ *   GET  /api/moc/imbalance               the net residual — MANDATED PROVIDERS ONLY
+ *   GET  /api/moc/mandate/terms           the venue's OPEN offer of the liquidity seat
+ *   POST /api/moc/mandate/terms           post that offer (actAs operator)
+ *   POST /api/moc/mandate/accept          take up the seat (actAs provider)
+ *   GET  /api/moc/mandate                 your own live obligation over a book
  * </pre>
  */
 @RestController
@@ -234,9 +241,11 @@ public class SettlementController {
         String auctionCid;
         BigDecimal closingPrice;
         boolean opened;
+        List<String> roster;
         if (open.isPresent()) {
             auctionCid = open.get().contractId();
             closingPrice = open.get().referencePrice();
+            roster = open.get().participants();
             opened = false;
         } else {
             closingPrice = ledger.referencePriceOf("Issuer", req.instrumentId())
@@ -246,35 +255,63 @@ public class SettlementController {
                     .map(p -> p.party())
                     .filter(p -> !LedgerService.labelOf(p).equalsIgnoreCase("sandbox"))
                     .toList();
-            // Designate the seed's liquidity provider (Bank) as this auction's DLP, so
-            // the venue can disclose the NET imbalance to it — and to nobody else — to
-            // attract offsetting liquidity without leaking the book. Absent a Bank party
-            // the auction simply opens with no DLP (a plain dark pool).
+            // The seed's conventional provider (Bank) still goes into the auction's
+            // liquidityProvider field, but that field is INERT — it designates nobody
+            // and buys nobody anything. Disclosure is gated on an accepted mandate.
             Optional<String> dlp = defaultLiquidityProvider();
             auctionCid = ledger.submitForCreated(venue,
                     LedgerCommands.createAuction(venue, auditor, req.instrumentId(),
                             cashInstrument, session, closingPrice, participants, dlp, Optional.empty()),
                     LedgerCommands.closingAuctionTemplateId());
+            roster = participants;
             opened = true;
         }
 
-        // The trader may name a limit; absent one it is pinned to the anchor so the
-        // order is certain to cross. A limit AWAY from the anchor is what lets the
-        // uncross print somewhere other than the reference — the whole point of price
-        // discovery — so it is accepted here and honoured by the ledger.
-        BigDecimal limitPrice = req.limitPrice() != null ? req.limitPrice() : closingPrice;
+        // POST THE SEAT WITH THE BOOK. A book whose terms were never posted has a seat
+        // nobody can take, and therefore no route by which anyone may ever be shown its
+        // residual — the offer and the auction it is about belong in the same breath.
+        //
+        // Run for an ALREADY-OPEN book too, not only a freshly opened one: a book that
+        // predates the mandate model would otherwise keep an uncontestable seat forever.
+        // Idempotent — it returns after one query when live terms already stand.
+        ensureMandateTerms(venue, auditor, req.instrumentId(), cashInstrument, session,
+                closingPrice, roster);
+
+        // THE ORDER TYPE. Empty = an unpriced MARKET-on-close: it takes whatever the
+        // book prints, counts at every candidate price, and is allocated ahead of every
+        // limit order. A stated limit is a LIMIT-on-close, and a limit AWAY from the
+        // anchor is what lets the uncross print somewhere other than the reference —
+        // the whole point of price discovery.
+        //
+        // AN ABSENT LIMIT IS AN ORDER TYPE, NOT A MISSING FIELD. This used to silently
+        // pin an unpriced request to the anchor, i.e. quietly convert it into a limit
+        // order at the reference — which cancels itself the moment the book crosses
+        // anywhere else, exactly the opposite of what a market order is for.
+        Optional<BigDecimal> limitPrice =
+                LedgerCommands.orderType(req.orderType(), req.limitPrice());
 
         // Pre-commit the trader's holding.
         //
-        // BUY SIDE: THE LEDGER RESERVES quantity * LIMIT, NOT quantity * reference.
-        // RunClose discovers the clearing price from the book and it can print ABOVE
-        // the anchor, so funding at the reference leaves the buyer short and
-        // SubmitOrder aborts with "committed holding is too small to back this
-        // order". A buy can never execute above its own limit, so quantity * limit is
-        // the exact worst case; any unspent cash returns as change at settlement.
+        // BUY SIDE — THE BUYING-POWER FORMULA, WHICH IS NOT quantity * anchor.
+        // The ledger reserves the worst price the order can LEGALLY execute at, and
+        // this pre-check has to size the committed holding to exactly the same number
+        // or SubmitOrder aborts with "committed holding is too small to back this
+        // order":
+        //   * LIMIT buy  -> quantity * limit. A buy can never execute above its own
+        //     limit, so the limit is the exact worst case. (Not the anchor: RunClose
+        //     discovers the price from the book and it can print ABOVE the anchor.)
+        //   * MARKET buy -> quantity * collarHigh(anchor), the TOP OF THE PRICE COLLAR.
+        //     An unpriced buy has no limit of its own, so the only bound on what it can
+        //     be asked to pay is the venue's collar — RunClose clamps the print into
+        //     anchor +/- collarBand(anchor) and cannot settle outside it. Reserving at
+        //     the ANCHOR here would under-fund every market buy by up to the collar's
+        //     width and reject orders that are perfectly fundable at the boundary.
+        // Both cases live in LedgerCommands.buyReservation so there is one formula.
         String holdingCid = isBuy
                 ? ledger.provisionAtLeastHolding(trader, cashInstrument,
-                        req.quantity().multiply(limitPrice))
+                        LedgerCommands.buyReservation(limitPrice, closingPrice, req.quantity()))
+                // A SELL delivers `quantity` of the asset whatever it prints — the asset
+                // leg is price-independent, so MOC and LOC reserve identically.
                 : ledger.provisionAtLeastHolding(trader, req.instrumentId(), req.quantity());
 
         // SubmitOrder is CONSUMING: it archives the auction and re-creates it with
@@ -337,8 +374,13 @@ public class SettlementController {
                         && o.instrumentId().equals(instrumentId)
                         && o.cashInstrument().equals(cashInstrument)
                         && o.session().equals(sess))
+                // limitPrice stays NULL for an unpriced market-on-close order — the
+                // order type showing through, which the UI renders as "MOC". Coercing
+                // it to 0 or to the anchor would put a price on the wire that the order
+                // does not have.
                 .map(o -> new Dtos.MocOrderView(
-                        o.contractId(), o.trader(), o.side(), o.quantity(), o.limitPrice()))
+                        o.contractId(), o.trader(), o.side(), o.quantity(),
+                        o.limitPrice(), o.orderType()))
                 .toList();
         // Dark-pool hint (traders only): count of OTHER resting orders, no details.
         int othersResting = 0;
@@ -514,21 +556,35 @@ public class SettlementController {
                 batch.closingPrice(), fills);
     }
 
-    // ---- Designated Liquidity Provider: selective imbalance disclosure -----
+    // ---- The contestable mandate + selective imbalance disclosure ----------
 
     /**
-     * The NET imbalance of the sealed book — the DESIGNATED LIQUIDITY PROVIDER view.
+     * The NET imbalance of the resting book — the MANDATED LIQUIDITY PROVIDER view.
      *
-     * <p>Liquidity without leakage: a lit auction publishes the imbalance to the
-     * whole market (leaking it); a dark pool leaks nothing but risks a no-fill. This
-     * endpoint discloses the AGGREGATE net imbalance to exactly ONE party — the
-     * auction's designated liquidity provider — and to the venue, and to nobody else.
+     * <p>Liquidity without leakage: a lit auction publishes the imbalance to the whole
+     * market (leaking it); a dark pool leaks nothing but risks a no-fill. This endpoint
+     * discloses the AGGREGATE net imbalance to a party that has SIGNED AN OBLIGATION to
+     * absorb it — and to the venue — and to nobody else.
      *
-     * <p>Enforcement is at the LEDGER, not here. The venue first refreshes the
-     * {@code ImbalanceDisclosure} from the current book (it is observable only by the
-     * DLP), then we read it back <b>as the acting party</b>: the DLP and the venue see
-     * it; a normal trader sees nothing and gets {@code 403}. Individual orders and
-     * trader identities are never revealed — only side + magnitude.
+     * <p><b>WHAT CHANGED.</b> The privilege used to follow the auction's
+     * {@code liquidityProvider} field: a party name the venue wrote into its own
+     * contract, which owed nothing and had agreed to nothing. It now follows a live
+     * {@code LiquidityMandate}, co-signed by the provider, sized (`commitmentSize`) and
+     * banded (`maxBandBps`) against the venue's published anchor. The field is inert and
+     * is not consulted here.
+     *
+     * <p><b>THE MANDATE IS RESOLVED SERVER-SIDE — never taken from the caller.</b> A
+     * contract id off the wire is not an authorisation: anyone could quote someone
+     * else's. The desk queries the ledger for the ACTING PARTY's own live mandate over
+     * exactly this book (venue, instrument, cash leg, session) at exactly this anchor,
+     * and publishes against that. Re-resolved on EVERY call because
+     * {@code PublishImbalance} consumes the mandate as it stamps the disclosure onto it.
+     *
+     * <p><b>NO MANDATE IS A 4xx WITH A ROUTE OUT.</b> A caller holding no mandate gets
+     * {@code 403} and {@code mandateRequired=true} — not an empty imbalance, which would
+     * read as "the book is balanced", and not a 500. The venue asking when NO provider
+     * has taken the seat gets {@code 409}: nothing is wrong with the request, there is
+     * simply nobody the residual may lawfully be shown to.
      */
     @GetMapping("/moc/imbalance")
     public ResponseEntity<Dtos.MocImbalanceResponse> mocImbalance(
@@ -540,31 +596,46 @@ public class SettlementController {
         String sess = LedgerCommands.session(session);
         String acting = (actingAs == null || actingAs.isBlank())
                 ? venue : ledger.resolveParty(actingAs);
+        boolean actingIsVenue = acting.equals(venue);
 
-        // 1) Find the open auction (as venue) for this book that HAS a designated DLP.
+        // 1) The open book. No auction is not an error — there is simply nothing yet.
         var open = ledger.auctionsVisibleTo(venue).stream()
                 .filter(a -> a.isOpen()
                         && a.instrumentId().equals(instrumentId)
                         && a.cashInstrument().equals(cashInstrument)
                         && a.session().equals(sess))
                 .findFirst();
-        if (open.isEmpty() || open.get().liquidityProvider() == null) {
-            // No DLP auction open → there is nothing to disclose to anyone.
+        if (open.isEmpty()) {
             return ResponseEntity.ok(new Dtos.MocImbalanceResponse(false, instrumentId,
-                    cashInstrument, sess, "Flat", BigDecimal.ZERO, open.map(
-                            com.lucilla.settlement.ledger.LedgerService.AuctionView::referencePrice)
-                            .orElse(null), null,
-                    "no designated-liquidity-provider auction is open for this book"));
+                    cashInstrument, sess, "Flat", BigDecimal.ZERO, null, null, false,
+                    "no auction is open for this book"));
         }
         var a = open.get();
-        String lpLabel = LedgerService.labelOf(a.liquidityProvider());
 
-        // 2) As the VENUE, refresh the disclosure from the CURRENT book: archive any
-        //    stale snapshot, then recompute + publish the net aggregate. The created
-        //    ImbalanceDisclosure is observable only by the DLP (and the venue).
+        // 2) THE GATE. Resolve the mandate that authorises this disclosure, server-side.
+        MandateGate gate = resolveMandate(acting, venue, instrumentId, cashInstrument, sess,
+                a.referencePrice());
+        if (!gate.granted()) {
+            return ResponseEntity
+                    .status(actingIsVenue ? HttpStatus.CONFLICT : HttpStatus.FORBIDDEN)
+                    .body(new Dtos.MocImbalanceResponse(false, instrumentId, cashInstrument,
+                            sess, null, null, a.referencePrice(), null, true, gate.reason()));
+        }
+        var mandate = gate.mandate();
+        String providerLabel = LedgerService.labelOf(mandate.provider());
+
+        // 3) As the VENUE, refresh THIS PROVIDER's disclosure from the CURRENT book:
+        //    archive its stale snapshot, then recompute + publish.
+        //
+        //    Scoped to the one provider on purpose. Several providers may hold live
+        //    mandates over the same book — that plurality is the point — so archiving
+        //    every disclosure for the book would wipe a competitor's view each time
+        //    anyone refreshed theirs.
         for (var stale : ledger.imbalancesVisibleTo(venue)) {
             if (stale.operator().equals(venue) && stale.instrumentId().equals(instrumentId)
-                    && stale.cashInstrument().equals(cashInstrument) && stale.session().equals(sess)) {
+                    && stale.cashInstrument().equals(cashInstrument)
+                    && stale.session().equals(sess)
+                    && stale.liquidityProvider().equals(providerLabel)) {
                 try {
                     ledger.submit(venue, LedgerCommands.archiveImbalance(stale.contractId()));
                 } catch (RuntimeException e) {
@@ -572,25 +643,30 @@ public class SettlementController {
                 }
             }
         }
+        // THE COMPLETE BOOK. PublishImbalance now asserts the same completeness RunClose
+        // does — the disclosed number sizes someone's duty, so it cannot be computed
+        // over a hand-picked subset.
         List<String> restingCids = ledger.sealedOrdersVisibleTo(venue).stream()
                 .filter(o -> o.operator().equals(venue)
                         && o.instrumentId().equals(instrumentId)
                         && o.cashInstrument().equals(cashInstrument)
                         && o.session().equals(sess))
                 .map(com.lucilla.settlement.ledger.LedgerService.OrderView::contractId).toList();
-        ledger.submit(venue, LedgerCommands.publishImbalance(a.contractId(), restingCids));
+        ledger.submit(venue, LedgerCommands.publishImbalance(
+                a.contractId(), restingCids, mandate.contractId()));
 
-        // 3) As the ACTING PARTY, read the disclosure. The LEDGER enforces who may see
-        //    it: the DLP and the venue do; any other trader sees nothing → 403.
+        // 4) As the ACTING PARTY, read the disclosure back. The LEDGER enforces who may
+        //    see it: the mandated provider and the venue do, nobody else does.
         var visible = ledger.imbalancesVisibleTo(acting).stream()
                 .filter(d -> d.operator().equals(venue) && d.instrumentId().equals(instrumentId)
-                        && d.cashInstrument().equals(cashInstrument) && d.session().equals(sess))
+                        && d.cashInstrument().equals(cashInstrument) && d.session().equals(sess)
+                        && d.liquidityProvider().equals(providerLabel))
                 .findFirst();
         if (visible.isEmpty()) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new Dtos.MocImbalanceResponse(
                     false, instrumentId, cashInstrument, sess, null, null, a.referencePrice(),
-                    lpLabel, "the net imbalance is disclosed only to the designated liquidity "
-                            + "provider (" + lpLabel + ") and the venue"));
+                    providerLabel, true, "the net imbalance is disclosed only to a provider "
+                            + "holding a live liquidity mandate over this book, and the venue"));
         }
         var d = visible.get();
         String mag = d.netQuantity().stripTrailingZeros().toPlainString();
@@ -600,10 +676,361 @@ public class SettlementController {
                         + " @ " + d.referencePrice().stripTrailingZeros().toPlainString()
                         + " - offset to clear the cross";
         return ResponseEntity.ok(new Dtos.MocImbalanceResponse(true, instrumentId, cashInstrument,
-                sess, d.netSide(), d.netQuantity(), d.referencePrice(), lpLabel, note));
+                sess, d.netSide(), d.netQuantity(), d.referencePrice(), providerLabel, false, note));
     }
 
-    /** The seed's default Designated Liquidity Provider (Bank), if that party exists. */
+    /**
+     * The outcome of the mandate gate: the obligation that authorises a disclosure, or
+     * the reason there is none — phrased for a human, because the reason is the whole
+     * product here. "You are not the DLP" was a dead end; "accept the posted terms" is
+     * an open door, and that difference is the contestability story.
+     */
+    private record MandateGate(LedgerService.MandateView mandate, String reason) {
+        static MandateGate allow(LedgerService.MandateView m) {
+            return new MandateGate(m, null);
+        }
+
+        static MandateGate deny(String why) {
+            return new MandateGate(null, why);
+        }
+
+        boolean granted() {
+            return mandate != null;
+        }
+    }
+
+    /**
+     * Resolve the live {@code LiquidityMandate} that entitles {@code acting} to this
+     * book's residual — the ONE place the desk decides who may be shown an imbalance.
+     *
+     * <p>Queried AS the acting party, so the ledger's own visibility does the first
+     * half of the work: a provider co-signed its mandates and sees them; it cannot see
+     * anyone else's. The venue is the other signatory on every mandate over its books,
+     * so when the VENUE asks it may publish against any live one (it is refreshing a
+     * provider's view, which is the venue's normal operation).
+     *
+     * <p>A mandate must match the book on all four identifying fields AND on the
+     * anchor: {@code PublishImbalance} asserts {@code anchorPrice == referencePrice},
+     * because the band a provider promised to stand in is measured from the number the
+     * venue published. A mandate struck at another anchor is a promise about another
+     * auction, and it is better to say so here than to let the ledger abort with it.
+     *
+     * <p>Liveness is checked on WALL CLOCK for the message only; the LEDGER re-checks
+     * on its own clock inside the choice and is the authority. If the two ever disagree
+     * the ledger wins and the rejection surfaces as a 422 with its own reason.
+     */
+    private MandateGate resolveMandate(String acting, String venue, String instrumentId,
+            String cashInstrument, String sess, BigDecimal anchor) {
+        boolean actingIsVenue = acting.equals(venue);
+        Instant now = Instant.now();
+
+        List<LedgerService.MandateView> forBook = ledger.mandatesVisibleTo(acting).stream()
+                // A provider is judged on its OWN obligations. The venue is entitled to
+                // publish against any of them — it co-signed every one.
+                .filter(m -> actingIsVenue || m.provider().equals(acting))
+                .filter(m -> m.operator().equals(venue)
+                        && m.instrumentId().equals(instrumentId)
+                        && m.cashInstrument().equals(cashInstrument)
+                        && m.session().equals(sess))
+                .toList();
+
+        var usable = forBook.stream()
+                .filter(m -> m.liveAt(now) && m.covers(venue, instrumentId, cashInstrument, sess, anchor))
+                .findFirst();
+        if (usable.isPresent()) {
+            return MandateGate.allow(usable.get());
+        }
+
+        String noLive = actingIsVenue
+                ? "no provider holds a LIVE mandate over this book"
+                : "you hold no LIVE mandate over this book";
+        String wrongAnchor = actingIsVenue
+                ? "no provider holds a mandate struck against THIS auction's anchor"
+                : "your mandate is not struck against THIS auction's anchor";
+        if (forBook.isEmpty()) {
+            return MandateGate.deny(actingIsVenue
+                    ? "no provider holds a liquidity mandate over this book — imbalance "
+                            + "disclosure now requires an ACCEPTED LiquidityMandate, so there is "
+                            + "nobody the residual may lawfully be shown to. Post terms "
+                            + "(POST /api/moc/mandate/terms) and let a participant accept them."
+                    : "imbalance disclosure now requires an ACCEPTED liquidity mandate covering "
+                            + "this book, and you hold none. Accept the venue's open terms "
+                            + "(GET /api/moc/mandate/terms) to be shown the residual — the seat "
+                            + "obliges you to absorb up to the posted commitment, within the "
+                            + "posted band of the published anchor.");
+        }
+        var live = forBook.stream().filter(m -> m.liveAt(now)).findFirst();
+        if (live.isEmpty()) {
+            var expired = forBook.get(0);
+            return MandateGate.deny(noLive + ": it expired at " + expired.expiresAt()
+                    + ". An expired obligation buys no disclosure — accept the venue's current "
+                    + "terms to take the seat again.");
+        }
+        return MandateGate.deny(wrongAnchor + ": it is anchored at "
+                + live.get().anchorPrice().stripTrailingZeros().toPlainString()
+                + " and this book publishes "
+                + (anchor == null ? "?" : anchor.stripTrailingZeros().toPlainString())
+                + ". A mandate is a promise measured from one PUBLISHED anchor, so it does not "
+                + "carry to a book quoted against another. Accept the venue's current terms.");
+    }
+
+    /**
+     * The venue's OPEN OFFER of the liquidity seat for a book — what a participant with
+     * no mandate is shown instead of the imbalance.
+     *
+     * <p>Read AS the acting party: {@code MandateTerms} is observed by every eligible
+     * participant, so an outsider gets an empty list from the LEDGER rather than from a
+     * filter here. Expired offers are dropped — they can no longer be accepted.
+     */
+    @GetMapping("/moc/mandate/terms")
+    public List<Dtos.MandateTermsResponse> mandateTerms(
+            @RequestParam String instrumentId,
+            @RequestParam(required = false, defaultValue = "USDC") String cashInstrument,
+            @RequestParam(required = false, defaultValue = "Close") String session,
+            @RequestParam(required = false) String actingAs) {
+        String venue = ledger.resolveParty("Venue");
+        String sess = LedgerCommands.session(session);
+        String acting = (actingAs == null || actingAs.isBlank())
+                ? venue : ledger.resolveParty(actingAs);
+        Instant now = Instant.now();
+        return ledger.mandateTermsVisibleTo(acting).stream()
+                .filter(t -> t.operator().equals(venue)
+                        && t.instrumentId().equals(instrumentId)
+                        && t.cashInstrument().equals(cashInstrument)
+                        && t.session().equals(sess)
+                        && t.expiresAt().isAfter(now))
+                .map(t -> termsResponse(t, acting))
+                .toList();
+    }
+
+    /**
+     * The venue posts an offer of the seat (operator-signed, publicly observable).
+     *
+     * <p>{@code eligible} is the auction's own participant roster, not a separate
+     * membership class: if you may lodge an order in this book you may bid for the
+     * right to see its residual, and {@code PublishImbalance} re-checks participation
+     * at disclosure time so the roster and the seat cannot drift apart. There is no fee
+     * anywhere on this path.
+     */
+    @PostMapping("/moc/mandate/terms")
+    public ResponseEntity<Dtos.CidResponse> postMandateTerms(
+            @Valid @RequestBody Dtos.PostMandateTermsRequest req) {
+        String venue = ledger.resolveParty("Venue");
+        String auditor = ledger.resolveParty("Auditor");
+        String cash = blankTo(req.cashInstrument(), "USDC");
+        String sess = LedgerCommands.session(req.session());
+        BigDecimal anchor = anchorFor(venue, req.instrumentId(), cash, sess);
+        BigDecimal commitment = req.commitmentSize() == null
+                ? LedgerCommands.DEFAULT_COMMITMENT_SIZE : req.commitmentSize();
+        long band = req.maxBandBps() == null
+                ? LedgerCommands.DEFAULT_MAX_BAND_BPS : req.maxBandBps();
+        int ttl = req.ttlHours() == null || req.ttlHours() <= 0 ? DEFAULT_TERMS_TTL_HOURS : req.ttlHours();
+        String cid = ledger.submitForCreated(venue,
+                LedgerCommands.postMandateTerms(venue, auditor, req.instrumentId(), cash, sess,
+                        anchor, commitment, band, Instant.now().plus(Duration.ofHours(ttl)),
+                        rosterFor(venue, req.instrumentId(), cash, sess)),
+                LedgerCommands.mandateTermsTemplateId());
+        return created(new Dtos.CidResponse(cid));
+    }
+
+    /**
+     * A registered participant TAKES UP the seat → a signed {@code LiquidityMandate}.
+     *
+     * <p><b>The actor is the provider, never the venue.</b> That is the entire
+     * difference from the field this replaced: the venue posted terms it was willing to
+     * have taken by anybody on its roster, and the participant — not the venue — decides
+     * to take them. Any number of participants may hold live mandates over the same book
+     * at once, and each is shown the same number; competition, not paperwork, is what
+     * disciplines the price the residual gets absorbed at.
+     *
+     * <p><b>Acceptance is BLIND.</b> Nothing about the resting book is visible from
+     * here, and there is no other route to the imbalance, so a participant undertakes
+     * the duty BEFORE it can see the number the duty is about. There is no
+     * read-then-decide.
+     */
+    @PostMapping("/moc/mandate/accept")
+    public ResponseEntity<Dtos.CidResponse> acceptMandate(
+            @Valid @RequestBody Dtos.AcceptMandateRequest req) {
+        String venue = ledger.resolveParty("Venue");
+        String provider = ledger.resolveParty(req.provider());
+        String cash = blankTo(req.cashInstrument(), "USDC");
+        String sess = LedgerCommands.session(req.session());
+        Instant now = Instant.now();
+
+        // Resolve the offer server-side unless the caller named one (only useful when
+        // several offers are live over one book).
+        String termsCid = (req.termsCid() == null || req.termsCid().isBlank())
+                ? ledger.mandateTermsVisibleTo(provider).stream()
+                        .filter(t -> t.operator().equals(venue)
+                                && t.instrumentId().equals(req.instrumentId())
+                                && t.cashInstrument().equals(cash)
+                                && t.session().equals(sess)
+                                && t.expiresAt().isAfter(now)
+                                && t.openTo(provider))
+                        .map(LedgerService.MandateTermsView::contractId)
+                        .findFirst()
+                        .orElseThrow(() -> new IllegalArgumentException(
+                                "no open mandate terms for " + req.instrumentId() + " (" + sess
+                                        + ") that " + LedgerService.labelOf(provider)
+                                        + " may accept — it may already hold a mandate off these "
+                                        + "terms, be barred for a missed commitment this session, "
+                                        + "or not be a registered participant of this book"))
+                : req.termsCid();
+
+        String mandateCid = ledger.submitForCreated(provider,
+                LedgerCommands.acceptMandateTerms(termsCid, provider),
+                LedgerCommands.liquidityMandateTemplateId());
+        return created(new Dtos.CidResponse(mandateCid));
+    }
+
+    /**
+     * The acting party's OWN live obligation over a book: what it committed to, how far
+     * from the anchor it undertook to stand, when the seat runs out, and the running
+     * record of what it has actually been shown.
+     */
+    @GetMapping("/moc/mandate")
+    public Dtos.MandateResponse myMandate(
+            @RequestParam String instrumentId,
+            @RequestParam(required = false, defaultValue = "USDC") String cashInstrument,
+            @RequestParam(required = false, defaultValue = "Close") String session,
+            @RequestParam(required = false) String actingAs) {
+        String venue = ledger.resolveParty("Venue");
+        String sess = LedgerCommands.session(session);
+        String acting = (actingAs == null || actingAs.isBlank())
+                ? venue : ledger.resolveParty(actingAs);
+        Instant now = Instant.now();
+
+        var forBook = ledger.mandatesVisibleTo(acting).stream()
+                .filter(m -> m.provider().equals(acting)
+                        && m.operator().equals(venue)
+                        && m.instrumentId().equals(instrumentId)
+                        && m.cashInstrument().equals(cashInstrument)
+                        && m.session().equals(sess))
+                .toList();
+        var live = forBook.stream().filter(m -> m.liveAt(now)).findFirst();
+        var chosen = live.or(() -> forBook.stream().findFirst());
+        if (chosen.isEmpty()) {
+            return new Dtos.MandateResponse(false, null, LedgerService.labelOf(acting),
+                    instrumentId, cashInstrument, sess, null, null, 0L, null, null, null, 0L, false,
+                    "no liquidity mandate over this book — accept the venue's open terms to take "
+                            + "the seat, and with it sight of the residual");
+        }
+        var m = chosen.get();
+        boolean held = live.isPresent();
+        String note = held
+                ? "live mandate: absorb up to " + m.commitmentSize().stripTrailingZeros().toPlainString()
+                        + " " + instrumentId + " within " + m.maxBandBps() + "bps of "
+                        + m.anchorPrice().stripTrailingZeros().toPlainString() + ", until " + m.expiresAt()
+                : "this mandate expired at " + m.expiresAt()
+                        + " — an expired obligation buys no disclosure";
+        return new Dtos.MandateResponse(held, m.contractId(), LedgerService.labelOf(m.provider()),
+                m.instrumentId(), m.cashInstrument(), m.session(), m.anchorPrice(),
+                m.commitmentSize(), m.maxBandBps(), String.valueOf(m.expiresAt()), m.shownSide(),
+                m.peakShownQty(), m.disclosuresSeen(), !held, note);
+    }
+
+    /** How long an unattended posted offer (and every mandate struck off it) runs. */
+    private static final int DEFAULT_TERMS_TTL_HOURS = 24;
+
+    private Dtos.MandateTermsResponse termsResponse(
+            LedgerService.MandateTermsView t, String acting) {
+        boolean open = t.openTo(acting);
+        String note = open
+                ? "open seat: absorb up to " + t.commitmentSize().stripTrailingZeros().toPlainString()
+                        + " " + t.instrumentId() + " within " + t.maxBandBps() + "bps of "
+                        + t.anchorPrice().stripTrailingZeros().toPlainString()
+                        + " — accept to be shown the book's net residual"
+                : t.barred().contains(acting)
+                        ? "barred from these terms this session: a recorded MandatePerformance "
+                                + "shows a commitment was missed"
+                        : t.accepted().contains(acting)
+                                ? "you already hold a live mandate off these terms"
+                                : "only a registered participant of this book may take up the seat";
+        return new Dtos.MandateTermsResponse(t.contractId(), t.instrumentId(), t.cashInstrument(),
+                t.session(), t.anchorPrice(), t.commitmentSize(), t.maxBandBps(),
+                String.valueOf(t.expiresAt()),
+                t.eligible().stream().map(LedgerService::labelOf).toList(),
+                t.accepted().stream().map(LedgerService::labelOf).toList(),
+                t.barred().stream().map(LedgerService::labelOf).toList(),
+                open, note);
+    }
+
+    /**
+     * The anchor a mandate for this book must be struck against: the OPEN auction's
+     * published {@code referencePrice} if there is one, else the instrument's published
+     * reference. {@code PublishImbalance} asserts the two are equal, so guessing here
+     * would produce terms whose mandates can never buy a disclosure.
+     */
+    private BigDecimal anchorFor(String venue, String instrumentId, String cash, String sess) {
+        return ledger.auctionsVisibleTo(venue).stream()
+                .filter(a -> a.isOpen() && a.instrumentId().equals(instrumentId)
+                        && a.cashInstrument().equals(cash) && a.session().equals(sess))
+                .map(LedgerService.AuctionView::referencePrice)
+                .findFirst()
+                .orElseGet(() -> ledger.referencePriceOf("Issuer", instrumentId)
+                        .orElseThrow(() -> new IllegalArgumentException(instrumentId
+                                + " has no published reference price to anchor a mandate to")));
+    }
+
+    /** Who may take the seat: the book's own participant roster, else every known party. */
+    private List<String> rosterFor(String venue, String instrumentId, String cash, String sess) {
+        var roster = ledger.auctionsVisibleTo(venue).stream()
+                .filter(a -> a.isOpen() && a.instrumentId().equals(instrumentId)
+                        && a.cashInstrument().equals(cash) && a.session().equals(sess))
+                .map(LedgerService.AuctionView::participants)
+                .filter(p -> !p.isEmpty())
+                .findFirst();
+        return roster.orElseGet(() -> ledger.listParties().stream()
+                        .map(LedgerService.PartyView::party)
+                        .filter(p -> !LedgerService.labelOf(p).equalsIgnoreCase("sandbox"))
+                        .toList())
+                .stream().distinct().toList();
+    }
+
+    /**
+     * Post the standard offer for a book that has just been opened unattended, unless a
+     * live one already stands.
+     *
+     * <p>A book with no posted terms has an UNCONTESTABLE seat — nobody can take it, so
+     * nobody can ever be shown the residual. Opening a book and posting its terms belong
+     * together. Failure is logged and swallowed: a missing offer must never take down
+     * order submission, and the seat can always be posted explicitly afterwards.
+     */
+    private void ensureMandateTerms(String venue, String auditor, String instrumentId,
+            String cash, String sess, BigDecimal anchor, List<String> participants) {
+        try {
+            Instant now = Instant.now();
+            boolean alreadyPosted = ledger.mandateTermsVisibleTo(venue).stream()
+                    .anyMatch(t -> t.operator().equals(venue)
+                            && t.instrumentId().equals(instrumentId)
+                            && t.cashInstrument().equals(cash)
+                            && t.session().equals(sess)
+                            && t.anchorPrice().compareTo(anchor) == 0
+                            && t.expiresAt().isAfter(now));
+            if (alreadyPosted) {
+                return;
+            }
+            List<String> eligible = participants.stream().distinct().toList();
+            if (eligible.isEmpty()) {
+                return;   // MandateTerms.ensure rejects an empty roster, and rightly
+            }
+            ledger.submit(venue, LedgerCommands.postMandateTerms(venue, auditor, instrumentId,
+                    cash, sess, anchor, LedgerCommands.DEFAULT_COMMITMENT_SIZE,
+                    LedgerCommands.DEFAULT_MAX_BAND_BPS,
+                    now.plus(Duration.ofHours(DEFAULT_TERMS_TTL_HOURS)), eligible));
+        } catch (RuntimeException e) {
+            log.warn("could not post mandate terms for {} ({}): {}", instrumentId, sess, e.getMessage());
+        }
+    }
+
+    /**
+     * The seed's conventional liquidity provider (Bank), if that party exists.
+     *
+     * <p>Still written onto {@code ClosingAuction.liquidityProvider}, which is now an
+     * INERT field: no ledger code reads it and it designates nobody. Kept because the
+     * field is still on the template and the UI shows it as historical context — the
+     * seat itself is taken by accepting posted terms, by whoever wants it.
+     */
     private Optional<String> defaultLiquidityProvider() {
         try {
             return Optional.of(ledger.resolveParty("Bank"));
@@ -625,19 +1052,36 @@ public class SettlementController {
         Optional<String> fixingRef = (req.fixingRef() == null || req.fixingRef().isBlank())
                 ? Optional.empty()
                 : Optional.of(req.fixingRef());
+        String sess = LedgerCommands.session(req.session());
         var cmd = LedgerCommands.createAuction(
                 req.operator(), req.auditor(), req.instrumentId(), req.cashInstrument(),
-                LedgerCommands.session(req.session()), req.referencePrice(), req.participants(), dlp, fixingRef);
+                sess, req.referencePrice(), req.participants(), dlp, fixingRef);
         String cid = ledger.submitForCreated(req.operator(), cmd, LedgerCommands.closingAuctionTemplateId());
+        // Post the liquidity seat alongside the book, on the SAME anchor the auction
+        // published — a book with no posted terms has a seat nobody can take, and so no
+        // route by which anyone may ever be shown its residual.
+        ensureMandateTerms(req.operator(), req.auditor(), req.instrumentId(),
+                req.cashInstrument(), sess, req.referencePrice(), req.participants());
         return created(new Dtos.CidResponse(cid));
     }
 
+    /**
+     * Lodge a sealed order into an existing auction with a caller-supplied holding.
+     *
+     * <p>The order type comes from {@code orderType} / {@code limitPrice}: an absent or
+     * null limit is an UNPRICED market-on-close order, not a bad request. The caller
+     * owns the backing here, so it must size a BUY's holding itself — {@code quantity *
+     * limit} for a limit order and {@code quantity * } the top of the venue's price
+     * collar for a market order (see {@code LedgerCommands.buyReservation}). Prefer
+     * {@code POST /api/moc/order}, which provisions the holding for you.
+     */
     @PostMapping("/auction/{cid}/order")
     public ResponseEntity<Dtos.CidResponse> submitOrder(
             @PathVariable String cid, @Valid @RequestBody Dtos.SubmitOrderRequest req) {
         var side = LedgerCommands.side(req.side());
+        var limitPrice = LedgerCommands.orderType(req.orderType(), req.limitPrice());
         var cmd = LedgerCommands.submitOrder(
-                cid, req.trader(), side, req.quantity(), req.limitPrice(), req.holdingCid());
+                cid, req.trader(), side, req.quantity(), limitPrice, req.holdingCid());
         String orderCid = ledger.submitForCreated(req.trader(), cmd, LedgerCommands.sealedOrderTemplateId());
         return created(new Dtos.CidResponse(orderCid));
     }

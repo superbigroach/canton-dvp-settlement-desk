@@ -48,11 +48,274 @@
 --   committee (+ auditor), and the published fix is disclosed to exactly the venues
 --   that consume it. Governance WITHOUT leakage — the same Canton property the
 --   auction and the DvP rely on.
+--
+-- ===========================================================================
+-- CONTINUOUS ACCRUAL — THE COMMITTEE ATTESTS THE INPUTS, THE LEDGER COMPUTES.
+-- ===========================================================================
+-- THE GAP THIS CLOSES. Everything above produces a SNAPSHOT: a price, struck by K of
+-- N, true at one instant. That is how a fund has been valued since funds existed,
+-- because a human process could not do better than once a day. But a tokenised fund
+-- trades every second of every day, and between two fixings the old design has NO
+-- VALUE AT ALL — a share is worth the last mark until somebody strikes a new one,
+-- which is wrong every second in between and gets more wrong the longer the gap.
+--
+-- THE INSIGHT, AND IT IS THE WHOLE PRODUCT STORY: A TREASURY OR MONEY-MARKET FUND'S
+-- VALUE BETWEEN MARKS IS NOT DISCOVERED — IT IS ACCRUED. There is no price discovery
+-- happening between 16:00 and 16:00. A T-bill does not trade its way to tomorrow's
+-- value; it EARNS its way there, at a rate that was already agreed, on a day-count
+-- convention that was already agreed. Yield accrues per second. It is ARITHMETIC. No
+-- oracle, no market, no counterparty, no discovery.
+--
+-- SO SPLIT THE PROBLEM ALONG THE LINE THE ECONOMICS ALREADY DRAWS:
+--
+--     THE COMMITTEE ATTESTS THE INPUTS. THE LEDGER COMPUTES THE ACCRUAL.
+--
+--   Humans agree only on what cannot be derived — the base NAV, the rate per annum,
+--   the day-count convention, and the instant the mark applies from. Four numbers, no
+--   more. EVERYTHING DERIVABLE IS DERIVED ON-LEDGER, deterministically, by every
+--   validator that re-executes the transaction, at whatever instant it is asked.
+--   That is the cleanest statement of why this belongs on a ledger at all: a ledger
+--   is not a database with signatures on it, it is a place where a computation and
+--   its authorisation are the SAME artifact. Attesting a number and attesting the
+--   FUNCTION THAT PRODUCES EVERY LATER NUMBER are different orders of thing, and only
+--   the second one gives you a fund that is correctly valued at 03:41 on a Sunday.
+--
+--   It also shrinks the trusted surface, which is the security argument. A committee
+--   that must re-attest every second has 86,400 chances a day to be wrong, be late,
+--   be captured, or be offline. A committee that attests a rate once and lets the
+--   ledger integrate it has one. The oracle problem is not solved by faster oracles;
+--   it is solved by asking the oracle less.
+--
+-- WHAT ACCRUES AND WHAT DOES NOT — say this before a judge does. This is right for
+-- short-dated, yield-bearing, low-volatility instruments: T-bills, repo, money-market
+-- funds, tokenised treasuries. It is WRONG for anything whose value is a market
+-- price — equities, cETH, a volatile token — where the value between marks genuinely
+-- is discovered and pretending otherwise would be inventing data. The design does not
+-- pretend: a fixing with `ratePerAnnum = 0.0` accrues NOTHING and behaves exactly like
+-- the snapshot it always was, and that is the DEFAULT the existing `ProposeFixing`
+-- path produces. Accrual is opt-in, per fixing, and the committee opts in by
+-- attesting a rate.
 -- ===========================================================================
 
 module Governance where
 
 import DA.List (dedup)
+import DA.Time (subTime, convertRelTimeToMicroseconds)
+import DA.Optional (isSome)
+
+-- ===========================================================================
+-- THE DAY-COUNT CONVENTION — the input that looks like a detail and is not.
+-- ===========================================================================
+-- A rate is meaningless without the convention it is quoted on, and the two common
+-- ones DISAGREE BY 1.389% ON THE SAME NUMBER. "4%" on ACT/360 accrues 4/360 per day;
+-- "4%" on ACT/365F accrues 4/365. Over a year that is 4.056% vs 4.000% — 5.6bp of
+-- pure convention, which on a $1bn fund is $560,000. It is precisely the kind of
+-- thing a human committee must agree and a ledger must never guess, so it is an
+-- ATTESTED FIELD on the fixing rather than a constant in this file.
+--
+-- THE DEFAULT IS ACT/360, AND HERE IS WHY. Every USD money-market instrument this
+-- design is aimed at is quoted ACT/360: SOFR, repo, fed funds, commercial paper, and
+-- the Treasury BILL discount rate. If you are accruing a tokenised USD treasury or
+-- money-market fund, ACT/360 is not a preference, it is the convention the underlying
+-- instrument's own yield was quoted on, and using anything else silently re-prices the
+-- fund against its own assets.
+--   ACT/365F is supported and is NOT wrong — it is the correct convention for GBP,
+--   AUD, NZD, HKD and SGD money markets, and for many swap fixed legs. A sterling
+--   money-market fund attesting ACT/365F here is doing the right thing.
+--   Deliberately NOT supported: 30/360 and its variants (bond conventions that assume
+--   30-day months — meaningless for a per-second accrual), and ACT/ACT (which needs
+--   leap-year period boundaries; correct for coupon-bearing Treasury NOTES, but these
+--   are SHORT-DATED instruments where the convention is a money-market one and the
+--   added machinery would buy accuracy nobody is asking for). Attesting an
+--   unsupported string is rejected at proposal time rather than silently defaulted —
+--   see `supportedDayCount`.
+--
+-- SIMPLE INTEREST, NOT COMPOUND, AND THAT IS ALSO A CONVENTION AND NOT AN
+-- APPROXIMATION. Money-market yields are quoted as SIMPLE interest over the period;
+-- a money-market fund's daily NAV accrual is linear within the accrual period, and
+-- compounding happens when the fund DISTRIBUTES and the committee strikes a new base,
+-- not continuously inside one mark. So linear accrual from an attested base is the
+-- market convention, not a shortcut around a missing exponential. (It also happens to
+-- be the only form that is exactly representable here — see PRECISION below — but
+-- that is a happy coincidence, not the reason.)
+-- ---------------------------------------------------------------------------
+
+-- Microseconds in a day. Daml `Time` has microsecond resolution, so microseconds are
+-- the natural unit: working in whole seconds would quantise accrual to 1-second steps
+-- and throw away resolution the ledger already carries.
+microsPerDay : Int
+microsPerDay = 86400000000
+
+-- dayCountYearMicros — the length of the convention's YEAR, in microseconds.
+-- `None` means "not a convention this venue accrues on", which is how an unsupported
+-- string is rejected rather than defaulted.
+--   "NONE" is the explicit non-accruing convention. It maps to a year length so the
+--   arithmetic stays total, but it is only ever paired with `ratePerAnnum = 0.0`, so
+--   the length it maps to can never affect a number.
+dayCountYearMicros : Text -> Optional Int
+dayCountYearMicros dc
+  | dc == "ACT/360"  = Some (360 * microsPerDay)   -- USD money market: SOFR, repo, T-bills
+  | dc == "ACT/365F" = Some (365 * microsPerDay)   -- GBP/AUD/NZD/HKD/SGD money market
+  | dc == "NONE"     = Some (360 * microsPerDay)   -- non-accruing snapshot (rate is 0)
+  | otherwise        = None
+
+supportedDayCount : Text -> Bool
+supportedDayCount = isSome . dayCountYearMicros
+
+-- ---------------------------------------------------------------------------
+-- elapsedMicrosFrom — how long this fixing has been accruing, CLAMPED AT ZERO.
+-- ---------------------------------------------------------------------------
+-- THE BACKWARDS-TIME GUARD, and it is deliberate rather than defensive. A caller can
+-- legitimately ask what a fixing says at an instant BEFORE it applies from — a
+-- backfill, a replay, a report run over a window that opens before the mark. The
+-- honest answer is "this fixing accrued nothing by then", NOT a negative accrual that
+-- would silently mark the fund DOWN below a value the committee actually attested.
+-- Clamping keeps the function total and monotone; `navAtChecked` is there for the
+-- caller that needs to tell "before the strike" apart from "at the strike".
+elapsedMicrosFrom : Time -> Time -> Int
+elapsedMicrosFrom from at =
+  let micros = convertRelTimeToMicroseconds (subTime at from)
+  in if micros <= 0 then 0 else micros
+
+-- ===========================================================================
+-- accruedAmount — THE ACCRUAL, as a pure total function. No ledger, no parties.
+-- ===========================================================================
+--     accrued = basePrice * ratePerAnnum * elapsed / yearLength
+--
+-- PRECISION — THE PART THAT WOULD QUIETLY DESTROY THIS IF IT WERE WRITTEN THE OBVIOUS
+-- WAY. Daml `Decimal` is `Numeric 10`: 38 significant digits, exactly 10 of them
+-- after the point. Addition and subtraction are exact; MULTIPLICATION AND DIVISION
+-- ROUND TO 10dp. So the ORDER OF OPERATIONS is not a style question here, it is the
+-- difference between a correct fund and a broken one.
+--
+--   THE WRONG WAY, written out so nobody re-introduces it: compute a per-second rate
+--   first. At 4%/yr ACT/360 that is 0.04 / 31,104,000 = 1.28600823e-9, which at 10dp
+--   rounds to 0.0000000013 — a 1.09% RELATIVE ERROR baked into every second, forever.
+--   Anything that divides before it multiplies produces a fund that is wrong by more
+--   than a percent of its own yield.
+--
+--   THE ORDER USED BELOW: `basePrice * (ratePerAnnum * elapsedMicros) / yearMicros`.
+--     * `ratePerAnnum * intToDecimal elapsedMicros` is EXACT — a 10dp value times a
+--       whole number of microseconds has at most 10dp, so nothing is lost.
+--     * multiplying that by `basePrice` is the only intermediate rounding, and it is
+--       bounded by half a unit in the last place: 5e-11 ABSOLUTE, on a quantity of
+--       order (base x rate x micros).
+--     * dividing by the year length (3.11e13) then SHRINKS that inherited error by
+--       thirteen orders of magnitude, to ~1.6e-24 — invisible.
+--     * the division itself rounds once, to within 5e-11 of the true accrual.
+--   NET: ONE evaluation of this function is within ~5e-11 (half a ulp) of the exact
+--   real-number answer. That is the tightest bound a 10dp fixed-point type admits,
+--   and it is a bound rather than an estimate.
+--
+--   HEADROOM, STATED SO IT CAN BE CHECKED: the largest intermediate is
+--   `basePrice x ratePerAnnum x elapsedMicros`, which must stay inside 38 digits with
+--   10 reserved for the fraction, i.e. below 1e28. A $1,000,000-per-share NAV at 10%
+--   accruing for a CENTURY reaches 3.2e20. There is eight orders of magnitude of
+--   slack; this cannot overflow in any real use.
+--
+-- PATH-INDEPENDENCE — WHY THE "SMALL STEPS VS ONE STEP" QUESTION HAS A CLEAN ANSWER.
+-- Accrual is ALWAYS computed from the ATTESTED BASE and the elapsed time since the
+-- attested instant. It is never computed from a previously accrued value, so there is
+-- no state to carry and no path to be dependent on: `navAt` is a pure function of the
+-- clock. Evaluating it at t2 gives the same number whether or not anyone evaluated it
+-- at t1 first, EXACTLY. The only discrepancy that can exist is between one evaluation
+-- and the SUM OF SEVERAL INDEPENDENT ONES — each of which carries its own half-ulp —
+-- so N separately-computed sub-period accruals can differ from the single-step figure
+-- by at most N x 5e-11, and by nothing else. A day split into 24 hourly steps is
+-- therefore within 1.2e-9 of the one-step number, and `Test:testAccrualStepsAgree`
+-- measures it rather than asserting it. THAT IS THE HONEST STATEMENT: the two are not
+-- bit-identical, they are identical to within the rounding of the arithmetic itself,
+-- and the bound is derived rather than tuned.
+-- ---------------------------------------------------------------------------
+accruedAmount : Decimal -> Decimal -> Text -> Int -> Decimal
+accruedAmount basePrice ratePerAnnum dayCount elapsedMicros =
+  case dayCountYearMicros dayCount of
+    -- An unrecognised convention accrues NOTHING rather than guessing a year length.
+    -- Unreachable through the templates (both propose choices reject it up front);
+    -- written anyway so the function is total for a direct caller.
+    None -> 0.0
+    Some yearMicros ->
+      if elapsedMicros <= 0
+        then 0.0
+        else (basePrice * (ratePerAnnum * intToDecimal elapsedMicros))
+               / intToDecimal yearMicros
+
+-- ---------------------------------------------------------------------------
+-- navAt — WHAT ONE SHARE IS WORTH AT ANY INSTANT. The headline function.
+-- ---------------------------------------------------------------------------
+-- Total, pure, deterministic: same fixing and same instant give the same Decimal on
+-- every validator that re-executes the transaction, which is exactly the property
+-- Canton needs and exactly why this cannot live in a backend service.
+--
+-- FLOORED AT ZERO, and the reason is real rather than paranoid: EUR, CHF and JPY
+-- money markets printed NEGATIVE rates from 2015 to 2022, so a fund that accrues
+-- DOWNWARD is a thing that has actually existed and `ratePerAnnum` is allowed to be
+-- negative. What must never happen is this function handing a negative "price" to a
+-- template whose `ensure` demands a positive one. A fixing whose accrual would drive
+-- the NAV through zero reports zero — and an auction cannot be anchored on it at all,
+-- because `ClosingAuction.ensure referencePrice > 0.0` rejects it outright. The
+-- degenerate case fails loudly at the ledger, not quietly in the arithmetic.
+navAt : NavFixing -> Time -> Decimal
+navAt f at =
+  let accrued = accruedAmount f.price f.ratePerAnnum f.dayCount
+                  (elapsedMicrosFrom f.accrualFrom at)
+  in max 0.0 (f.price + accrued)
+
+-- navAtChecked — the discriminating variant. `None` means "you asked about an instant
+-- BEFORE this fixing applies from", which `navAt` answers with the base price and
+-- cannot distinguish from "you asked at the strike instant". A reporting or backfill
+-- caller that must not silently treat a pre-strike query as an at-strike one uses
+-- this; a caller that just needs a number uses `navAt`. Both exist precisely so the
+-- clamp in `elapsedMicrosFrom` is a documented choice and not a hidden one.
+navAtChecked : NavFixing -> Time -> Optional Decimal
+navAtChecked f at =
+  if convertRelTimeToMicroseconds (subTime at f.accrualFrom) < 0
+    then None
+    else Some (navAt f at)
+
+-- ---------------------------------------------------------------------------
+-- THE ANCHOR TOLERANCE — how stale an auction anchor is allowed to be.
+-- ---------------------------------------------------------------------------
+-- `MarketOnClose.RunClose` used to demand `fixing.price == referencePrice` — exact
+-- equality with the STRUCK number. Accrual makes that assert wrong rather than
+-- strict: the correct anchor for a close at 16:00 is the NAV ACCRUED TO 16:00, which
+-- is by construction not equal to a price struck earlier in the day. So the check
+-- becomes a consistency band, and the band needs a defensible width.
+--
+-- ONE BASIS POINT OF THE ACCRUED NAV. Why that number: it is the staleness budget,
+-- expressed in the unit the anchor is actually wrong in. At a 3.6%/yr ACT/360
+-- money-market rate a fund accrues EXACTLY 1bp per day (0.036 / 360 = 0.0001), so a
+-- 1bp band says, in plain terms, "the anchor may be up to one day old". At 4% it is
+-- about 21.6 hours; at 5%, 17.3. That is comfortably more than the life of a closing
+-- auction and far less than the gap between fixings, which is the window the bound
+-- exists to police.
+--   NOTE WHAT IT IS NOT: it is NOT a price-integrity control. The collar
+--   (`MarketOnClose.collarBand`, 10% or $0.50) is what stops a bad print. This is a
+--   STALENESS control on the venue's bookkeeping — it catches a venue anchoring on
+--   yesterday's mark, and nothing else. Tightening it to zero would forbid an anchor
+--   set even one microsecond before the close, which is every anchor.
+--
+-- ASYMMETRIC, DELIBERATELY. Being BELOW the accrued NAV is staleness — forgivable up
+-- to the budget, because it is what a clock passing between two ledger transactions
+-- does on its own. Being ABOVE it is not staleness at all: it is a venue anchoring on
+-- value the fund has not earned yet, which no amount of elapsed time explains. So the
+-- upper side is not a band, it is a hard edge with only arithmetic slack behind it.
+anchorAccrualToleranceBps : Int
+anchorAccrualToleranceBps = 1
+
+-- Ten units in the last place. Not an economic allowance — it is there so a caller
+-- that reproduces `navAt` through a slightly different (equally valid) sequence of
+-- roundings is not rejected over 1e-10 of a cent.
+anchorRoundingSlack : Decimal
+anchorRoundingSlack = 0.0000000010
+
+-- anchorConsistentWithNav accruedNav anchor — may an auction anchored at `anchor`
+-- run against a fixing that says the NAV is `accruedNav` right now?
+anchorConsistentWithNav : Decimal -> Decimal -> Bool
+anchorConsistentWithNav accruedNav anchor =
+  let staleBudget = accruedNav * intToDecimal anchorAccrualToleranceBps / 10000.0
+  in anchor <= accruedNav + anchorRoundingSlack        -- never ahead of the accrual
+     && accruedNav - anchor <= staleBudget             -- and no more than 1bp behind
 
 -- ---------------------------------------------------------------------------
 -- OperatorCommittee — the standing K-of-N committee (the decentralised operator).
@@ -83,6 +346,16 @@ template OperatorCommittee
     -- PROPOSE A FIXING — a member opens a price attestation for an instrument's
     -- open/close. Nonconsuming so the committee runs many fixes off one committee
     -- contract. The proposer is the FIRST approver (it signs by proposing).
+    --
+    -- THIS IS THE SNAPSHOT PATH, AND IT IS UNCHANGED. Its argument list is exactly
+    -- what it always was, deliberately: the Java backends call
+    -- `exerciseProposeFixing(proposer, instrumentId, cashInstrument, session, price,
+    -- rationale)` positionally through Daml codegen, and adding an argument here
+    -- would break two committed, currently-green services for no gain. A fix opened
+    -- through this choice is a NON-ACCRUING mark — `ratePerAnnum = 0.0`, day count
+    -- "NONE" — so `navAt` returns the struck price at every instant and the semantics
+    -- are byte-for-byte the ones this module has always had. Accrual is opt-in, and
+    -- `ProposeAccruingFixing` below is how you opt in.
     nonconsuming choice ProposeFixing : ContractId FixingProposal
       with
         proposer       : Party    -- the member opening the fix (must be on the committee)
@@ -96,11 +369,67 @@ template OperatorCommittee
         assertMsg "proposer must be a committee member" (proposer `elem` members)
         assertMsg "price must be positive" (price > 0.0)
         assertMsg "session must be Open or Close" (session == "Open" || session == "Close")
+        now <- getTime
         create FixingProposal with
           admin; members; threshold; auditor
           proposer
           instrumentId; cashInstrument; session; price; rationale
+          -- A PURE SNAPSHOT: nothing accrues, so the day count cannot matter and the
+          -- accrual origin is only there to keep the record shape uniform.
+          ratePerAnnum = 0.0; dayCount = "NONE"; accrualFrom = now
           approvers = [proposer]        -- the proposer is the first attestor
+
+    -- PROPOSE AN ACCRUING FIXING — attest the INPUTS to a value that keeps moving.
+    -- ------------------------------------------------------------------------
+    -- THE FOUR THINGS A HUMAN MUST AGREE, and there are exactly four because
+    -- everything else is derivable:
+    --   `price`        — the base NAV per share the mark applies from;
+    --   `ratePerAnnum` — the accrual rate (0.036 = 3.6%/yr), as a decimal fraction;
+    --   `dayCount`     — "ACT/360" or "ACT/365F" (see the header: they differ by
+    --                    1.389% on the same rate, so it cannot be assumed);
+    --   `accrualFrom`  — the instant the mark applies FROM.
+    --
+    -- WHY `accrualFrom` IS ATTESTED RATHER THAN TAKEN FROM THE CLOCK. A NAV struck
+    -- "as of 16:00" is a fact about 16:00 even if the committee's last member signs
+    -- at 16:07 — real fixings are agreed after the moment they describe. Taking
+    -- `getTime` would silently mis-date every mark by the length of the committee's
+    -- own signing round and quietly under-accrue the fund by exactly that gap. It is
+    -- an input a human agrees on, so a human attests it; `NavFixing.finalizedAt`
+    -- separately records when the ledger actually saw it, so both facts survive and
+    -- the difference between them is auditable.
+    --
+    -- A NEW CHOICE, NOT A WIDER `ProposeFixing`: adding choices leaves every existing
+    -- generated Java call site intact, which is the whole reason the snapshot path
+    -- above still reads the way it does.
+    nonconsuming choice ProposeAccruingFixing : ContractId FixingProposal
+      with
+        proposer       : Party
+        instrumentId   : Text
+        cashInstrument : Text
+        session        : Text
+        price          : Decimal  -- the BASE NAV the accrual starts from
+        rationale      : Text
+        ratePerAnnum   : Decimal  -- e.g. 0.036 for 3.6%/yr; may be NEGATIVE (see navAt)
+        dayCount       : Text     -- "ACT/360" (USD money market) | "ACT/365F"
+        accrualFrom    : Time     -- the instant this mark applies from
+      controller proposer
+      do
+        assertMsg "proposer must be a committee member" (proposer `elem` members)
+        assertMsg "base NAV must be positive" (price > 0.0)
+        assertMsg "session must be Open or Close" (session == "Open" || session == "Close")
+        -- REJECT AN UNKNOWN CONVENTION RATHER THAN DEFAULTING ONE. Silently falling
+        -- back to ACT/360 on a typo would mis-accrue a sterling fund by 1.389% of its
+        -- yield, forever, with a signed attestation saying otherwise.
+        assertMsg "unsupported day-count convention (use ACT/360 or ACT/365F)"
+          (supportedDayCount dayCount)
+        -- A rate at or below -100%/yr is not a money market, it is a typo.
+        assertMsg "accrual rate must be greater than -100% per annum" (ratePerAnnum > -1.0)
+        create FixingProposal with
+          admin; members; threshold; auditor
+          proposer
+          instrumentId; cashInstrument; session; price; rationale
+          ratePerAnnum; dayCount; accrualFrom
+          approvers = [proposer]
 
 -- ---------------------------------------------------------------------------
 -- FixingProposal — an in-progress price attestation gathering member signatures.
@@ -121,6 +450,13 @@ template FixingProposal
     session        : Text
     price          : Decimal
     rationale      : Text
+    -- THE ACCRUAL INPUTS, UNDER ATTESTATION. They ride on the proposal so that what
+    -- each member CONFIRMS is the whole recipe — base, rate, convention and origin —
+    -- not just the base. Confirming a price without the rate that will move it would
+    -- be attesting a third of a number.
+    ratePerAnnum   : Decimal  -- 0.0 = a non-accruing snapshot (the ProposeFixing path)
+    dayCount       : Text     -- "ACT/360" | "ACT/365F" | "NONE" (non-accruing)
+    accrualFrom    : Time     -- the instant the mark applies from
     approvers      : [Party]  -- members who have attested so far (grows via Confirm)
   where
     -- The approvers gathered so far ALL sign — this is the accumulating multisig.
@@ -131,6 +467,11 @@ template FixingProposal
 
     ensure price > 0.0
         && length (dedup approvers) == length approvers   -- an approver signs at most once
+        && supportedDayCount dayCount
+        && ratePerAnnum > -1.0
+        -- A non-accruing mark must be non-accruing on BOTH fields, so "NONE" can
+        -- never sit next to a live rate and quietly accrue on an assumed convention.
+        && (dayCount /= "NONE" || ratePerAnnum == 0.0)
 
     -- CONFIRM — another member adds its attestation. The confirming member controls
     -- the choice (its authority is present), so the successor can add it to the
@@ -162,6 +503,9 @@ template FixingProposal
           attestors = approvers
           admin; auditor; threshold
           instrumentId; cashInstrument; session; price; rationale
+          -- The accrual recipe carries through UNCHANGED from the proposal every
+          -- member confirmed. Nothing about it is (re)decided here.
+          ratePerAnnum; dayCount; accrualFrom
           publishedTo = dedup publishTo
           finalizedAt = now
 
@@ -188,9 +532,26 @@ template NavFixing
     instrumentId   : Text
     cashInstrument : Text
     session        : Text     -- "Open" | "Close"
-    price          : Decimal  -- the official price every consumer prints at
+    -- THE BASE, NOT THE ANSWER — the accrual analogue of the auction's demotion of
+    -- `referencePrice` from "the price" to "the anchor". `price` is what one share was
+    -- worth AT `accrualFrom`. What it is worth NOW is `navAt this now`, and every
+    -- consumer should be asking that question instead of reading this field.
+    price          : Decimal  -- the attested BASE NAV, as at `accrualFrom`
     rationale      : Text
+    -- ---------------------------------------------------------------------
+    -- THE ATTESTED ACCRUAL INPUTS. Signed by the same K-of-N that signed the base,
+    -- because the signatory set of THIS contract is the attestor list — so "K members
+    -- agreed this fund earns 3.6%/yr on ACT/360 from 16:00" is provable by inspecting
+    -- the contract, exactly as "K members agreed the base was 100" always was.
+    -- The ledger derives every later value from these three and the clock.
+    -- ---------------------------------------------------------------------
+    ratePerAnnum   : Decimal  -- 0.0 = a pure snapshot; the old behaviour, exactly
+    dayCount       : Text     -- "ACT/360" | "ACT/365F" | "NONE"
+    accrualFrom    : Time     -- the instant the mark applies from (attested, not clocked)
     publishedTo    : [Party]  -- venues/desks disclosed the fix (e.g. the auction operator)
+    -- WHEN THE LEDGER SAW IT, which is NOT the same fact as `accrualFrom` and is kept
+    -- separately on purpose: a mark struck as of 16:00 and finalised at 16:07 records
+    -- both, so the committee's own latency is auditable rather than absorbed.
     finalizedAt    : Time
   where
     signatory attestors
@@ -202,6 +563,9 @@ template NavFixing
         && threshold > 0
         && length attestors >= threshold          -- provably K-of-N attested
         && length (dedup attestors) == length attestors
+        && supportedDayCount dayCount
+        && ratePerAnnum > -1.0
+        && (dayCount /= "NONE" || ratePerAnnum == 0.0)
 
     -- DISCLOSE — extend the fix to another consuming venue/desk after the fact
     -- (e.g. a second auction that wants to print at the same official NAV). Any
@@ -217,7 +581,12 @@ template NavFixing
         create this with publishedTo = venue :: filter (/= venue) publishedTo
 
 -- ---------------------------------------------------------------------------
--- navPriceOf — read the official price off a fixing (convenience for consumers).
+-- navPriceOf — read the attested BASE off a fixing (convenience for consumers).
 -- ---------------------------------------------------------------------------
+-- ⚠️ THIS IS THE STRUCK NUMBER, NOT TODAY'S NUMBER. It is the value at
+-- `accrualFrom` and it is only the current NAV for a non-accruing fixing
+-- (`ratePerAnnum == 0.0`). Any consumer that cares what a share is worth NOW wants
+-- `navAt f now`. Kept because it is still the right function for reading what the
+-- committee actually signed, and named honestly rather than removed.
 navPriceOf : NavFixing -> Decimal
 navPriceOf f = f.price

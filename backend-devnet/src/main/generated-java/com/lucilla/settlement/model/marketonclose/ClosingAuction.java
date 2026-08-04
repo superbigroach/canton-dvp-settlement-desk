@@ -37,6 +37,7 @@ import com.lucilla.settlement.model.da.internal.template.Archive;
 import com.lucilla.settlement.model.da.types.Tuple2;
 import com.lucilla.settlement.model.governance.NavFixing;
 import com.lucilla.settlement.model.holding.Holding;
+import com.lucilla.settlement.model.liquiditymandate.LiquidityMandate;
 import com.lucilla.settlement.model.settlement.SettlementBatch;
 import java.lang.Boolean;
 import java.lang.Deprecated;
@@ -56,9 +57,9 @@ import java.util.Set;
 public final class ClosingAuction extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#canton-dvp-settlement-desk", "MarketOnClose", "ClosingAuction");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("cd6202b647482a998c93612fd615750e35250bcfb57272e00d9198ebe014161a", "MarketOnClose", "ClosingAuction");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("5ac8f47b9e28322096bc4c9c58f8449ead13792c4a30aad95cd1e80669894a79", "MarketOnClose", "ClosingAuction");
 
-  public static final String PACKAGE_ID = "cd6202b647482a998c93612fd615750e35250bcfb57272e00d9198ebe014161a";
+  public static final String PACKAGE_ID = "5ac8f47b9e28322096bc4c9c58f8449ead13792c4a30aad95cd1e80669894a79";
 
   public static final String PACKAGE_NAME = "canton-dvp-settlement-desk";
 
@@ -194,8 +195,8 @@ public final class ClosingAuction extends Template {
    */
   @Deprecated
   public Update<Exercised<ImbalanceDisclosure.ContractId>> createAndExercisePublishImbalance(
-      List<SealedOrder.ContractId> restingOrders) {
-    return createAndExercisePublishImbalance(new PublishImbalance(restingOrders));
+      List<SealedOrder.ContractId> restingOrders, LiquidityMandate.ContractId mandateCid) {
+    return createAndExercisePublishImbalance(new PublishImbalance(restingOrders, mandateCid));
   }
 
   /**
@@ -228,7 +229,7 @@ public final class ClosingAuction extends Template {
    */
   @Deprecated
   public Update<Exercised<Tuple2<ContractId, SealedOrder.ContractId>>> createAndExerciseSubmitOrder(
-      String trader, Side side, BigDecimal quantity, BigDecimal limitPrice,
+      String trader, Side side, BigDecimal quantity, Optional<BigDecimal> limitPrice,
       Holding.ContractId holdingCid) {
     return createAndExerciseSubmitOrder(new SubmitOrder(trader, side, quantity, limitPrice,
         holdingCid));
@@ -502,8 +503,8 @@ public final class ClosingAuction extends Template {
     }
 
     default Update<Exercised<ImbalanceDisclosure.ContractId>> exercisePublishImbalance(
-        List<SealedOrder.ContractId> restingOrders) {
-      return exercisePublishImbalance(new PublishImbalance(restingOrders));
+        List<SealedOrder.ContractId> restingOrders, LiquidityMandate.ContractId mandateCid) {
+      return exercisePublishImbalance(new PublishImbalance(restingOrders, mandateCid));
     }
 
     default Update<Exercised<ContractId>> exerciseCloseBidding(CloseBidding arg) {
@@ -520,7 +521,7 @@ public final class ClosingAuction extends Template {
     }
 
     default Update<Exercised<Tuple2<ContractId, SealedOrder.ContractId>>> exerciseSubmitOrder(
-        String trader, Side side, BigDecimal quantity, BigDecimal limitPrice,
+        String trader, Side side, BigDecimal quantity, Optional<BigDecimal> limitPrice,
         Holding.ContractId holdingCid) {
       return exerciseSubmitOrder(new SubmitOrder(trader, side, quantity, limitPrice, holdingCid));
     }
