@@ -4,6 +4,13 @@ Everything needed to build on Canton, in one place. Local reference — links
 current as of July 2026. (Sibling doc: `CANTON_RESOURCES.md` = official repo
 catalog and how to use each.)
 
+> **This file is an external-resource catalog, not a description of CrossDesk.**
+> Nothing here states what the project does or how it works. For that:
+> **[`SUBMISSION.md`](SUBMISSION.md)** (judges' quick-read + the finalist-feedback
+> response), **[`README.md`](README.md)** (the technical writeup), and
+> **[`docs/HOW_IT_WORKS.md`](docs/HOW_IT_WORKS.md)** (the system as it stands
+> today, after the rebuild).
+
 ## 🚀 Start Here
 | Resource | Description | Link |
 |---|---|---|
@@ -103,12 +110,17 @@ and actAs must reference FULL party ids (`label::1220…`), not labels.
 On-chain AI agents · tamper-proof AI-output data layer · verified inference ·
 multi-party/federated ML via sub-transaction privacy · AI-gated contract choices.
 
-## 📋 Judging criteria
-| Category | What judges look for |
-|---|---|
-| MVP Materials | Prototype, demo, mockups, public repo |
-| GTM Materials | Strategy, channels, positioning, acquisition hypotheses |
-| ICP / Audience | Target user + specific pain point |
-| Value / Problem | What's solved, why it matters, why now |
-| Metrics / Validation | Interviews, tests, validation notes, success criteria |
-| Pitch Materials | Problem → solution → why us |
+## 📋 Judging criteria — and where each is answered in this repo
+| Category | What judges look for | Where |
+|---|---|---|
+| MVP Materials | Prototype, demo, mockups, public repo | `README.md` (build + test in two commands), the hosted desk, `docs/deliverables/CrossDesk_Demo_Script_v3_LIVE.md` |
+| GTM Materials | Strategy, channels, positioning, acquisition hypotheses | `docs/deliverables/CrossDesk_GTM.pdf`, `docs/BUSINESS_BRIEF.md`, `docs/PILOT_PLAN.md` |
+| ICP / Audience | Target user + specific pain point | `docs/deliverables/CrossDesk_ICP.pdf`, `SUBMISSION.md` §1 |
+| Value / Problem | What's solved, why it matters, why now | `SUBMISSION.md` §1, `docs/MARKET_AND_PRICING.md` (every number sourced, unverified items tagged) |
+| Metrics / Validation | Interviews, tests, validation notes, success criteria | `daml test` — 53 scripts; `docs/REAL_AUCTION_MECHANICS.md` (venue rules vs. this code, with a gap table); `docs/IMBALANCE_PUBLICATION_EVIDENCE.md` (the empirical case for and against the design) |
+| Pitch Materials | Problem → solution → why us | `docs/deliverables/CrossDesk_Pitch_v2.pdf`, `SUBMISSION.md` §0 (the finalist feedback and what was done about it) |
+
+**Season 2 Grand Final note.** The judges' feedback named four things to sharpen —
+price discovery, deterministic selection, complete-order commitments, and a real
+token-standard DvP. Each one, with the file to check it in, is **`SUBMISSION.md`
+§0**. The limitations that remain are listed there too (§0.6) and in `README.md`.

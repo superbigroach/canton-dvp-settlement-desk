@@ -17,6 +17,7 @@ import com.lucilla.settlement.config.LedgerConnection;
 import com.lucilla.settlement.ledger.LedgerCommands;
 import com.lucilla.settlement.model.basket.BasketDefinition;
 import com.lucilla.settlement.model.basket.Component;
+import com.lucilla.settlement.model.governance.NavFixing;
 import com.lucilla.settlement.model.holding.Holding;
 import com.lucilla.settlement.model.instrument.Instrument;
 import com.lucilla.settlement.model.liquiditymandate.LiquidityMandate;
@@ -536,6 +537,54 @@ public class LedgerService {
         return out;
     }
 
+    /**
+     * Official {@code NavFixing}s visible to {@code party} — the committee-attested
+     * marks, WITH THE ACCRUAL RECIPE ON THEM.
+     *
+     * <p>Queried AS that party, so the ledger decides who sees which fix: a NavFixing is
+     * signed by its attestors and observed by the auditor plus exactly the venues it
+     * was published to. An outsider gets nothing, which is the point — governance
+     * without leakage.
+     *
+     * <p>Each view carries the four ATTESTED INPUTS ({@code price}, {@code ratePerAnnum},
+     * {@code dayCount}, {@code accrualFrom}) rather than a single number, because the
+     * value now is DERIVED from them and not stored anywhere. {@link Accrual#navAt} is
+     * the derivation, and it is the same arithmetic the ledger runs.
+     */
+    public List<NavFixingView> navFixingsVisibleTo(String party) {
+        return withRetry("nav fixings for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<NavFixing.Contract> filter = ContractFilter.of(NavFixing.COMPANION);
+            List<NavFixingView> out = new ArrayList<>();
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false, client.getStateClient().getLedgerEnd().blockingGet())
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (NavFixing.Contract c : active.activeContracts) {
+                            NavFixing f = c.data;
+                            out.add(new NavFixingView(c.id.contractId, f.attestors, f.threshold,
+                                    f.instrumentId, f.cashInstrument, f.session, f.price, f.rationale,
+                                    f.ratePerAnnum, f.dayCount, f.accrualFrom, f.publishedTo,
+                                    f.finalizedAt));
+                        }
+                    });
+            return out;
+        });
+    }
+
+    /**
+     * One official fix by contract id, as {@code party} sees it — or a clear 400 if that
+     * party cannot see it (which on this ledger is indistinguishable from, and reported
+     * as, "no such fix").
+     */
+    public NavFixingView navFixingById(String party, String contractId) {
+        return navFixingsVisibleTo(party).stream()
+                .filter(f -> f.contractId().equals(contractId))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "no official NavFixing " + contractId + " is visible to " + labelOf(party)));
+    }
+
     /** The published reference (close) price for an instrument id, or empty. */
     public Optional<BigDecimal> referencePriceOf(String issuerRef, String instrumentId) {
         return instrumentsVisibleTo(resolveParty(issuerRef)).stream()
@@ -743,6 +792,33 @@ public class LedgerService {
     public record BasketView(
             String contractId, String administrator, String basketId, String description,
             String cashInstrument, List<ComponentView> components, List<String> participants) {
+    }
+
+    /**
+     * Flat, JSON-friendly view of an official {@code NavFixing}.
+     *
+     * <p>{@code price} IS THE BASE, NOT THE ANSWER — it is what one share was worth at
+     * {@code accrualFrom}. What it is worth NOW is {@code Accrual.navAt(...)} evaluated
+     * against the clock, and every consumer should be asking that question instead of
+     * reading this field. The name is the Daml field's name and is kept honest rather
+     * than helpfully renamed.
+     *
+     * <p>{@code finalizedAt} is a DIFFERENT FACT from {@code accrualFrom}: the first is
+     * when the ledger saw the fix, the second is the instant the mark applies from. A
+     * mark struck as of 16:00 and finalised at 16:07 records both, so the committee's
+     * own latency stays auditable rather than absorbed.
+     */
+    public record NavFixingView(
+            String contractId, List<String> attestors, long threshold,
+            String instrumentId, String cashInstrument, String session,
+            java.math.BigDecimal price, String rationale,
+            java.math.BigDecimal ratePerAnnum, String dayCount, java.time.Instant accrualFrom,
+            List<String> publishedTo, java.time.Instant finalizedAt) {
+
+        /** True when this fix's value MOVES — a zero rate is the old snapshot exactly. */
+        public boolean accruing() {
+            return ratePerAnnum.signum() != 0;
+        }
     }
 
     /** A receipt as seen by the acting party, with WHO can see it (the privacy proof). */

@@ -47,9 +47,9 @@ import java.util.Set;
 public final class TradingMandate extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#canton-dvp-settlement-desk", "Agent", "TradingMandate");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("5ac8f47b9e28322096bc4c9c58f8449ead13792c4a30aad95cd1e80669894a79", "Agent", "TradingMandate");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("b2aa4af53dbf06e12822d2b51bfa82a52c41f27f936b81b8364b62cfe358689c", "Agent", "TradingMandate");
 
-  public static final String PACKAGE_ID = "5ac8f47b9e28322096bc4c9c58f8449ead13792c4a30aad95cd1e80669894a79";
+  public static final String PACKAGE_ID = "b2aa4af53dbf06e12822d2b51bfa82a52c41f27f936b81b8364b62cfe358689c";
 
   public static final String PACKAGE_NAME = "canton-dvp-settlement-desk";
 
@@ -89,11 +89,15 @@ public final class TradingMandate extends Template {
 
   public final BigDecimal maxAmount;
 
-  public TradingMandate(String principal, String agent, String instrument, BigDecimal maxAmount) {
+  public final BigDecimal minUnitPrice;
+
+  public TradingMandate(String principal, String agent, String instrument, BigDecimal maxAmount,
+      BigDecimal minUnitPrice) {
     this.principal = principal;
     this.agent = agent;
     this.instrument = instrument;
     this.maxAmount = maxAmount;
+    this.minUnitPrice = minUnitPrice;
   }
 
   @Override
@@ -153,8 +157,8 @@ public final class TradingMandate extends Template {
   }
 
   public static Update<Created<ContractId>> create(String principal, String agent,
-      String instrument, BigDecimal maxAmount) {
-    return new TradingMandate(principal, agent, instrument, maxAmount).create();
+      String instrument, BigDecimal maxAmount, BigDecimal minUnitPrice) {
+    return new TradingMandate(principal, agent, instrument, maxAmount, minUnitPrice).create();
   }
 
   @Override
@@ -172,11 +176,12 @@ public final class TradingMandate extends Template {
   }
 
   public DamlRecord toValue() {
-    ArrayList<DamlRecord.Field> fields = new ArrayList<DamlRecord.Field>(4);
+    ArrayList<DamlRecord.Field> fields = new ArrayList<DamlRecord.Field>(5);
     fields.add(new DamlRecord.Field("principal", new Party(this.principal)));
     fields.add(new DamlRecord.Field("agent", new Party(this.agent)));
     fields.add(new DamlRecord.Field("instrument", new Text(this.instrument)));
     fields.add(new DamlRecord.Field("maxAmount", new Numeric(this.maxAmount)));
+    fields.add(new DamlRecord.Field("minUnitPrice", new Numeric(this.minUnitPrice)));
     return new DamlRecord(fields);
   }
 
@@ -184,26 +189,29 @@ public final class TradingMandate extends Template {
       IllegalArgumentException {
     return value$ -> {
       Value recordValue$ = value$;
-      List<DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(4,0, recordValue$);
+      List<DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(5,0, recordValue$);
       String principal = PrimitiveValueDecoders.fromParty.decode(fields$.get(0).getValue());
       String agent = PrimitiveValueDecoders.fromParty.decode(fields$.get(1).getValue());
       String instrument = PrimitiveValueDecoders.fromText.decode(fields$.get(2).getValue());
       BigDecimal maxAmount = PrimitiveValueDecoders.fromNumeric.decode(fields$.get(3).getValue());
-      return new TradingMandate(principal, agent, instrument, maxAmount);
+      BigDecimal minUnitPrice = PrimitiveValueDecoders.fromNumeric
+          .decode(fields$.get(4).getValue());
+      return new TradingMandate(principal, agent, instrument, maxAmount, minUnitPrice);
     } ;
   }
 
   public static JsonLfDecoder<TradingMandate> jsonDecoder() {
-    return JsonLfDecoders.record(Arrays.asList("principal", "agent", "instrument", "maxAmount"), name -> {
+    return JsonLfDecoders.record(Arrays.asList("principal", "agent", "instrument", "maxAmount", "minUnitPrice"), name -> {
           switch (name) {
             case "principal": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
             case "agent": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(1, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
             case "instrument": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(2, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text);
             case "maxAmount": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(3, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10));
+            case "minUnitPrice": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(4, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10));
             default: return null;
           }
         }
-        , (Object[] args) -> new TradingMandate(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3])));
+        , (Object[] args) -> new TradingMandate(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4])));
   }
 
   public static TradingMandate fromJson(String json) throws JsonLfDecoder.Error {
@@ -215,7 +223,8 @@ public final class TradingMandate extends Template {
         JsonLfEncoders.Field.of("principal", apply(JsonLfEncoders::party, principal)),
         JsonLfEncoders.Field.of("agent", apply(JsonLfEncoders::party, agent)),
         JsonLfEncoders.Field.of("instrument", apply(JsonLfEncoders::text, instrument)),
-        JsonLfEncoders.Field.of("maxAmount", apply(JsonLfEncoders::numeric, maxAmount)));
+        JsonLfEncoders.Field.of("maxAmount", apply(JsonLfEncoders::numeric, maxAmount)),
+        JsonLfEncoders.Field.of("minUnitPrice", apply(JsonLfEncoders::numeric, minUnitPrice)));
   }
 
   public static ContractFilter<Contract> contractFilter() {
@@ -237,18 +246,20 @@ public final class TradingMandate extends Template {
     return Objects.equals(this.principal, other.principal) &&
         Objects.equals(this.agent, other.agent) &&
         Objects.equals(this.instrument, other.instrument) &&
-        Objects.equals(this.maxAmount, other.maxAmount);
+        Objects.equals(this.maxAmount, other.maxAmount) &&
+        Objects.equals(this.minUnitPrice, other.minUnitPrice);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(this.principal, this.agent, this.instrument, this.maxAmount);
+    return Objects.hash(this.principal, this.agent, this.instrument, this.maxAmount,
+        this.minUnitPrice);
   }
 
   @Override
   public String toString() {
-    return String.format("com.lucilla.settlement.model.agent.TradingMandate(%s, %s, %s, %s)",
-        this.principal, this.agent, this.instrument, this.maxAmount);
+    return String.format("com.lucilla.settlement.model.agent.TradingMandate(%s, %s, %s, %s, %s)",
+        this.principal, this.agent, this.instrument, this.maxAmount, this.minUnitPrice);
   }
 
   public static final class ContractId extends com.daml.ledger.javaapi.data.codegen.ContractId<TradingMandate> implements Exercises<ExerciseCommand> {

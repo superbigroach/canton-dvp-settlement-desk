@@ -195,6 +195,96 @@ export interface CidResponse {
   contractId: string;
 }
 
+// ---- Continuous accrual: the committee attests, the ledger computes -------
+//
+// EVERY DECIMAL BELOW IS A STRING, AND THAT IS THE POINT. Daml `Decimal` is
+// fixed-point at exactly ten decimal places; a JSON number would arrive here as a
+// float64, which is a DIFFERENT value. The backend serialises the ledger's own digits
+// and `accrual.ts` re-parses them into exact fixed-point integers, so the figure that
+// ticks on screen is the number the ledger would compute rather than one near it.
+
+/** "ACT/360" (USD money market) | "ACT/365F" (GBP/AUD/NZD/HKD/SGD) | "NONE" (snapshot). */
+export type DayCountConvention = 'ACT/360' | 'ACT/365F' | 'NONE';
+
+/** A proposal echoed back with the RECIPE each member is being asked to confirm. */
+export interface FixingProposalResponse {
+  contractId: string;
+  instrumentId: string;
+  cashInstrument: string;
+  session: Session;
+  basePrice: string;
+  ratePerAnnum: string;
+  dayCount: DayCountConvention;
+  accrualFrom: string;               // ISO-8601 — ATTESTED, not the ledger clock
+  accrualFromEpochMicros: number;
+  accruing: boolean;
+}
+
+/** An official NavFixing with its accrual recipe, plus the value now. */
+export interface FixingResponse {
+  contractId: string;
+  attestors: string[];               // the signature set IS the proof of K-of-N
+  threshold: number;
+  instrumentId: string;
+  cashInstrument: string;
+  session: Session;
+  basePrice: string;                 // the ATTESTED base, as at accrualFrom
+  rationale: string;
+  ratePerAnnum: string;
+  dayCount: DayCountConvention;
+  accrualFrom: string;
+  accrualFromEpochMicros: number;
+  finalizedAt: string;               // when the LEDGER saw it — a different fact
+  publishedTo: string[];
+  accruing: boolean;
+  navNow: string;
+  accrued: string;
+  asOf: string;
+  asOfEpochMicros: number;
+  elapsedMicros: number;
+}
+
+/**
+ * THE ACCRUED NAV WITH ITS WORKING SHOWN — the derived value and every input it came
+ * from, so the browser can REPRODUCE it rather than trust it.
+ *
+ * The `anchor…` fields bind it to the auction: RunClose requires the anchor to be at
+ * or below the NAV accrued to the close and no more than 1bp behind, so
+ * `anchorConsistent` is the ledger's own verdict rather than an assertion. `anchor` is
+ * null when no live auction for this instrument/session is visible.
+ */
+export interface AccruedNav {
+  contractId: string;
+  instrumentId: string;
+  cashInstrument: string;
+  session: Session;
+  // the four attested inputs
+  basePrice: string;
+  ratePerAnnum: string;
+  dayCount: DayCountConvention;
+  accrualFrom: string;
+  accrualFromEpochMicros: number;
+  // the derivation
+  asOf: string;
+  asOfEpochMicros: number;
+  elapsedMicros: number;
+  yearMicros: number;
+  accrued: string;
+  navNow: string;
+  perDay: string;                    // what a whole day of this recipe adds
+  accruing: boolean;
+  // the attestation
+  attestors: string[];
+  threshold: number;
+  // the auction binding
+  anchor: string | null;
+  anchorAuctionCid: string | null;
+  anchorDrift: string | null;        // navNow - anchor (positive = the anchor is behind)
+  staleBudget: string | null;        // navNow * 1bp
+  anchorConsistent: boolean | null;
+  anchorNote: string | null;
+}
+
 // ---- Basket / ETF builder -------------------------------------------------
 
 export interface BasketComponent {
@@ -419,6 +509,54 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+
+  /**
+   * Propose an ACCRUING fix — attest the INPUTS to a value that keeps moving.
+   *
+   * A SEPARATE CALL from `proposeFixing`, exactly as `ProposeAccruingFixing` is a
+   * separate Daml choice: the snapshot path is untouched and still produces a
+   * non-accruing mark. Four things a human agrees, because everything else is
+   * derivable — base, rate, day-count convention, and the instant the mark applies
+   * from. An unsupported convention comes back as a 400 with the reason, because the
+   * ledger refuses one rather than defaulting it and this desk refuses it first.
+   */
+  proposeAccruingFixing: (
+    committeeCid: string,
+    body: {
+      proposer: string;
+      instrumentId: string;
+      price: number | string;          // the BASE NAV the accrual starts from
+      ratePerAnnum: number | string;    // 0.036 = 3.6%/yr; may be negative
+      dayCount: DayCountConvention;
+      cashInstrument?: string;
+      session?: Session;
+      rationale?: string;
+      accrualFrom?: string;             // ISO-8601; omitted = the desk's clock
+    },
+  ) =>
+    req<FixingProposalResponse>(
+      `/committee/${encodeURIComponent(committeeCid)}/propose-accruing`,
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
+
+  /** Official fixes visible to a party, each with its recipe and the value now. */
+  fixings: (actingAs = '') =>
+    req<FixingResponse[]>(
+      `/fixings${actingAs ? `?actingAs=${encodeURIComponent(actingAs)}` : ''}`,
+    ),
+
+  /**
+   * The accrued NAV for one fix, WITH ITS WORKING. Poll this rarely (it is a ledger
+   * read); tick the number between polls with `accrual.ts`, which reproduces the
+   * ledger's arithmetic exactly rather than approximating it.
+   */
+  accruedNav: (fixCid: string, opts: { actingAs?: string; at?: string; anchor?: string } = {}) =>
+    req<AccruedNav>(
+      `/fixing/${encodeURIComponent(fixCid)}/nav` +
+        (opts.actingAs ? `?actingAs=${encodeURIComponent(opts.actingAs)}` : '?') +
+        (opts.at ? `&at=${encodeURIComponent(opts.at)}` : '') +
+        (opts.anchor ? `&anchor=${encodeURIComponent(opts.anchor)}` : ''),
+    ),
 
   // Each confirmation returns the NEW proposal cid (accumulating multisig).
   confirmFixing: (proposalCid: string, member: string) =>

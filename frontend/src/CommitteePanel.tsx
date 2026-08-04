@@ -3,9 +3,38 @@
 // the signatures accumulate: propose → each member confirms → finalise once the
 // threshold is met. The resulting NavFixing carries K genuine member signatures —
 // an auction can then be bound to it (see the desk's Open/Close cross).
+//
+// TWO KINDS OF FIX, AND THE DIFFERENCE IS THE PRODUCT.
+//   SNAPSHOT — a price, true at one instant. Between two fixings a share is worth the
+//   last mark, which is wrong every second in between and gets more wrong the longer
+//   the gap. Right for anything whose value is DISCOVERED: equities, cETH, a volatile
+//   token. This is what `ProposeFixing` has always produced and it is untouched.
+//
+//   ACCRUING — the committee attests the INPUTS instead: base, rate per annum,
+//   day-count convention, and the instant the mark applies from. A treasury or
+//   money-market fund's value between marks is not discovered, it is EARNED, at a rate
+//   already agreed on a convention already agreed. So the ledger integrates it and the
+//   fund is correctly valued at 03:41 on a Sunday. Four numbers signed once, instead of
+//   86,400 attestations a day — which is also the security argument, because a
+//   committee that must re-attest every second has 86,400 chances a day to be wrong,
+//   late, captured or offline.
+//
+// Choosing "Accruing" here calls a DIFFERENT Daml choice (`ProposeAccruingFixing`), and
+// what each member then confirms is the whole recipe rather than just the base —
+// confirming a price without the rate that will move it would be attesting a third of
+// a number.
 
-import { useState } from 'react';
-import { api, ApiError, type Instrument, type Party, type Session } from './api';
+import { useEffect, useState } from 'react';
+import AccrualTicker from './AccrualTicker';
+import {
+  api,
+  ApiError,
+  type DayCountConvention,
+  type FixingResponse,
+  type Instrument,
+  type Party,
+  type Session,
+} from './api';
 
 interface Props {
   parties: Party[];
@@ -14,6 +43,25 @@ interface Props {
 }
 
 const CASH = 'USDC';
+
+/**
+ * Rate presets. THESE ARE REAL ATTESTATIONS, NOT DISPLAY SPEEDS — picking one proposes
+ * that rate on the ledger and every member signs it, so the number that then ticks is
+ * genuinely what the committee agreed the fund earns. There is no acceleration
+ * multiplier anywhere in this UI; a bigger number on screen requires a bigger signed
+ * rate, which is the honest way to make accrual legible from the back of a room.
+ */
+const RATE_PRESETS: { label: string; value: string; note: string }[] = [
+  { label: '3.6%', value: '0.036', note: 'money-market: exactly 1bp/day on ACT/360' },
+  { label: '5%', value: '0.05', note: 'front-end USD yield' },
+  { label: '36%', value: '0.36', note: 'legible from the back of the room' },
+  { label: '−0.5%', value: '-0.005', note: 'EUR/CHF/JPY 2015–2022: funds accrued DOWN' },
+];
+
+const DAY_COUNTS: { value: DayCountConvention; note: string }[] = [
+  { value: 'ACT/360', note: 'USD money market — SOFR, repo, T-bills' },
+  { value: 'ACT/365F', note: 'GBP/AUD/NZD/HKD/SGD money market' },
+];
 
 export default function CommitteePanel({ parties, instruments, flash }: Props) {
   const people = parties.filter((p) => p.label.toLowerCase() !== 'sandbox');
@@ -34,8 +82,36 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
   const [attestors, setAttestors] = useState<string[]>([]);
   const [fixCid, setFixCid] = useState<string>('');
 
+  // The accrual recipe under attestation. `accruing=false` is the original snapshot
+  // path, byte-for-byte — a fixing with rate 0 accrues nothing at any instant.
+  const [accruing, setAccruing] = useState<boolean>(true);
+  const [rate, setRate] = useState<string>('0.036');
+  const [dayCount, setDayCount] = useState<DayCountConvention>('ACT/360');
+
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>('');
+
+  // FIXES ALREADY ON THE LEDGER. The committee flow above is client state and a page
+  // reload loses it — but the NavFixings do not go anywhere, they are contracts. This
+  // reads them back so a refresh (or a second browser, or a judge opening the URL
+  // themselves) can attach the ticker to a fix that was struck minutes ago and watch it
+  // carry on accruing from its attested origin. Nothing is recomputed or re-struck: it
+  // is the same contract, valued at a later instant.
+  const [existing, setExisting] = useState<FixingResponse[]>([]);
+  useEffect(() => {
+    let live = true;
+    api
+      .fixings()
+      .then((fs) => {
+        if (live) setExisting(fs);
+      })
+      .catch(() => {
+        /* an empty roster is a normal state, not an error to shout about */
+      });
+    return () => {
+      live = false;
+    };
+  }, [fixCid]);
 
   const priceOf = (id: string) => instruments.find((i) => i.id === id)?.referencePrice ?? null;
 
@@ -72,21 +148,42 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
     if (!committeeCid) return;
     const proposer = members[0];
     const p = Number(price) || priceOf(instrumentId) || 0;
+
+    // TWO DIFFERENT DAML CHOICES. The snapshot path is unchanged and still takes
+    // exactly the arguments it always took; the accruing path attests three more.
     const res = await run(() =>
-      api.proposeFixing(committeeCid, {
-        proposer,
-        instrumentId,
-        price: p,
-        cashInstrument: CASH,
-        session,
-        rationale: 'uniform sealed-cross VWAP',
-      }),
+      accruing
+        ? api.proposeAccruingFixing(committeeCid, {
+            proposer,
+            instrumentId,
+            price: p,
+            ratePerAnnum: rate.trim() === '' ? '0' : rate.trim(),
+            dayCount,
+            cashInstrument: CASH,
+            session,
+            rationale: `sealed-cross VWAP base, accruing ${rate} ${dayCount}`,
+            // `accrualFrom` deliberately omitted: the desk stamps its own clock. A real
+            // committee agreeing a mark "as of 16:00" would send that instant instead —
+            // the field is attested, not clocked, precisely so the two can differ.
+          })
+        : api.proposeFixing(committeeCid, {
+            proposer,
+            instrumentId,
+            price: p,
+            cashInstrument: CASH,
+            session,
+            rationale: 'uniform sealed-cross VWAP',
+          }),
     );
     if (!res) return;
     setProposalCid(res.contractId);
     setAttestors([proposer]);
     setFixCid('');
-    flash(`${proposer} proposed ${instrumentId} ${session} @ ${p} — 1 of ${threshold} attestations.`);
+    flash(
+      accruing
+        ? `${proposer} proposed ${instrumentId} ${session}: base ${p}, accruing ${rate} ${dayCount} — 1 of ${threshold}.`
+        : `${proposer} proposed ${instrumentId} ${session} @ ${p} — 1 of ${threshold} attestations.`,
+    );
   }
 
   async function confirm(member: string) {
@@ -125,11 +222,48 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
         The official price must not be one venue&rsquo;s number. A committee of independent members
         attests it; only once <strong>{threshold} of {members.length}</strong> have signed does an
         official <strong>NavFixing</strong> exist — provable from the contract&rsquo;s own signatures.
+        Attest a <strong>rate</strong> as well as a base and the ledger keeps deriving the value
+        every second after: <strong>the committee attests the inputs, the ledger computes.</strong>
       </p>
 
       {err && (
         <div className="warn" onClick={() => setErr('')}>
           {err}
+        </div>
+      )}
+
+      {/* Fixes already struck — a reload loses the client flow, never the contracts. */}
+      {!fixCid && existing.length > 0 && (
+        <div className="committee-step">
+          <div className="step-label">Already on the ledger</div>
+          <div className="member-chips">
+            {existing.slice(0, 4).map((f) => (
+              <button
+                key={f.contractId}
+                className="chip"
+                disabled={busy}
+                title={`${f.attestors.join(', ')} attested · base ${f.basePrice} · struck ${f.finalizedAt}`}
+                onClick={() => {
+                  setFixCid(f.contractId);
+                  setInstrumentId(f.instrumentId);
+                  setSession(f.session);
+                  setAccruing(f.accruing);
+                  // The wire carries the ledger's full 10dp ("0.0360000000"); the form
+                  // shows the rate the committee actually typed.
+                  setRate(f.ratePerAnnum.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, ''));
+                  if (f.dayCount !== 'NONE') setDayCount(f.dayCount);
+                  setAttestors(f.attestors);
+                  flash(`Watching the ${f.instrumentId} ${f.session} fix struck by ${f.attestors.length} members.`);
+                }}
+              >
+                {f.instrumentId} {f.session} {f.accruing ? '· accruing' : '· snapshot'}
+              </button>
+            ))}
+          </div>
+          <p className="hint subtle">
+            A NavFixing is a contract, not a session. Attach the ticker to one struck earlier and it
+            carries on from its own attested origin — same inputs, later instant, no re-striking.
+          </p>
         </div>
       )}
 
@@ -193,7 +327,7 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
               </div>
             </div>
             <label className="field small">
-              <span>Price ({CASH})</span>
+              <span>{accruing ? `Base NAV (${CASH})` : `Price (${CASH})`}</span>
               <input
                 className="mono"
                 type="number"
@@ -206,8 +340,80 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
               />
             </label>
           </div>
+
+          {/* SNAPSHOT vs ACCRUING — the choice that decides which Daml choice runs. */}
+          <div className="field">
+            <span>What is being attested</span>
+            <div className="segmented accrual-mode">
+              <button className={!accruing ? 'on' : ''} disabled={busy} onClick={() => setAccruing(false)}>
+                Snapshot
+              </button>
+              <button className={accruing ? 'on' : ''} disabled={busy} onClick={() => setAccruing(true)}>
+                Accruing
+              </button>
+            </div>
+          </div>
+
+          {accruing ? (
+            <>
+              <div className="row tight">
+                <label className="field small">
+                  <span>Rate p.a.</span>
+                  <input
+                    className="mono"
+                    type="number"
+                    step="any"
+                    value={rate}
+                    disabled={busy}
+                    onChange={(e) => setRate(e.target.value)}
+                  />
+                </label>
+                <label className="field small">
+                  <span>Day count</span>
+                  <select
+                    value={dayCount}
+                    disabled={busy}
+                    onChange={(e) => setDayCount(e.target.value as DayCountConvention)}
+                  >
+                    {DAY_COUNTS.map((d) => (
+                      <option key={d.value} value={d.value}>
+                        {d.value}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="member-chips">
+                {RATE_PRESETS.map((r) => (
+                  <button
+                    key={r.value}
+                    className={`chip ${rate === r.value ? 'on' : ''}`}
+                    disabled={busy}
+                    title={r.note}
+                    onClick={() => setRate(r.value)}
+                  >
+                    {r.label}
+                  </button>
+                ))}
+              </div>
+              <p className="hint subtle">
+                {DAY_COUNTS.find((d) => d.value === dayCount)?.note}. The convention is
+                ATTESTED, not assumed — &ldquo;4%&rdquo; on ACT/360 and on ACT/365F differ by
+                1.389% of the yield, which on a $1bn fund is $560,000 a year. 30/360 and
+                ACT/ACT are <strong>refused by the ledger</strong> rather than defaulted, so a
+                typo is a rejection and never a silent mis-accrual.
+              </p>
+            </>
+          ) : (
+            <p className="hint subtle">
+              A snapshot is true at one instant and stale at every instant after it. Correct
+              for anything whose value is <em>discovered</em> — an equity, cETH, a volatile
+              token — where accruing would be inventing data.
+            </p>
+          )}
+
           <button className="primary" disabled={busy} onClick={propose}>
-            {members[0]} proposes the {session} fix
+            {members[0]} proposes the {session} {accruing ? 'accrual' : 'fix'}
           </button>
         </div>
       )}
@@ -246,20 +452,38 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
         </div>
       )}
 
-      {/* Result — the official fix */}
+      {/* Result — the official fix, and (if it accrues) the value MOVING */}
       {fixCid && (
         <div className="committee-result">
           <div className="fix-badge">OFFICIAL NAV · {attestors.length}-of-{members.length} attested</div>
           <div className="fix-line mono">
-            {instrumentId} {session} @ <strong>{Number(price) || suggested} {CASH}</strong>
+            {instrumentId} {session}{' '}
+            {accruing ? (
+              <>
+                base <strong>{Number(price) || suggested} {CASH}</strong>
+                <span className="faint"> · {rate} {dayCount}</span>
+              </>
+            ) : (
+              <>
+                @ <strong>{Number(price) || suggested} {CASH}</strong>
+              </>
+            )}
           </div>
           <code className="cid mono" title={fixCid}>
             NavFixing · {fixCid.length > 18 ? `${fixCid.slice(0, 10)}…${fixCid.slice(-6)}` : fixCid}
           </code>
           <p className="hint">
-            Credibly neutral: this price carries {attestors.length} genuine member signatures. An
-            auction bound to it will print <em>only</em> at this attested NAV.
+            Credibly neutral: this fix carries {attestors.length} genuine member signatures — the
+            contract&rsquo;s own signatory set IS the proof. An auction bound to it can only print
+            against this attested NAV.
           </p>
+
+          {/*
+            THE DEMO MOMENT. The committee attested four numbers; from here the LEDGER
+            derives the value at every instant, and this is that derivation running live.
+            Read straight off the NavFixing contract — no client state, no acceleration.
+          */}
+          <AccrualTicker fixCid={fixCid} />
         </div>
       )}
     </section>

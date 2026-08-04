@@ -52,9 +52,9 @@ import java.util.Set;
 public final class MandatePerformance extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#canton-dvp-settlement-desk", "LiquidityMandate", "MandatePerformance");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("5ac8f47b9e28322096bc4c9c58f8449ead13792c4a30aad95cd1e80669894a79", "LiquidityMandate", "MandatePerformance");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("b2aa4af53dbf06e12822d2b51bfa82a52c41f27f936b81b8364b62cfe358689c", "LiquidityMandate", "MandatePerformance");
 
-  public static final String PACKAGE_ID = "5ac8f47b9e28322096bc4c9c58f8449ead13792c4a30aad95cd1e80669894a79";
+  public static final String PACKAGE_ID = "b2aa4af53dbf06e12822d2b51bfa82a52c41f27f936b81b8364b62cfe358689c";
 
   public static final String PACKAGE_NAME = "canton-dvp-settlement-desk";
 

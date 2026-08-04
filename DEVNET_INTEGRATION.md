@@ -7,11 +7,15 @@ the full Ledger-API-v1 → v2 port, every problem hit and the attempt that fixed
 it, and exactly what is proven working versus the one thing still pending.
 
 > **TL;DR.** The desk is deployed on the shared node, the backend connects to it
-> over TLS + JWT, **reads work end-to-end (HTTP 200)**, and command submission
-> reaches the node's authorization layer. The only remaining blocker is a
-> **node-side `actAs` grant** for our user — a permission the participant operator
-> sets, not code. Everything on our side (Daml package, v2 bindings port, read
-> and write paths) is done and verified.
+> over TLS + JWT, and — after the `actAs` puzzle in §6.7 — **a full atomic DvP
+> settled on-chain on 2026-07-19**. Everything on our side (Daml package, v2
+> bindings port, read and write paths) is done and verified.
+>
+> ⚠️ **What is on the node is the PRE-FEEDBACK build.** Package `72ec9833…` is the
+> DAR as it stood at the original submission. The post-finalist-feedback rebuild
+> (price discovery, complete-order commitments, the CIP-56 module, the contestable
+> mandate, accruing NAV) is **not on devnet** — uploading a DAR is admin-only on
+> the node operator's side. See **§9**.
 
 ---
 
@@ -22,13 +26,17 @@ An institutional settlement desk on Canton:
 - **Atomic DvP** — two tokenised legs (e.g. `cETH` ↔ `USDC`) move together or not
   at all (no Herstatt/principal risk).
 - **Sealed Market-on-Close** — a uniform-price call auction whose order book is
-  invisible until it clears (no front-running; the mempool can't leak it).
-- **K-of-N NAV committee** — an official closing price no single venue can print.
+  invisible until it clears (no front-running; the mempool can't leak it), and
+  whose clearing price is **discovered from the book** by a pure, deterministic
+  function rather than supplied by the operator.
+- **K-of-N NAV committee** — an attested official mark no single venue can strike,
+  which the auction anchors on.
 - **In-kind ETF/basket builder** — create/redeem fund shares against underlyings
   atomically.
 
 All of it is `daml/` (the on-ledger logic) + `backend/` (Spring Boot over the
-Ledger API) + `frontend/` (React). Local build details are in `README.md`.
+Ledger API) + `frontend/` (React). Local build details are in `README.md`; the
+system as it stands today is `docs/HOW_IT_WORKS.md`.
 
 ---
 
@@ -93,20 +101,32 @@ Connection endpoints (from the hackathon Materials tab):
 
 The shared node runs **Canton 3.x**, which rejects the SDK 2.9.4 package format
 and speaks **Ledger API v2**. Rather than break the working local demo, the port
-lives in a copy:
+originally lived in a copy:
 
-| | `backend/` (original) | `backend-devnet/` (this port) |
+| | `backend/` | `backend-devnet/` |
 |---|---|---|
-| Target | local sandbox | HackCanton shared node |
-| Daml SDK / LF | 2.9.4 / **LF 1.14** | 3.4.11 build / **LF 2.2** |
-| Ledger API | **v1** | **v2** |
-| Java bindings | `bindings-rxjava` (v1) | `bindings-java` + `bindings-rxjava` **3.4.0** (v2) |
-| Party management | admin gRPC service | **config roster** (v2 dropped the admin service) |
-| Status | untouched, still runs | ported, compiles clean, connected |
+| Target | local sandbox (plaintext, no auth) | HackCanton shared node (TLS + JWT) |
+| Party management | admin gRPC service → **config roster** | **config roster** (v2 dropped the admin service) |
+| Default port | 8080 | **8090** (so both run side by side) |
+
+**Update — since the SDK 3.4.11 pin (commit `6529754`), the two are on the same
+line.** `daml.yaml` now pins `sdk-version: 3.4.11` (LF 2.2) so the repo reproduces
+exactly what the devnet node runs, and **both** backends were regenerated and
+compile against **`bindings-java` + `bindings-rxjava` 3.4.0 / Ledger API v2**. The
+row that used to read *"`backend/`: 2.9.4 / LF 1.14 / v1 bindings"* is no longer
+true. What still distinguishes them is the target and the auth model, above.
 
 The Daml source is the same portable subset for both — one small change (removing
 a contract **key** from `Instrument`, since **LF 2.x removed contract keys**) was
 required and is harmless to the local build.
+
+**And one addition the pin made possible.** The CIP-56 Token Standard packages
+(`splice-api-token-*-v1-1.0.0`) are built with SDK **3.5.2** targeting **LF 2.1**.
+A higher-LF package may consume a lower-LF `data-dependency`, so pinning at 3.4.11
+/ LF 2.2 lets them be vendored into `deps/` and linked with **no SDK upgrade and
+no network fetch at build time**. They appear as `.dalf` entries in the built DAR
+(`daml damlc inspect-dar`), which is how you verify the dependency is genuine
+rather than re-declared locally.
 
 ---
 
@@ -213,3 +233,63 @@ A truthful timeline — this is where the real engineering was.
 See [`backend-devnet/RUNBOOK.md`](backend-devnet/RUNBOOK.md): three copy-paste
 steps — mint JWT → `run-devnet.sh` → `smoke-devnet.sh` — for a real on-node
 atomic settlement (once actAs is granted).
+
+---
+
+## 9. After the finalist feedback — what is on the node, and what is not
+
+The Season 2 finalist feedback landed after everything above, and the rebuild it
+prompted (2026-08-03, branch `feat/price-discovery-and-cip56`) changed the Daml
+substantially: price discovery in `RunClose`, complete-order commitments,
+price-priority allocation, the unpriced MOC order type, a clamping price collar,
+the contestable `LiquidityMandate`, accruing NAV, and the CIP-56 `TokenStandardDvp`
+module. **None of it is on the shared node.**
+
+**The honest status table.**
+
+| | State |
+|---|---|
+| Package on `hackcanton-01` | `72ec9833…` — the **pre-feedback** DAR |
+| Hosted demo (`crossdesk-devnet-app.web.app`) | reads that package; the close it runs prints at the supplied reference |
+| Recorded demo video | same build, same caveat |
+| The rebuild | committed on `feat/price-discovery-and-cip56`, **not pushed** — `origin/master` is still the pre-feedback submission |
+| Verification of the rebuild | **Daml Script scenarios** (53 at commit `73aca95`, all green), plus `./gradlew clean build` on both backends and a clean `tsc`. **No live-participant run.** |
+
+**Why it isn't deployed, precisely.** Uploading a DAR to a participant is
+admin-only — the same constraint documented in §2 that put the original DAR upload,
+party allocation and `actAs` grant in the node operator's hands. It is not a code
+problem and there is no client-side workaround; it is one request to Kiryl/NODERS.
+
+**What the upload would then require, in order.** Worth stating so nobody assumes
+it is a single button:
+
+1. **Upload the new DAR.** It is a different package id, so the old contracts stay
+   readable under the old package and the new templates arrive alongside them.
+2. **Re-seed.** `ClosingAuction` gained `submittedCount` / `cancelledCount`, so
+   auctions created under the old package cannot be closed by the new `RunClose` —
+   the close would be scoring counters that do not exist. A demo on the new package
+   starts from a fresh auction.
+3. **`SubmitOrder` now returns a pair** `(ContractId ClosingAuction, ContractId
+   SealedOrder)` and is **consuming**, so any caller must thread the new auction cid
+   forward. Both backends already do; anything else driving the ledger directly
+   would need the same change.
+4. **`PublishImbalance` takes a `mandateCid`.** There is no bypass, so a devnet demo
+   of imbalance disclosure needs `MandateTerms` posted and accepted first.
+
+**What a live run would actually add over the tests.** Not correctness — the Daml
+Script scenarios execute the identical choice bodies the node would. What it adds
+is the *multi-participant* dimension a single-participant script cannot exercise:
+sub-transaction privacy across separate participant nodes, and the synchronizer
+confirming a transaction whose views are distributed. That is exactly what the
+2026-07-19 DvP demonstrated for the settlement path (receipt `006ef8c599…`, visible
+to Alice/Bob/Auditor only) — the auction path has not had the same treatment.
+
+**The one thing that changed on our side and would need re-verifying on the node:**
+`SubmitOrder` becoming consuming serialises submissions on the auction contract. On
+a single-participant sandbox that is invisible; on a shared node with real latency,
+two traders submitting at the same instant will contend. The desk re-resolves the
+live open auction on **every** `POST /api/moc/order`, so it always submits against
+the current cid and a *sequential* stream of orders is unaffected — but a genuine
+concurrent race would surface as a failed submit the caller has to reissue. That is
+the known, deliberately-accepted cost of the completeness guarantee, documented in
+`MarketOnClose.daml`'s header, not a surprise.

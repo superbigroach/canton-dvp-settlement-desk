@@ -1,6 +1,7 @@
 package com.lucilla.settlement.web;
 
 import com.daml.ledger.javaapi.data.Transaction;
+import com.lucilla.settlement.ledger.Accrual;
 import com.lucilla.settlement.ledger.LedgerCommands;
 import com.lucilla.settlement.ledger.LedgerService;
 import jakarta.validation.Valid;
@@ -18,6 +19,7 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 
@@ -1147,6 +1149,47 @@ public class SettlementController {
     }
 
     /**
+     * A member proposes an ACCRUING fix — the committee attests the INPUTS, the ledger
+     * computes every later value.
+     *
+     * <p>A SEPARATE ENDPOINT FROM {@code /propose}, exactly as {@code ProposeAccruingFixing}
+     * is a separate choice from {@code ProposeFixing}. The snapshot path above is
+     * untouched and still produces a non-accruing mark; this one attests a rate, a
+     * day-count convention and the instant the mark applies from, and from then on the
+     * fund's value is derived from the clock rather than re-struck.
+     *
+     * <p>THE DAY COUNT IS VALIDATED HERE THE WAY THE LEDGER VALIDATES IT. Governance.daml
+     * REJECTS an unsupported convention at proposal rather than defaulting one, because
+     * silently falling back to ACT/360 on a typo would mis-accrue a sterling fund by
+     * 1.389% of its yield forever, under a signed attestation saying otherwise. Mirroring
+     * that check here turns a ledger abort (422, after a submission) into a form
+     * rejection (400, with the reason and the supported list) — same verdict, better
+     * error, and no wasted command.
+     */
+    @PostMapping("/committee/{cid}/propose-accruing")
+    public ResponseEntity<Dtos.FixingProposalResponse> proposeAccruingFixing(
+            @PathVariable String cid, @Valid @RequestBody Dtos.ProposeAccruingFixingRequest req) {
+        String proposer = ledger.resolveParty(req.proposer());
+        String dayCount = normaliseDayCount(req.dayCount());
+        // Mirror the ledger's own gates BEFORE submitting anything.
+        Accrual.validateRecipe(req.price(), req.ratePerAnnum(), dayCount);
+        Instant accrualFrom = parseInstant(req.accrualFrom(), Instant.now());
+
+        var cmd = LedgerCommands.proposeAccruingFixing(cid, proposer, req.instrumentId(),
+                blankTo(req.cashInstrument(), "USDC"), LedgerCommands.session(req.session()),
+                req.price(), blankTo(req.rationale(), ""),
+                req.ratePerAnnum(), dayCount, accrualFrom);
+        String propCid = ledger.submitForCreated(proposer, cmd, LedgerCommands.fixingProposalTemplateId());
+
+        return created(new Dtos.FixingProposalResponse(propCid,
+                req.instrumentId(), blankTo(req.cashInstrument(), "USDC"),
+                LedgerCommands.session(req.session()),
+                Accrual.wire(req.price()), Accrual.wire(req.ratePerAnnum()), dayCount,
+                accrualFrom.toString(), Accrual.epochMicros(accrualFrom),
+                req.ratePerAnnum().signum() != 0));
+    }
+
+    /**
      * Another member confirms — the accumulating-multisig step. Returns the NEW
      * proposal contract id (each confirmation archives and re-creates the proposal
      * with one more signature). Repeat until the threshold is reached.
@@ -1174,6 +1217,155 @@ public class SettlementController {
         String fixCid = ledger.submitForCreated(proposer,
                 LedgerCommands.finalizeFixing(cid, publishTo), LedgerCommands.navFixingTemplateId());
         return created(new Dtos.CidResponse(fixCid));
+    }
+
+    // ---- Continuous accrual: what the fund is worth RIGHT NOW ---------------
+
+    /**
+     * The official fixes visible to the acting party, each with its accrual recipe and
+     * the value derived from that recipe as of the desk's clock.
+     *
+     * <p>Queried AS the acting party, so the ledger's own disclosure rules decide what
+     * comes back: a NavFixing reaches its attestors, the auditor, and exactly the venues
+     * it was published to. An outsider sees an empty list.
+     */
+    @GetMapping("/fixings")
+    public List<Dtos.FixingResponse> fixings(@RequestParam(required = false) String actingAs) {
+        String acting = ledger.resolveParty(blankTo(actingAs, "Auditor"));
+        Instant now = Instant.now();
+        return ledger.navFixingsVisibleTo(acting).stream()
+                .sorted(Comparator.comparing((LedgerService.NavFixingView v) -> v.finalizedAt()).reversed())
+                .map(f -> toFixingResponse(f, now))
+                .toList();
+    }
+
+    /**
+     * THE ACCRUED NAV, WITH ITS WORKING SHOWN.
+     *
+     * <p>The value one share is worth at {@code at} (default: now), together with every
+     * input it was derived from — attested base, rate, day-count convention, origin,
+     * the convention's year length in microseconds, and the elapsed time — so a caller
+     * can REPRODUCE the number rather than take it on trust. That matters more here
+     * than anywhere else on this desk: the browser reproduces exactly this arithmetic
+     * to tick the figure between polls, and a client that computed it a different
+     * (equally reasonable) way would drift away from the ledger.
+     *
+     * <p>It also answers the auction question. {@code RunClose} requires the auction's
+     * anchor to be consistent with the NAV accrued to the close — at or below it, and no
+     * more than one basis point behind. Pass {@code anchor} to judge a specific number;
+     * omit it and the desk finds the live auction for this fix's instrument/session and
+     * judges the anchor it actually published. Either way the verdict comes from
+     * {@code Accrual.anchorConsistentWithNav}, which is Governance.daml's function.
+     *
+     * @param at optional ISO-8601 instant to value at (a backfill or a replay); default now
+     */
+    @GetMapping("/fixing/{cid}/nav")
+    public Dtos.AccruedNavResponse accruedNav(
+            @PathVariable String cid,
+            @RequestParam(required = false) String actingAs,
+            @RequestParam(required = false) String at,
+            @RequestParam(required = false) BigDecimal anchor) {
+        String acting = ledger.resolveParty(blankTo(actingAs, "Auditor"));
+        LedgerService.NavFixingView f = ledger.navFixingById(acting, cid);
+
+        Instant asOf = parseInstant(at, Instant.now());
+        long elapsed = Accrual.elapsedMicrosFrom(f.accrualFrom(), asOf);
+        long yearMicros = Accrual.dayCountYearMicros(f.dayCount()).orElse(360L * Accrual.MICROS_PER_DAY);
+        BigDecimal accrued = Accrual.accruedAmount(f.price(), f.ratePerAnnum(), f.dayCount(), elapsed);
+        BigDecimal navNow = Accrual.navAt(f.price(), f.ratePerAnnum(), f.dayCount(), f.accrualFrom(), asOf);
+        // What a WHOLE DAY of this recipe adds — the "1bp/day at 3.6% ACT/360" number,
+        // computed rather than quoted, so the staleness budget below reads as a duration.
+        BigDecimal perDay = Accrual.accruedAmount(
+                f.price(), f.ratePerAnnum(), f.dayCount(), Accrual.MICROS_PER_DAY);
+
+        // ---- the auction binding ------------------------------------------
+        BigDecimal anchorPrice = anchor;
+        String anchorCid = null;
+        String note;
+        if (anchorPrice == null) {
+            var live = ledger.auctionsVisibleTo(acting).stream()
+                    .filter(a -> a.instrumentId().equals(f.instrumentId())
+                            && a.cashInstrument().equals(f.cashInstrument())
+                            && a.session().equals(f.session()))
+                    .findFirst();
+            if (live.isPresent()) {
+                anchorPrice = live.get().referencePrice();
+                anchorCid = live.get().contractId();
+            }
+        }
+        String anchorDrift = null;
+        String staleBudget = null;
+        Boolean consistent = null;
+        if (anchorPrice == null) {
+            note = "no live auction is anchored on this fix — the binding is checked at RunClose";
+        } else {
+            BigDecimal drift = Accrual.scaled(navNow).subtract(Accrual.scaled(anchorPrice));
+            BigDecimal budget = Accrual.staleBudget(navNow);
+            consistent = Accrual.anchorConsistentWithNav(navNow, anchorPrice);
+            anchorDrift = Accrual.wire(drift);
+            staleBudget = Accrual.wire(budget);
+            if (consistent) {
+                note = "anchor is within the 1bp staleness budget — RunClose would accept it";
+            } else if (drift.signum() < 0) {
+                // Above the accrual: not staleness at all, and no elapsed time explains it.
+                note = "anchor is AHEAD of the accrued NAV — the venue is pricing value the fund "
+                        + "has not earned. RunClose rejects this outright.";
+            } else {
+                note = "anchor is more than 1bp behind the accrued NAV — stale. RunClose rejects it "
+                        + "until the anchor is re-published or a fresher fix is struck.";
+            }
+        }
+
+        return new Dtos.AccruedNavResponse(
+                f.contractId(), f.instrumentId(), f.cashInstrument(), f.session(),
+                Accrual.wire(f.price()), Accrual.wire(f.ratePerAnnum()), f.dayCount(),
+                f.accrualFrom().toString(), Accrual.epochMicros(f.accrualFrom()),
+                asOf.toString(), Accrual.epochMicros(asOf), elapsed, yearMicros,
+                Accrual.wire(accrued), Accrual.wire(navNow), Accrual.wire(perDay), f.accruing(),
+                f.attestors().stream().map(LedgerService::labelOf).toList(), f.threshold(),
+                anchorPrice == null ? null : Accrual.wire(anchorPrice), anchorCid,
+                anchorDrift, staleBudget, consistent, note);
+    }
+
+    /** Flatten a fixing + the value derived from its recipe at {@code now}. */
+    private static Dtos.FixingResponse toFixingResponse(LedgerService.NavFixingView f, Instant now) {
+        BigDecimal navNow = Accrual.navAt(f.price(), f.ratePerAnnum(), f.dayCount(), f.accrualFrom(), now);
+        return new Dtos.FixingResponse(
+                f.contractId(),
+                f.attestors().stream().map(LedgerService::labelOf).toList(), f.threshold(),
+                f.instrumentId(), f.cashInstrument(), f.session(),
+                Accrual.wire(f.price()), f.rationale(),
+                Accrual.wire(f.ratePerAnnum()), f.dayCount(),
+                f.accrualFrom().toString(), Accrual.epochMicros(f.accrualFrom()),
+                f.finalizedAt().toString(),
+                f.publishedTo().stream().map(LedgerService::labelOf).toList(),
+                f.accruing(),
+                Accrual.wire(navNow),
+                Accrual.wire(Accrual.scaled(navNow).subtract(Accrual.scaled(f.price()))),
+                now.toString(), Accrual.epochMicros(now),
+                Accrual.elapsedMicrosFrom(f.accrualFrom(), now));
+    }
+
+    /**
+     * Normalise a day-count convention for comparison, WITHOUT being helpful about it.
+     * Case and surrounding whitespace are noise; "ACT/ACT" is not a typo of anything and
+     * is refused by {@link Accrual#validateRecipe} rather than nudged into ACT/360.
+     */
+    private static String normaliseDayCount(String raw) {
+        return raw == null ? "" : raw.trim().toUpperCase().replace(" ", "");
+    }
+
+    /** Parse an optional ISO-8601 instant, else {@code fallback}. A bad one is a 400. */
+    private static Instant parseInstant(String raw, Instant fallback) {
+        if (raw == null || raw.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Instant.parse(raw.trim());
+        } catch (java.time.format.DateTimeParseException e) {
+            throw new IllegalArgumentException(
+                    "not an ISO-8601 instant (e.g. 2026-08-05T14:00:00Z): " + raw);
+        }
     }
 
     // ---- Basket / ETF builder ---------------------------------------------

@@ -21,7 +21,7 @@ import java.util.List;
 import java.util.Objects;
 
 public class CloseBidding extends DamlRecord<CloseBidding> {
-  public static final String _packageId = "5ac8f47b9e28322096bc4c9c58f8449ead13792c4a30aad95cd1e80669894a79";
+  public static final String _packageId = "b2aa4af53dbf06e12822d2b51bfa82a52c41f27f936b81b8364b62cfe358689c";
 
   public CloseBidding() {
   }

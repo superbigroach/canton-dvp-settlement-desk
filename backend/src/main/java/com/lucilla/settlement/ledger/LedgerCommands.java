@@ -517,6 +517,31 @@ public final class LedgerCommands {
                 .exerciseProposeFixing(proposer, instrumentId, cashInstrument, session, price, rationale);
     }
 
+    /**
+     * A member proposes an ACCRUING fix — it attests the INPUTS to a value that keeps
+     * moving, rather than a number that is already stale when it is signed.
+     *
+     * <p>A SEPARATE CHOICE, NOT A WIDER {@link #proposeFixing}. {@code ProposeFixing}
+     * above still takes exactly the six arguments it always took and still produces a
+     * non-accruing snapshot ({@code ratePerAnnum = 0.0}, day count {@code "NONE"}), so
+     * every existing call site keeps working unchanged. Accrual is opt-in and this is
+     * how a committee opts in: four attested inputs — base, rate, convention, origin —
+     * from which the ledger derives every later value.
+     *
+     * <p>{@code accrualFrom} is ATTESTED rather than clocked: a NAV struck "as of 16:00"
+     * is a fact about 16:00 even when the last member signs at 16:07, and taking the
+     * ledger clock instead would silently under-accrue the fund by the length of the
+     * committee's own signing round.
+     */
+    public static Update<?> proposeAccruingFixing(
+            String committeeCid, String proposer, String instrumentId, String cashInstrument,
+            String session, BigDecimal price, String rationale,
+            BigDecimal ratePerAnnum, String dayCount, Instant accrualFrom) {
+        return new OperatorCommittee.ContractId(committeeCid)
+                .exerciseProposeAccruingFixing(proposer, instrumentId, cashInstrument, session,
+                        price, rationale, ratePerAnnum, dayCount, accrualFrom);
+    }
+
     /** Another member adds its attestation (accumulating multisig). */
     public static Update<?> confirmFixing(String proposalCid, String member) {
         return new FixingProposal.ContractId(proposalCid).exerciseConfirm(member);

@@ -159,9 +159,23 @@ Both parts, because every venue with a percentage band also has an absolute floo
 Euronext €0.02, NYSE $0.15/$1.00). Checked **after** the committee-fix validation, so the band is
 provably centred on the attested anchor.
 
-🔴 **A breach aborts the close** with *"discovered price is outside the venue's price collar around
-the anchor — no close printed."* **This can fire during the demo** if a typed limit drags the print
-more than 10% away. Rehearse it deliberately rather than meet it live.
+**A breach CLAMPS — it does not abort.** If the volume-maximising price falls outside the band, the
+print is set **at the nearer boundary** and the cross is re-scored there: the crossed quantity is
+smaller, the excess on the heavy side simply doesn't fill and returns to its traders, and **the
+auction still prints.**
+
+That matters most once unpriced MOC exists — an index fund sending MOC *must* own the closing
+price, so a venue that cancels under stress is useless to exactly the participants who need it. It
+also means one large order can no longer deny everyone else a close.
+
+Clamping is provably the right price, not merely a safe one: `exec(P)` is the minimum of a
+non-increasing and a non-decreasing function, so it is quasi-concave — the maximum over a band that
+excludes the true peak sits at the nearer endpoint. **Clamping *is* constrained volume maximisation.**
+
+🔴 The one case that still aborts, correctly: if the boundary itself trades zero, quasi-concavity
+means nothing inside the band trades either — so there is no auction price at all. That is the
+ordinary no-cross case, not the collar failing. Clamping bounds a price; it cannot manufacture a
+counterparty.
 
 ---
 
@@ -224,7 +238,8 @@ this node is Canton 3.x and rejects LF 1.x. The 3.x asset layer *is* the Token S
 
 | Gap | Status |
 |---|---|
-| **No unpriced MOC order type** | Every order carries a limit, so all orders are effectively LOC. Blocked on a signature change the Java backend would need to follow |
+| ~~No unpriced MOC order type~~ | ✅ **BUILT.** `limitPrice` is `Optional`; `None` = unpriced MOC. Eligible at every candidate price and allocated **ahead of** every limit order (Nasdaq 4754(b)(3)(A) class → price → time). An unpriced buy reserves `quantity × (anchor + collar band)` — the collar is what bounds an otherwise unbounded obligation, and is why the order type became possible |
+| **No continuous session** | A real closing cross inherits the whole resting day book — that is the limit ladder MOC flow walks into. There is no continuous session here, so the ladder must come from LOC orders submitted directly into the auction |
 | **No time priority** | Deliberate — see §4 |
 | **No auction phases** | No call phase, no freeze/no-cancel window. Close is manually triggered |
 | **No tick size, no lot size** | Not modelled |

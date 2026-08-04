@@ -705,6 +705,19 @@ testWithdrawAndVenueClear = do
   submitMustFail alice do
     exerciseCmd sealed WithdrawOrder with trader = alice; orderCid = aliceBuy2
 
+  -- AND THE NO-CANCEL PERIOD BINDS THE VENUE TOO, which is the half that was
+  -- missing and it was the sharper one. The operator SIGNS every sealed order, so
+  -- sealing is precisely the moment it can read the entire book — and `ClearOrder`
+  -- had no `isOpen` guard. Seal, read the book, clear the two orders that would
+  -- move the print, close: every counter reconciles, every cancellation is on the
+  -- ledger, and the completeness assertion is perfectly satisfied over what is
+  -- LEFT. That is the pricing discretion this whole design exists to remove,
+  -- reachable in three legitimate choices. The venue may clear the book only while
+  -- the window is open — before it can possibly know what clearing would do to the
+  -- price, and while every trader can equally withdraw.
+  submitMustFail venue do
+    exerciseCmd sealed ClearOrder with orderCid = aliceBuy2
+
   -- The counts still add up: 3 submitted, 2 cancelled, 1 live order — and one
   -- lonely bid does not cross, so this close correctly refuses to print.
   submitMustFail venue do
@@ -1102,8 +1115,16 @@ testAtomicRollback = do
 
 -- ---------------------------------------------------------------------------
 -- TEST 6 — AGENT-INITIATED DvP within a mandate limit (settling cETH).
--- Alice grants an Agent a mandate to sell up to 3 cETH. An over-limit attempt
--- fails; a within-limit attempt creates a proposal that then settles atomically.
+-- Alice grants an Agent a mandate to sell up to 3 cETH at no worse than 2,000
+-- USDC each. An over-limit attempt fails, an UNDER-PRICED attempt fails, and a
+-- within-limits attempt creates a proposal that then settles atomically.
+--
+-- THE PRICE HALF IS NEW, AND IT IS THE HALF THAT WAS MISSING. The mandate used to
+-- bound the SIZE alone, with the cash leg unconstrained — so an agent mandated to
+-- "sell up to 3 cETH" could sell the full 3 cETH for ONE USDC and every check
+-- passed. A size cap with a free price is not a delegation limit; it is a licence
+-- to give the position away, which is exactly the failure mode that matters when
+-- the party exercising the choice is a bot.
 -- ---------------------------------------------------------------------------
 testAgentInitiatedDvP : Script ()
 testAgentInitiatedDvP = do
@@ -1117,10 +1138,12 @@ testAgentInitiatedDvP = do
   -- AUTHORITY, but the agent still needs VISIBILITY of the specific holding).
   aliceCeth <- submit alice do exerciseCmd aliceCeth0 Disclose with newObserver = agent
 
-  -- Alice delegates: the Agent may initiate cETH settlements up to 3 cETH.
+  -- Alice delegates: the Agent may initiate cETH settlements up to 3 cETH, at a
+  -- unit price of at least 2,000 USDC.
   mandateCid <- submit alice do
     createCmd TradingMandate with
-      principal = alice; agent; instrument = ceth; maxAmount = 3.0
+      principal = alice; agent; instrument = ceth
+      maxAmount = 3.0; minUnitPrice = 2000.0
 
   -- OVER-LIMIT: a 4 cETH holding breaches the 3 cETH cap -> must fail. Alice
   -- allocates it to the agent too, so the rejection is genuinely the mandate
@@ -1132,6 +1155,39 @@ testAgentInitiatedDvP = do
       counterparty = bob; auditor
       assetHoldingCid = bigCeth; cashHoldingCid = bobCash
       assetAmount = 4.0; cashInstrument = usdc; cashAmount = 5000.0
+
+  -- UNDER-PRICED, AND THIS IS THE NEW GUARD. The size is WITHIN the cap — 2 cETH
+  -- against a 3 cETH mandate, the identical holding the successful trade below
+  -- uses — so the size check passes and passed before. The consideration is 1 USDC
+  -- for two whole cETH. This used to be an accepted, ledger-signed delegation.
+  smallCash0 <- mint issuer usdc bob 1.0
+  smallCash  <- submit bob do exerciseCmd smallCash0 Disclose with newObserver = alice
+  submitMustFail agent do
+    exerciseCmd mandateCid InitiateDvP with
+      counterparty = bob; auditor
+      assetHoldingCid = aliceCeth; cashHoldingCid = smallCash
+      assetAmount = 2.0; cashInstrument = usdc; cashAmount = 1.0
+
+  -- AND THE BOUNDARY IS EXACT, not approximate: one ledger unit BELOW the mandated
+  -- consideration (2 x 2,000 = 4,000) is refused, and 4,000 itself is accepted.
+  -- Proving both sides of the inequality is what stops this being a test that would
+  -- pass against a check for almost anything.
+  justUnder0 <- mint issuer usdc bob 3999.9999999999
+  justUnder  <- submit bob do exerciseCmd justUnder0 Disclose with newObserver = alice
+  submitMustFail agent do
+    exerciseCmd mandateCid InitiateDvP with
+      counterparty = bob; auditor
+      assetHoldingCid = aliceCeth; cashHoldingCid = justUnder
+      assetAmount = 2.0; cashInstrument = usdc; cashAmount = 3999.9999999999
+  exactly0 <- mint issuer usdc bob 4000.0
+  exactly  <- submit bob do exerciseCmd exactly0 Disclose with newObserver = alice
+  atFloor  <- submit agent do
+    exerciseCmd mandateCid InitiateDvP with
+      counterparty = bob; auditor
+      assetHoldingCid = aliceCeth; cashHoldingCid = exactly
+      assetAmount = 2.0; cashInstrument = usdc; cashAmount = 4000.0
+  -- Withdraw it again; the settlement below is the one this test actually settles.
+  submit alice do exerciseCmd atFloor Withdraw
 
   -- WITHIN LIMIT: the Agent initiates a valid 2 cETH settlement on Alice's behalf.
   propCid <- submit agent do
@@ -1344,8 +1400,19 @@ testMandateSeatIsContestable = do
   assertMsg "every eligible participant must see the open terms" (length aliceSeesTerms == 1)
   assertMsg "every eligible participant must see the open terms" (length carolSeesTerms == 1)
 
-  -- AN OUTSIDER CANNOT TAKE THE SEAT. Eve is not on the venue's roster.
+  -- AN OUTSIDER CANNOT TAKE THE SEAT — and BE PRECISE ABOUT WHY, because these two
+  -- lines fail for two DIFFERENT reasons and only the second one tests the guard.
+  --   * EVE never sees the offer at all. `MandateTerms` is observed by
+  --     `auditor :: eligible`, so a party off the roster cannot read the contract,
+  --     let alone exercise it. This line proves VISIBILITY, not the eligibility
+  --     assert — it would still pass if `AcceptTerms` had no roster check in it,
+  --     which is exactly why it cannot be left to stand for one.
   submitMustFail eve do exerciseCmd termsCid AcceptTerms with provider = eve
+  --   * THE AUDITOR is the one party that CAN see these terms and is NOT on the
+  --     roster, so it is the only probe that actually reaches
+  --     `provider `elem` eligible` and fails ON IT. That assert is the guard the
+  --     comment above claims, and this is the line that proves it.
+  submitMustFail auditor do exerciseCmd termsCid AcceptTerms with provider = auditor
 
   -- TWO DIFFERENT PARTICIPANTS TAKE THE SAME OFFER. Bank first, then Carol — off the
   -- successor terms, because acceptance is recorded on the ledger.
@@ -1827,9 +1894,20 @@ testThresholdAttestation = do
       proposer = venue; instrumentId = ceth; cashInstrument = usdc
       session = "Close"; price = 2400.0; rationale = "uniform sealed-cross VWAP"
 
-  -- A NON-member (Eve) cannot confirm; the proposer cannot confirm itself twice.
-  submitMustFail eve   do exerciseCmd propCid Confirm with member = eve
-  submitMustFail venue do exerciseCmd propCid Confirm with member = venue
+  -- A NON-member cannot confirm; the proposer cannot confirm itself twice. AND SAY
+  -- WHICH LINE PROVES WHICH THING, because they do not prove the same thing:
+  --   * EVE fails on VISIBILITY. `FixingProposal` is observed by
+  --     `auditor :: members`, so a party outside the committee cannot see the
+  --     proposal at all — this line would pass even if `Confirm` had no membership
+  --     check, so it cannot be the evidence that one exists.
+  submitMustFail eve     do exerciseCmd propCid Confirm with member = eve
+  --   * THE AUDITOR is the only party that OBSERVES the proposal and is NOT a
+  --     member, so it is the only probe that reaches
+  --     `member `elem` members` and fails on that assert itself.
+  submitMustFail auditor do exerciseCmd propCid Confirm with member = auditor
+  --   * The VENUE is a member and already an approver — this one fails on the
+  --     one-signature-per-member rule, which is a third, distinct guard.
+  submitMustFail venue   do exerciseCmd propCid Confirm with member = venue
   -- ONE attestation (the proposer's) is below the 2-of-3 threshold — cannot finalise.
   submitMustFail venue do exerciseCmd propCid FinalizeFixing with publishTo = [venue]
 
@@ -3554,3 +3632,487 @@ testMocIsNeverAwayFromTheCross = do
   aliceAapl === 10.0
   aliceUsd  === 0.0
 
+
+-- ---------------------------------------------------------------------------
+-- TEST 26 — A FAILED CLOSE IS RECOVERABLE. `CloseBidding` is no longer a
+--           ONE-WAY DOOR.
+-- ---------------------------------------------------------------------------
+-- THE OUTAGE THIS PINS DOWN, AND IT WAS DEMO-FATAL. `CloseBidding` sets
+-- `isOpen = False`, which bars `SubmitOrder`, `WithdrawOrder` and `ClearOrder`, and
+-- until now the ONLY choice that consumed the sealed auction was `RunClose`. So
+-- every way `RunClose` can legitimately decline to print — the book does not cross,
+-- the collar leaves nothing tradeable, the operator hands over an incomplete list,
+-- an attested fixing has aged out — left the auction STRANDED FOR EVER, with every
+-- resting order un-withdrawable and every trader's reserved collateral locked
+-- behind it. One recoverable error was a permanent outage. `RunClose` is atomic, so
+-- the failed attempt itself changes nothing; the trap was purely that there was no
+-- way back to an open window.
+--
+-- This test walks the whole trap and then walks out of it:
+--   1. one lonely bid, sealed, and the close correctly refuses to print;
+--   2. every escape is barred while sealed — withdraw, submit AND venue-clear;
+--   3. `ReopenBidding` puts the window back;
+--   4. the stranded trader gets her order AND her 2,600 USDC back;
+--   5. the venue re-runs an honest auction on the recovered book, and it prints.
+-- ---------------------------------------------------------------------------
+testReopenRecoversAFailedClose : Script ()
+testReopenRecoversAFailedClose = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  aliceCash <- mint issuer usdc alice 2600.0
+  bobAsset  <- mint issuer aapl bob   10.0
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bob]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+
+  (a1, aliceBuy) <- submitOrder auctionCid alice Buy 10.0 260.0 aliceCash
+
+  -- 1. SEAL, AND THE CLOSE CORRECTLY DECLINES. One bid and no offer: `discoverPrice`
+  --    returns None at every candidate, so there is no auction price and nothing
+  --    settles. This is the auction behaving CORRECTLY — which is exactly why being
+  --    stranded by it was so bad.
+  sealed <- submit venue do exerciseCmd a1 CloseBidding
+  submitMustFail venue do
+    exerciseCmd sealed RunClose with buyOrders = [aliceBuy]; sellOrders = []
+
+  -- 2. EVERY DOOR IS SHUT WHILE THE BOOK IS SEALED. Note the third one: the VENUE
+  --    cannot clear either, which is the guard that stops "seal, read the book,
+  --    clear whatever moves the print" — the operator signs every sealed order, so
+  --    sealing is the moment it can see the whole book at once.
+  submitMustFail alice do
+    exerciseCmd sealed WithdrawOrder with trader = alice; orderCid = aliceBuy
+  submitMustFail bob do
+    exerciseCmd sealed SubmitOrder with
+      trader = bob; side = Sell; quantity = 10.0
+      limitPrice = Some 250.0; holdingCid = bobAsset
+  submitMustFail venue do
+    exerciseCmd sealed ClearOrder with orderCid = aliceBuy
+
+  -- 3. REOPEN — the recovery path, and the ONLY new power it gives the operator is
+  --    the ability to retry. It cannot touch an order, a counter or the anchor.
+  reopened <- submit venue do exerciseCmd sealed ReopenBidding
+  Some ra <- queryContractId venue reopened
+  ra.referencePrice === 255.0
+  ra.submittedCount === 1     -- the book is the SAME book
+  ra.cancelledCount === 0
+  assertMsg "a reopened window must be open" ra.isOpen
+  -- Reopening an already-open window is refused, so the choice cannot be used as a
+  -- no-op to churn the auction's contract id.
+  submitMustFail venue do exerciseCmd reopened ReopenBidding
+
+  -- 4. THE STRANDED TRADER IS WHOLE AGAIN. Her order comes off the book and her
+  --    2,600 USDC comes back as a private holding — the collateral that was locked
+  --    behind an un-cancellable order for as long as the seal stood.
+  (a2, unlocked) <- submit alice do
+    exerciseCmd reopened WithdrawOrder with trader = alice; orderCid = aliceBuy
+  aliceUsd0 <- ownedAmount alice usdc
+  aliceUsd0 === 2600.0
+  Some uh <- queryContractId alice unlocked
+  assertMsg "the recovered holding is private to its owner again" (null uh.disclosedTo)
+
+  -- 5. AND THE VENUE RUNS THE AUCTION IT MEANT TO RUN. Alice re-lodges, Bob brings
+  --    the other side, and the recovered book prints at the anchor.
+  (a3, aliceBuy2) <- submitOrder a2 alice Buy  10.0 260.0 unlocked
+  (a4, bobSell)   <- submitOrder a3 bob   Sell 10.0 250.0 bobAsset
+  sealed2  <- submit venue do exerciseCmd a4 CloseBidding
+  batchCid <- submit venue do
+    exerciseCmd sealed2 RunClose with buyOrders = [aliceBuy2]; sellOrders = [bobSell]
+
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 255.0
+  length batch.fills === 2
+  aliceAapl <- ownedAmount alice aapl
+  aliceUsd  <- ownedAmount alice usdc
+  bobUsd    <- ownedAmount bob   usdc
+  aliceAapl === 10.0
+  aliceUsd  === 50.0     -- 2,600 reserved at her 260 limit, filled at the 255 print
+  bobUsd    === 2550.0
+
+-- ---------------------------------------------------------------------------
+-- TEST 27 — AN ORDER CANNOT COMMIT THE WRONG TOKEN.
+-- ---------------------------------------------------------------------------
+-- THE DENIAL OF SERVICE THIS CLOSES. `SubmitOrder` used to check only that the
+-- pre-committed holding BELONGED to the trader — never what it WAS. So a buy could
+-- be backed with AAPL instead of USDC, or a sell with cash instead of the asset.
+-- Nothing rejected it: the order rested, it was counted into `submittedCount`, it
+-- priced the cross like any other order — and then at settlement the venue pooled
+-- the pledged legs with `mergeAll`, which asserts "can only merge the same
+-- instrument" and took the ENTIRE close down. One malformed order and NOBODY
+-- printed; and because the completeness assertion demands the whole book, the only
+-- way out was a real on-ledger cancellation. A free, one-submission outage on every
+-- other participant's close.
+--
+-- Both sides are proved here, in BOTH directions — a buy backed by the asset and a
+-- sell backed by the cash — and then the correctly-backed versions of the SAME two
+-- orders are shown to submit and settle, so the rejection is demonstrably the
+-- instrument check and not an incidental failure.
+-- ---------------------------------------------------------------------------
+testWrongInstrumentOrderRejected : Script ()
+testWrongInstrumentOrderRejected = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  -- Both traders hold BOTH legs, so a mis-backed order is a genuine mistake (or a
+  -- genuine attack) rather than a party simply not owning the right token.
+  aliceCash  <- mint issuer usdc alice 2600.0
+  aliceAsset <- mint issuer aapl alice 10.0
+  bobAsset   <- mint issuer aapl bob   10.0
+  bobCash    <- mint issuer usdc bob   2600.0
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bob]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+
+  -- A BUY delivers the CASH leg, so backing it with the asset is rejected...
+  submitMustFail alice do
+    exerciseCmd auctionCid SubmitOrder with
+      trader = alice; side = Buy; quantity = 10.0
+      limitPrice = Some 260.0; holdingCid = aliceAsset
+  -- ...and a SELL delivers the ASSET, so backing it with cash is rejected too.
+  submitMustFail bob do
+    exerciseCmd auctionCid SubmitOrder with
+      trader = bob; side = Sell; quantity = 10.0
+      limitPrice = Some 250.0; holdingCid = bobCash
+  -- An UNPRICED MOC is held to exactly the same rule — there is no order type that
+  -- gets to pre-commit a token the book does not settle in.
+  submitMustFail alice do
+    exerciseCmd auctionCid SubmitOrder with
+      trader = alice; side = Buy; quantity = 10.0
+      limitPrice = None; holdingCid = aliceAsset
+
+  -- NOTHING RESTED. Three rejected submissions left the book empty and the counter
+  -- untouched — a rejected order cannot pad `submittedCount` and jam the close.
+  Some au <- queryContractId venue auctionCid
+  au.submittedCount === 0
+  au.cancelledCount === 0
+
+  -- THE SAME TWO ORDERS, CORRECTLY BACKED, SUBMIT AND SETTLE. This is what makes
+  -- the rejections above attributable to the instrument check.
+  (a1, aliceBuy) <- submitOrder auctionCid alice Buy  10.0 260.0 aliceCash
+  (a2, bobSell)  <- submitOrder a1         bob   Sell 10.0 250.0 bobAsset
+  sealed   <- submit venue do exerciseCmd a2 CloseBidding
+  batchCid <- submit venue do
+    exerciseCmd sealed RunClose with buyOrders = [aliceBuy]; sellOrders = [bobSell]
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 255.0
+  length batch.fills === 2
+
+-- ---------------------------------------------------------------------------
+-- TEST 28 — DUST ON THE **CASH** LEG NO LONGER ABORTS THE CLOSE.
+-- ---------------------------------------------------------------------------
+-- THE SAME BUG CLASS AS `testDustDoesNotAbortTheClose`, ON THE OTHER LEG — and the
+-- first fix looked complete and was not. A seller delivers `fillQty` of the ASSET,
+-- so filtering `fillQty > 0` was enough for the sell side. A BUYER delivers
+-- `fillQty * closingPrice` of CASH, a SECOND product with its OWN rounding: a fill
+-- with a perfectly positive quantity can still owe a cash amount that quantises to
+-- 0.0, at which point `Holding.Split 0.0` aborts and the whole auction dies. It is
+-- reachable exactly where `collarFloor` exists to be reached — a sub-0.50 print.
+--
+-- The book, on a penny instrument (anchor 0.30, so the ABSOLUTE 0.50 floor sets the
+-- band, not the 10%):
+--   SELL Bob   100 @ 0.10
+--   BUY  Alice 1   @ 0.30
+--   BUY  Carol 0.0000000004 @ 0.30      <- four ledger units. Reserves one unit of
+--                                          cash (0.0000000004 x 0.30), so it is a
+--                                          perfectly well-formed, fundable order.
+-- The print is 0.10. Carol's fill is a positive 0.0000000004 units — and her bill is
+-- 0.00000000004, which rounds to ZERO. That is the abort.
+--
+-- AND THE PART A NAIVE FILTER GETS WRONG, which this test also pins: you cannot just
+-- drop Carol's leg. The sellers were allocated the FULL crossed volume, so the asset
+-- pool would arrive one dust unit larger than the surviving buyers are owed and
+-- `distribute` would abort on its final tripwire — the same outage, three lines
+-- later. The crossed volume is re-derived as what the surviving buyers can actually
+-- PAY for, and the sell side is re-settled to it by the published residual rule.
+-- Bob's fill is therefore exactly 1.0, not 1.0000000004, and the pools drain.
+-- ---------------------------------------------------------------------------
+testCashLegDustDoesNotAbortTheClose : Script ()
+testCashLegDustDoesNotAbortTheClose = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  carol <- allocatePartyByHint (PartyIdHint "Carol")
+
+  bobAsset  <- mint issuer aapl bob   100.0
+  aliceCash <- mint issuer usdc alice 0.30
+  carolCash <- mint issuer usdc carol 0.0000000001   -- exactly her reservation
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 0.30
+      participants = [alice, bob, carol]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+
+  (a1, bobSell)  <- submitOrder auctionCid bob   Sell 100.0          0.10 bobAsset
+  (a2, aliceBuy) <- submitOrder a1         alice Buy  1.0            0.30 aliceCash
+  (a3, carolBuy) <- submitOrder a2         carol Buy  0.0000000004   0.30 carolCash
+
+  sealed <- submit venue do exerciseCmd a3 CloseBidding
+  -- THE ASSERTION THAT IS THE WHOLE TEST: this used to abort inside Carol's cash
+  -- pledge. The close prints.
+  batchCid <- submit venue do
+    exerciseCmd sealed RunClose with
+      buyOrders  = [aliceBuy, carolBuy]
+      sellOrders = [bobSell]
+
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 0.10
+  -- TWO fill records: Alice's buy and Bob's sell. Carol paid nothing, so she traded
+  -- nothing, so she gets no receipt for a trade that did not happen.
+  length batch.fills === 2
+  assertMsg "the cash-dust order must not appear in the batch"
+    (null (filter (\f -> f.buyer == carol) batch.fills))
+
+  -- THE SELL SIDE FOLLOWED IT DOWN. Bob was allocated 1.0000000004 by the ladder and
+  -- delivers exactly 1.0 — the payable cross — because the dust the buy side could
+  -- not fund was taken back off the largest sell fill by the published residual rule.
+  let bobFill = head (filter (\f -> f.seller == bob) batch.fills)
+  bobFill.quantity === 1.0
+  bobFill.price    === 0.10
+
+  -- THE DUST TRADER IS WHOLE. Her order is cancelled on close exactly like an order
+  -- that sat away from the print, and the archive touches the ORDER, never the
+  -- balance — she keeps every unit of the cash she committed.
+  assertMsg "a cash-dust order is cancelled on close, not left resting" . isNone
+    =<< queryContractId venue carolBuy
+  carolUsd  <- ownedAmount carol usdc
+  carolAapl <- ownedAmount carol aapl
+  carolUsd  === 0.0000000001
+  carolAapl === 0.0
+
+  -- EVERYONE ELSE SETTLES NORMALLY, and the pools drain exactly.
+  aliceAapl <- ownedAmount alice aapl
+  aliceUsd  <- ownedAmount alice usdc
+  bobAapl   <- ownedAmount bob   aapl
+  bobUsd    <- ownedAmount bob   usdc
+  aliceAapl === 1.0
+  aliceUsd  === 0.20      -- 0.30 reserved at her limit, 0.10 spent at the print
+  bobAapl   === 99.0
+  bobUsd    === 0.10
+
+-- ---------------------------------------------------------------------------
+-- TEST 29 — THE SETTLEMENT BATCH IS NOT A TAPE.
+-- ---------------------------------------------------------------------------
+-- THE LEAK THIS CLOSES, AND IT CONTRADICTED THE HEADLINE CLAIM OF THE WHOLE SYSTEM.
+-- `SettlementBatch.fills` carries the SELLER, the BUYER, the QUANTITY and the PRICE
+-- of every cross — the executed book, with identities attached. Its observer line
+-- used to read `auditor :: traders`, and `RunClose` sets `traders = participants`,
+-- i.e. EVERY registered participant of the venue. So the instant the close printed,
+-- every trader on the book could read who traded what with whom and in what size.
+-- A sealed book published to the whole roster one transaction later is a dark pool
+-- for the duration of the auction and a public tape for ever afterwards — and the
+-- information a front-runner wants ("that fund is working a 500k line") is worth
+-- just as much the day after the print as the second before it.
+--
+-- The batch is now observed by the AUDITOR alone. Nothing a trader is entitled to
+-- know is lost: `SettlementReceipt` is the need-to-know confirm and it was always
+-- correct — one per filled order, visible to exactly the two parties to that fill
+-- plus the auditor. This test proves BOTH halves, because "nobody can see anything"
+-- would be a useless privacy property.
+--
+-- Book: Alice BUY 10 @ 260, Bob SELL 10 @ 250, prints at the 255 anchor. Carol is a
+-- registered participant who did not trade — the sharpest probe there is, since she
+-- is exactly the party the old observer line handed the whole book to.
+-- ---------------------------------------------------------------------------
+testBatchIsNotATape : Script ()
+testBatchIsNotATape = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  carol <- allocatePartyByHint (PartyIdHint "Carol")
+
+  aliceCash <- mint issuer usdc alice 2600.0
+  bobAsset  <- mint issuer aapl bob   10.0
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bob, carol]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+
+  (a1, aliceBuy) <- submitOrder auctionCid alice Buy  10.0 260.0 aliceCash
+  (a2, bobSell)  <- submitOrder a1         bob   Sell 10.0 250.0 bobAsset
+  sealed   <- submit venue do exerciseCmd a2 CloseBidding
+  batchCid <- submit venue do
+    exerciseCmd sealed RunClose with buyOrders = [aliceBuy]; sellOrders = [bobSell]
+
+  -- THE COMPLIANCE OBSERVER SEES THE WHOLE EXECUTED BOOK. That is its job, and it
+  -- is the reason the per-fill detail cannot simply be deleted from the record —
+  -- `LiquidityMandate.RecordPerformance` scores obligations off exactly these fills.
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 255.0
+  length batch.fills === 2
+
+  -- NOBODY ELSE DOES — not the two traders who were IN it, not the registered
+  -- participant who sat it out, not an outsider.
+  assertMsg "a trader must NOT see the executed book" . isNone
+    =<< queryContractId alice batchCid
+  assertMsg "the counterparty must NOT see the executed book" . isNone
+    =<< queryContractId bob batchCid
+  assertMsg "a registered participant who did not trade must NOT see the executed book"
+    . isNone =<< queryContractId carol batchCid
+  assertMsg "an outsider must NOT see the executed book" . isNone
+    =<< queryContractId eve batchCid
+
+  -- AND WHAT A TRADER **DOES** GET IS ITS OWN CONFIRM — exactly one, its own, with
+  -- the right economics on it. This is the half that makes the privacy property
+  -- worth having rather than merely restrictive.
+  aliceRs <- query @SettlementReceipt alice
+  bobRs   <- query @SettlementReceipt bob
+  carolRs <- query @SettlementReceipt carol
+  auditRs <- query @SettlementReceipt auditor
+  length aliceRs === 1
+  length bobRs   === 1
+  length carolRs === 0     -- she traded nothing, so there is nothing to confirm
+  length auditRs === 2     -- the regulator sees both sides
+  let (_, aliceR) = head aliceRs
+  aliceR.buyer       === alice
+  aliceR.assetAmount === 10.0
+  aliceR.unitPrice   === 255.0
+  -- Alice's confirm names her own counterparty leg (the venue as momentary CCP) and
+  -- says nothing whatsoever about Bob.
+  aliceR.seller      === venue
+
+-- ---------------------------------------------------------------------------
+-- TEST 30 — A FABRICATED SCORECARD CANNOT BAR A PROVIDER.
+-- ---------------------------------------------------------------------------
+-- THE COMMENT THAT WAS FALSE, AND WHY IT IS THE KIND A DAML ENGINEER SPOTS ON SIGHT.
+-- `MandateTerms.BarProvider` claimed to be evidence-gated: it demanded a
+-- `MandatePerformance` recording `met = False` — "a contract that only
+-- `RecordPerformance` produces". `MandatePerformance` is `signatory operator` ALONE.
+-- A contract with a single signatory can be CREATED directly by that signatory;
+-- there is no privileged constructor in Daml and no way to write one. So the venue
+-- could always mint a scorecard out of thin air with any numbers it liked and bar
+-- whoever it wanted. The evidence gate was a comment, not a mechanism.
+--
+-- `BarProvider` now RE-DERIVES the numbers from the `SettlementBatch` the record
+-- cites, and refuses to act on arithmetic that does not reconcile. This test forges
+-- the record in the three ways that matter and shows all three refused, then shows
+-- the HONEST path still works — because a consequence that can never fire is no
+-- better than one that fires on anybody.
+--
+-- Book: Alice BUY 10 @ 260, Bob SELL 2 @ 250, Bank (mandated, commitment 8) SELL 8
+-- @ 250. Prints at the 255 anchor. Bank PERFORMED — it sold the 8 it was shown.
+-- ---------------------------------------------------------------------------
+testForgedPerformanceCannotBar : Script ()
+testForgedPerformanceCannotBar = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  now <- getTime
+
+  aliceCash <- mint issuer usdc alice 3000.0
+  bobAsset  <- mint issuer aapl bob   2.0
+  bankAsset <- mint issuer aapl bank  20.0
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bob, bank]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+
+  termsCid <- submit venue do
+    createCmd MandateTerms with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; anchorPrice = 255.0
+      commitmentSize = 8.0; maxBandBps = 1000
+      expiresAt = addRelTime now (hours 24)
+      eligible = [alice, bob, bank]
+      accepted = []; barred = []
+  (terms1, bankMandate) <- submit bank do exerciseCmd termsCid AcceptTerms with provider = bank
+
+  (a1, aliceBuy) <- submitOrder auctionCid alice Buy  10.0 260.0 aliceCash
+  (a2, bobSell)  <- submitOrder a1         bob   Sell  2.0 250.0 bobAsset
+  _ <- submit venue do
+    exerciseCmd a2 PublishImbalance with
+      restingOrders = [aliceBuy, bobSell]; mandateCid = bankMandate
+  -- BANK PERFORMS: it sells the 8 it was shown.
+  (a3, bankSell) <- submitOrder a2 bank Sell 8.0 250.0 bankAsset
+
+  closedCid <- submit venue do exerciseCmd a3 CloseBidding
+  batchCid  <- submit venue do
+    exerciseCmd closedCid RunClose with
+      buyOrders = [aliceBuy]; sellOrders = [bobSell, bankSell]
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 255.0
+
+  -- FORGERY 1 — THE ZERO-DELIVERY LIE. The venue mints a scorecard claiming Bank
+  -- delivered nothing into a print it in fact supplied 8 units to. Every field is
+  -- internally consistent (`met == (delivered >= owed)` holds: 0 >= 8 is False), the
+  -- scope fields all match, and the record cites the REAL batch. The only thing
+  -- wrong with it is that it is untrue — which is precisely what the old
+  -- `not perf.met` check could not detect.
+  forged1 <- submit venue do
+    createCmd MandatePerformance with
+      operator = venue; auditor; provider = bank
+      instrumentId = aapl; cashInstrument = usdc; session = "Close"
+      anchorPrice = 255.0; printedPrice = 255.0; maxBandBps = 1000; withinBand = True
+      shownSide = "Buy"; shownQty = 8.0; disclosuresSeen = 1
+      committed = 8.0; owed = 8.0
+      delivered = 0.0                -- THE LIE: the batch says 8
+      met = False
+      batchRef = batchCid
+      recordedAt = now
+  submitMustFail venue do
+    exerciseCmd terms1 BarProvider with provider = bank; performanceCid = forged1
+
+  -- FORGERY 2 — THE INFLATED-COMMITMENT LIE. Delivered is stated HONESTLY this time
+  -- (8, which the batch confirms), and the venue instead inflates the duty to 20 so
+  -- that an honest delivery reads as a miss. The record is again internally
+  -- consistent. It is refused because `committed` must be the commitment size on the
+  -- venue's OWN PUBLISHED TERMS — the number the provider consented to.
+  forged2 <- submit venue do
+    createCmd MandatePerformance with
+      operator = venue; auditor; provider = bank
+      instrumentId = aapl; cashInstrument = usdc; session = "Close"
+      anchorPrice = 255.0; printedPrice = 255.0; maxBandBps = 1000; withinBand = True
+      shownSide = "Buy"; shownQty = 20.0; disclosuresSeen = 1
+      committed = 20.0               -- THE LIE: the terms say 8
+      owed = 20.0
+      delivered = 8.0
+      met = False
+      batchRef = batchCid
+      recordedAt = now
+  submitMustFail venue do
+    exerciseCmd terms1 BarProvider with provider = bank; performanceCid = forged2
+
+  -- FORGERY 3 — THE WRONG-PRINT LIE, which is how a venue would fake a provider out
+  -- of the band fence in its own favour. The batch printed at 255; this record says
+  -- 300. Refused on the recomputed price.
+  forged3 <- submit venue do
+    createCmd MandatePerformance with
+      operator = venue; auditor; provider = bank
+      instrumentId = aapl; cashInstrument = usdc; session = "Close"
+      anchorPrice = 255.0; printedPrice = 300.0; maxBandBps = 1000; withinBand = True
+      shownSide = "Buy"; shownQty = 8.0; disclosuresSeen = 1
+      committed = 8.0; owed = 8.0; delivered = 0.0; met = False
+      batchRef = batchCid
+      recordedAt = now
+  submitMustFail venue do
+    exerciseCmd terms1 BarProvider with provider = bank; performanceCid = forged3
+
+  -- BANK IS UNBARRED AND STILL SEATED — three forgery attempts changed nothing.
+  Some tStill <- queryContractId venue terms1
+  assertMsg "a provider must not be barred by a fabricated scorecard" (null tStill.barred)
+  assertMsg "a provider must keep its seat through a fabricated scorecard"
+    (bank `elem` tStill.accepted)
+
+  -- AND THE HONEST PATH STILL WORKS, which is the other half of the property: the
+  -- consequence is real, it just has to be earned. Bank is scored against the batch
+  -- that actually printed, MEETS its commitment, and keeps the seat.
+  bankMandate2 <- liveMandateOf bank
+  outcome <- submit venue do
+    exerciseCmd bankMandate2 RecordPerformance with batchCid; termsCid = terms1
+  Some perf <- queryContractId auditor outcome.performance
+  perf.delivered === 8.0
+  perf.owed      === 8.0
+  perf.met       === True
+  assertMsg "a mandate that met its commitment survives" (isSome outcome.mandate)

@@ -215,7 +215,9 @@ template MandateTerms
     accepted       : [Party]  -- who currently holds a live mandate off these terms
     -- BARRED — providers that FAILED a commitment this session. The only way onto
     -- this list is `BarProvider`, which demands an on-ledger `MandatePerformance`
-    -- recording the failure: the venue cannot bar a competitor it simply dislikes.
+    -- recording the failure AND re-derives that failure from the `SettlementBatch`
+    -- the record cites. What that does and does NOT rule out is spelled out on
+    -- `BarProvider` itself — read it there rather than trusting this line.
     barred         : [Party]
   where
     signatory operator
@@ -274,11 +276,45 @@ template MandateTerms
 
     -- BAR PROVIDER — the consequence half, and it is EVIDENCE-GATED.
     -- ------------------------------------------------------------------------
-    -- The venue cannot bar whoever it likes. It must present a `MandatePerformance`
-    -- for THIS book naming THIS provider and recording `met = False` — a contract
-    -- that only `RecordPerformance` produces, from the batch that actually printed.
-    -- So the bar is not an administrative act; it is a derived consequence of a
-    -- recorded failure that the provider and the auditor can both read.
+    -- WHAT THIS COMMENT USED TO SAY, AND WHY IT WAS FALSE. It claimed the venue must
+    -- present "a contract that only `RecordPerformance` produces", and concluded that
+    -- "the venue cannot bar a competitor it simply dislikes". Both sentences were
+    -- wrong about the ledger, and wrong in the way a Daml engineer spots on sight:
+    -- `MandatePerformance` is `signatory operator` ALONE. A contract with a single
+    -- signatory can be CREATED directly by that signatory — there is no privileged
+    -- constructor in Daml and no way to make one. So the operator could always mint a
+    -- `MandatePerformance` out of thin air with `met = False` and any numbers it
+    -- liked, hand it to this choice, and bar anybody it wanted. The evidence gate was
+    -- a comment, not a mechanism.
+    --
+    -- WHAT IT IS NOW: THE NUMBERS ARE RE-DERIVED HERE, NOT TAKEN ON TRUST. This
+    -- choice fetches the `SettlementBatch` the record cites (`perf.batchRef`) and
+    -- recomputes, from the batch and from THESE terms:
+    --   * the printed price                     (must equal `perf.printedPrice`)
+    --   * whether that print was inside the band (must equal `perf.withinBand`)
+    --   * what the provider actually DELIVERED   (must equal `perf.delivered`)
+    --   * what it OWED                           (must equal `perf.owed`)
+    -- and it re-derives the failure itself as `delivered < owed` rather than reading
+    -- the record's own `met` flag. It also pins the record's terms-derived numbers —
+    -- `committed`, `anchorPrice`, `maxBandBps` — to the terms actually being amended,
+    -- so a fabricated scorecard cannot quietly widen the commitment it is scoring
+    -- against. A forged record now has to be arithmetic that reconciles against a
+    -- batch the auditor already holds.
+    --
+    -- WHAT IS STILL NOT CLOSED, STATED PLAINLY BECAUSE IT IS THE HONEST BOUND.
+    -- `owed = min committed shownQty`, and `shownQty` is the peak imbalance the
+    -- provider was shown — a running fact on the MANDATE, which `RecordPerformance`
+    -- has already consumed by the time a bar is possible and which this contract
+    -- cannot reach. So the operator can still overstate what it disclosed. What that
+    -- buys it is bounded, and the bound is the reason this is tolerable: `owed` can
+    -- never exceed `commitmentSize`, which is pinned above to the venue's OWN
+    -- PUBLISHED TERMS — the size the provider consented to when it took the seat. The
+    -- worst a dishonest venue can manufacture is "you owed the full size you signed
+    -- up for and delivered less", against a delivered figure it cannot fake. Closing
+    -- the remainder needs the disclosure record to be independently attested (the
+    -- provider co-signs every `ImbalanceDisclosure`, and the bar cites those cids
+    -- instead of a number) — the right end state, and deliberately not attempted in
+    -- an audit fix the week of a deadline.
     --
     -- Exercised automatically inside `LiquidityMandate.RecordPerformance` when a
     -- provider misses, so revocation and the bar land in ONE transaction and cannot
@@ -296,7 +332,45 @@ template MandateTerms
         assertMsg "performance record is for a different cash leg"    (perf.cashInstrument == cashInstrument)
         assertMsg "performance record is for a different session"     (perf.session == session)
         assertMsg "performance record names a different provider"     (perf.provider == provider)
+        -- The record's own claim about itself. Necessary, nowhere near sufficient —
+        -- everything below is the ledger checking the claim for itself.
         assertMsg "a provider that MET its commitment cannot be barred" (not perf.met)
+
+        -- THE RECORD IS SCORED AGAINST THESE TERMS, so its terms-derived numbers must
+        -- BE these terms' numbers. Without this a fabricated record could name a
+        -- commitment size the provider never accepted.
+        assertMsg "performance record was struck against different terms"
+          (perf.committed == commitmentSize
+             && perf.anchorPrice == anchorPrice
+             && perf.maxBandBps == maxBandBps)
+
+        -- RE-DERIVE FROM THE BATCH. The operator signs the batch, so it can be
+        -- fetched here; the AUDITOR observes the same batch, so the arithmetic below
+        -- is independently checkable by the party whose job that is.
+        b <- fetch perf.batchRef
+        assertMsg "cited settlement batch is from a different venue"     (b.operator == operator)
+        assertMsg "cited settlement batch is for a different instrument" (b.instrumentId == instrumentId)
+        assertMsg "performance record misstates the printed price"
+          (perf.printedPrice == b.closingPrice)
+        let inBand = withinMandateBand anchorPrice maxBandBps b.closingPrice
+        assertMsg "performance record misstates whether the print was inside the band"
+          (perf.withinBand == inBand)
+        -- CONTRA-SIDE FILLS ONLY, exactly as `RecordPerformance` computes them: a
+        -- buy-heavy book needed the provider to SELL, a sell-heavy book to BUY.
+        let delivered = case perf.shownSide of
+              "Buy"  -> sum [f.quantity | f <- b.fills, f.seller == provider]
+              "Sell" -> sum [f.quantity | f <- b.fills, f.buyer  == provider]
+              _      -> 0.0
+        assertMsg "performance record misstates what the provider delivered into the print"
+          (perf.delivered == delivered)
+        let owed = if inBand then min commitmentSize perf.shownQty else 0.0
+        assertMsg "performance record misstates what the provider owed"
+          (perf.owed == owed)
+        -- THE VERDICT, RE-DERIVED. Not `perf.met` — the numbers this choice just
+        -- recomputed for itself.
+        assertMsg "the batch shows this provider delivered what it owed: it cannot be barred"
+          (delivered < owed)
+
         create this with
           barred   = provider :: filter (/= provider) barred
           accepted = filter (/= provider) accepted
@@ -554,9 +628,21 @@ data MandateOutcome = MandateOutcome
 -- would work only against providers who agreed to be punished. So the venue writes
 -- the record and the provider OBSERVES it, alongside the auditor. The check on the
 -- venue is not a signature, it is `batchRef`: every number here is recomputable from
--- a `SettlementBatch` the auditor already holds and the mandate the provider
--- co-signed. A false record is arithmetic that does not reconcile, in front of the
--- two parties best placed to notice.
+-- a `SettlementBatch` and the mandate the provider co-signed. A false record is
+-- arithmetic that does not reconcile.
+--
+-- WHO CAN ACTUALLY DO THAT RECOMPUTATION — corrected, because it is not everybody.
+-- `SettlementBatch` is observed by the OPERATOR and the AUDITOR only; it carries the
+-- executed book with identities attached, so publishing it to the participant roster
+-- would undo the venue's whole privacy claim (see the header of
+-- `Settlement.SettlementBatch`). So the auditor is the party that can re-derive these
+-- numbers from source. The PROVIDER holds the other half independently — its own
+-- `ImbalanceDisclosure` contracts, its co-signed mandate, and its own
+-- `SettlementReceipt` for every fill it made — which is enough to check `shownQty`
+-- and `delivered` against this record without ever seeing another trader's business.
+-- And `MandateTerms.BarProvider` refuses to act on a record whose arithmetic does not
+-- reconcile against the cited batch, so the check is not merely available after the
+-- fact: it is a precondition of the consequence.
 template MandatePerformance
   with
     operator        : Party

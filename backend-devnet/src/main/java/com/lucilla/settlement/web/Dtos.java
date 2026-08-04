@@ -363,6 +363,52 @@ public final class Dtos {
             String rationale) {              // why (source / method)
     }
 
+    /**
+     * A member proposes an ACCRUING fix — it attests the INPUTS to a value that keeps
+     * moving, not a number that is stale the moment it is signed.
+     *
+     * <p>Four things a human must agree, because everything else is derivable:
+     * {@code price} (the base NAV the mark applies from), {@code ratePerAnnum}
+     * (0.036 = 3.6%/yr, and it MAY be negative — EUR/CHF/JPY money markets printed
+     * negative rates for seven years), {@code dayCount} ("ACT/360" or "ACT/365F", which
+     * differ by 1.389% on the same rate and therefore cannot be assumed), and
+     * {@code accrualFrom} (the instant the mark applies from).
+     *
+     * <p>{@code accrualFrom} is an ISO-8601 instant and is OPTIONAL — omitted, the desk
+     * uses its own clock. Sending it is the honest thing whenever the mark describes a
+     * moment the committee has already passed: a NAV "as of 16:00" is a fact about
+     * 16:00 even if the last signature lands at 16:07.
+     */
+    public record ProposeAccruingFixingRequest(
+            @NotBlank String proposer,
+            @NotBlank String instrumentId,
+            String cashInstrument,           // defaults to "USDC"
+            String session,                  // Open | Close (defaults to Close)
+            @NotNull @Positive BigDecimal price,     // the BASE NAV the accrual starts from
+            String rationale,
+            @NotNull BigDecimal ratePerAnnum,        // may be negative; > -1.0 (validated)
+            @NotBlank String dayCount,               // ACT/360 | ACT/365F
+            String accrualFrom) {             // ISO-8601; defaults to now
+    }
+
+    /**
+     * The proposal, echoed back WITH THE RECIPE each member is being asked to confirm.
+     *
+     * <p>Confirming a price without the rate that will move it would be attesting a
+     * third of a number, so the recipe travels with the proposal rather than being
+     * something the UI remembers on its own.
+     */
+    public record FixingProposalResponse(
+            String contractId,
+            String instrumentId, String cashInstrument, String session,
+            String basePrice,                // the ATTESTED BASE, as at accrualFrom
+            String ratePerAnnum,
+            String dayCount,
+            String accrualFrom,              // ISO-8601
+            long accrualFromEpochMicros,
+            boolean accruing) {              // false = a pure snapshot (rate 0, "NONE")
+    }
+
     /** Another member adds its attestation. */
     public record ConfirmFixingRequest(
             @NotBlank String member) {
@@ -372,6 +418,90 @@ public final class Dtos {
     public record FinalizeFixingRequest(
             @NotBlank String proposer,
             List<@NotBlank String> publishTo) {   // venues to disclose the fix to (e.g. the auction operator)
+    }
+
+    // ---- Continuous accrual: the committee attests, the ledger computes ----
+    //
+    // WHY EVERY DECIMAL BELOW IS A STRING. Daml `Decimal` is fixed-point at exactly ten
+    // decimal places. Serialising one as a JSON *number* hands it to JavaScript as a
+    // float64, and a float64 is not that value — it is the nearest double to it. The
+    // whole claim of this feature is that the figure ticking on a screen is the SAME
+    // number the ledger would compute, so the wire format carries the ledger's own
+    // digits and the browser re-parses them into exact fixed-point integers. A string is
+    // the honest encoding of a Decimal; a number is a lossy one.
+
+    /**
+     * An official {@code NavFixing} with the accrual recipe on it, plus the value RIGHT
+     * NOW derived from that recipe.
+     *
+     * <p>{@code basePrice} is what one share was worth AT {@code accrualFrom} — the
+     * attested base, not the answer. {@code navNow} is the answer, and it is derived
+     * (never stored) by the same arithmetic the ledger runs.
+     */
+    public record FixingResponse(
+            String contractId,
+            List<String> attestors,          // labels — the signature set IS the proof
+            long threshold,
+            String instrumentId, String cashInstrument, String session,
+            String basePrice,                // ATTESTED base, as at accrualFrom
+            String rationale,
+            String ratePerAnnum,             // 0 = a pure snapshot; the old behaviour exactly
+            String dayCount,                 // ACT/360 | ACT/365F | NONE
+            String accrualFrom,              // ISO-8601 — attested, NOT the ledger clock
+            long accrualFromEpochMicros,
+            String finalizedAt,              // ISO-8601 — when the LEDGER saw it (a different fact)
+            List<String> publishedTo,        // labels of the venues the fix reaches
+            boolean accruing,
+            String navNow,                   // derived at `asOf`
+            String accrued,                  // navNow - basePrice
+            String asOf,                     // ISO-8601 — the desk clock this was derived at
+            long asOfEpochMicros,
+            long elapsedMicros) {
+    }
+
+    /**
+     * THE ACCRUED NAV, WITH ITS WORKING SHOWN — the derived value plus every input it
+     * came from, so a consumer can reproduce it rather than trust it.
+     *
+     * <p>{@code yearMicros} is the day-count convention's year length in microseconds,
+     * and it is returned because it is the one input that is NOT attested but IS
+     * load-bearing: ACT/360 and ACT/365F disagree by 1.389% on the same rate.
+     *
+     * <p>{@code anchor…} binds this to the auction. {@code RunClose} requires the
+     * auction's anchor to be consistent with the NAV ACCRUED TO THE CLOSE — at or below
+     * it, and no more than one basis point behind — so these fields answer "would the
+     * ledger let this auction run right now?" with the ledger's own function rather
+     * than an assertion. {@code anchor} is null when no live auction for this
+     * instrument/session is visible and none was supplied.
+     */
+    public record AccruedNavResponse(
+            String contractId,
+            String instrumentId, String cashInstrument, String session,
+            // --- the four attested inputs ---
+            String basePrice,
+            String ratePerAnnum,
+            String dayCount,
+            String accrualFrom,
+            long accrualFromEpochMicros,
+            // --- the derivation ---
+            String asOf,
+            long asOfEpochMicros,
+            long elapsedMicros,
+            long yearMicros,
+            String accrued,                  // basePrice * (rate * elapsed) / yearMicros
+            String navNow,                   // max(0, basePrice + accrued)
+            String perDay,                   // what a whole day of this recipe adds
+            boolean accruing,
+            // --- the attestation ---
+            List<String> attestors,
+            long threshold,
+            // --- the auction binding ---
+            String anchor,                   // the live auction's published anchor, or null
+            String anchorAuctionCid,
+            String anchorDrift,              // navNow - anchor (positive = the anchor is behind)
+            String staleBudget,              // navNow * 1bp — how far behind it may legally be
+            Boolean anchorConsistent,        // null when there is no anchor to judge
+            String anchorNote) {
     }
 
     // ---- Basket / ETF builder --------------------------------------------

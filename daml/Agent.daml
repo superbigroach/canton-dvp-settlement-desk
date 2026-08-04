@@ -30,17 +30,46 @@ module Agent where
 import Holding
 import Settlement
 
+-- ---------------------------------------------------------------------------
+-- WHAT A MANDATE HAS TO BOUND (and the half that was missing).
+-- ---------------------------------------------------------------------------
+-- A delegation limit is only a limit if it bounds the VALUE the agent can move.
+-- This mandate used to bound the SIZE alone: `assetAmount <= maxAmount`, with the
+-- cash leg completely unconstrained. So an agent mandated to "sell up to 3 cETH"
+-- could sell 3 cETH — the full mandated size, every other check satisfied — for ONE
+-- USDC, and the ledger would sign it. The cap read like a risk control and was a
+-- risk control on precisely nothing: a size limit with a free price is a licence to
+-- give the position away, and the whole point of writing the delegation onto the
+-- ledger is that the ledger, not a UI and not the agent's own good judgement, is
+-- what enforces it. This is the shape of hole that matters most in an AGENTIC
+-- setting, where the party exercising the choice is a bot that can be prompted,
+-- mis-specified or compromised.
+--
+-- SO THE MANDATE NOW CARRIES A FLOOR ON THE UNIT PRICE, and both bounds are checked
+-- together: at most `maxAmount` units, at no worse than `minUnitPrice` per unit.
+-- `cashAmount >= assetAmount * minUnitPrice` is the natural statement of it — it
+-- bounds the whole consideration rather than a per-unit ratio, so it cannot be
+-- dodged by splitting a trade into pieces that each round in the agent's favour.
+--
+-- 🔴 THIS ADDS A FIELD TO `TradingMandate`. Anything constructing this record
+-- positionally through Daml codegen must be updated. (At the time of writing no
+-- hand-written Java in `backend/` or `backend-devnet/` constructs a TradingMandate —
+-- only the generated model class exists — so the cost is a codegen regeneration.)
 template TradingMandate
   with
-    principal  : Party    -- the account owner delegating authority
-    agent      : Party    -- the authorised agent (bot / AI / delegate)
-    instrument : Text      -- the ONLY asset the agent may sell, e.g. "cETH"
-    maxAmount  : Decimal   -- per-settlement cap the agent may not exceed
+    principal    : Party    -- the account owner delegating authority
+    agent        : Party    -- the authorised agent (bot / AI / delegate)
+    instrument   : Text     -- the ONLY asset the agent may sell, e.g. "cETH"
+    maxAmount    : Decimal  -- per-settlement SIZE cap the agent may not exceed
+    -- THE PRICE FLOOR — the worst unit price the principal will accept, quoted in
+    -- the cash instrument of the trade. Together with `maxAmount` this bounds the
+    -- VALUE the agent may move, which is the thing a delegation is actually for.
+    minUnitPrice : Decimal
   where
     signatory principal   -- the principal signs: this IS the delegation of authority
     observer agent         -- the agent observes it (and controls the choice below)
 
-    ensure maxAmount > 0.0
+    ensure maxAmount > 0.0 && minUnitPrice > 0.0
 
     -- NONCONSUMING so one mandate can drive many settlements. The agent initiates
     -- a DvPProposal on the principal's behalf, within the mandate limits.
@@ -66,9 +95,23 @@ template TradingMandate
         assertMsg "stated asset amount must match the actual holding"
           (asset.amount == assetAmount)
 
-        -- LIMIT ENFORCED BY THE LEDGER: over-cap requests cannot create a proposal.
+        -- LIMITS ENFORCED BY THE LEDGER: an over-cap or under-priced request cannot
+        -- create a proposal at all.
+        --   SIZE  — at most `maxAmount` units per settlement.
+        --   PRICE — at least `minUnitPrice` per unit, checked on the WHOLE
+        --           consideration so it cannot be defeated by rounding a per-unit
+        --           ratio. Without this second line the first one bounds nothing of
+        --           economic consequence: an agent could deliver its full mandated
+        --           size for a single unit of cash. See the header.
         assertMsg "settlement amount exceeds the mandate limit"
           (assetAmount <= maxAmount)
+        assertMsg "settlement price is below the mandate's minimum unit price"
+          (cashAmount >= assetAmount * minUnitPrice)
+        -- A trade for nothing is not a trade. `DvPAgreement.Settle` computes
+        -- `unitPrice = cashAmount / assetAmount`, so both legs must be positive for
+        -- the receipt to mean anything.
+        assertMsg "both legs of a delegated settlement must be positive"
+          (assetAmount > 0.0 && cashAmount > 0.0)
 
         -- Create the proposal SIGNED BY THE PRINCIPAL (proposer = principal), using
         -- the principal's authority delegated through this mandate. From here the

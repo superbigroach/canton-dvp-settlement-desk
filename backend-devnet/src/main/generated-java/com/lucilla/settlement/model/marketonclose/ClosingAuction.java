@@ -57,13 +57,20 @@ import java.util.Set;
 public final class ClosingAuction extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#canton-dvp-settlement-desk", "MarketOnClose", "ClosingAuction");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("5ac8f47b9e28322096bc4c9c58f8449ead13792c4a30aad95cd1e80669894a79", "MarketOnClose", "ClosingAuction");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("b2aa4af53dbf06e12822d2b51bfa82a52c41f27f936b81b8364b62cfe358689c", "MarketOnClose", "ClosingAuction");
 
-  public static final String PACKAGE_ID = "5ac8f47b9e28322096bc4c9c58f8449ead13792c4a30aad95cd1e80669894a79";
+  public static final String PACKAGE_ID = "b2aa4af53dbf06e12822d2b51bfa82a52c41f27f936b81b8364b62cfe358689c";
 
   public static final String PACKAGE_NAME = "canton-dvp-settlement-desk";
 
   public static final PackageVersion PACKAGE_VERSION = new PackageVersion(new int[] {1, 0, 0});
+
+  public static final Choice<ClosingAuction, ReopenBidding, ContractId> CHOICE_ReopenBidding = 
+      Choice.create("ReopenBidding", value$ -> value$.toValue(), value$ ->
+        ReopenBidding.valueDecoder().decode(value$), value$ ->
+        new ContractId(value$.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected value$ to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()),
+        new ReopenBidding.JsonDecoder$().get(), JsonLfDecoders.contractId(ContractId::new),
+        ReopenBidding::jsonEncoder, JsonLfEncoders::contractId);
 
   public static final Choice<ClosingAuction, PublishImbalance, ImbalanceDisclosure.ContractId> CHOICE_PublishImbalance = 
       Choice.create("PublishImbalance", value$ -> value$.toValue(), value$ ->
@@ -131,8 +138,9 @@ public final class ClosingAuction extends Template {
       new ContractCompanion.WithoutKey<>(new ContractTypeCompanion.Package(ClosingAuction.PACKAGE_ID, ClosingAuction.PACKAGE_NAME, ClosingAuction.PACKAGE_VERSION),
         "com.lucilla.settlement.model.marketonclose.ClosingAuction", TEMPLATE_ID, ContractId::new,
         v -> ClosingAuction.templateValueDecoder().decode(v), ClosingAuction::fromJson,
-        Contract::new, List.of(CHOICE_SubmitOrder, CHOICE_RunClose, CHOICE_Archive,
-        CHOICE_WithdrawOrder, CHOICE_PublishImbalance, CHOICE_CloseBidding, CHOICE_ClearOrder));
+        Contract::new, List.of(CHOICE_ReopenBidding, CHOICE_SubmitOrder, CHOICE_RunClose,
+        CHOICE_Archive, CHOICE_WithdrawOrder, CHOICE_PublishImbalance, CHOICE_CloseBidding,
+        CHOICE_ClearOrder));
 
   public final String operator;
 
@@ -179,6 +187,22 @@ public final class ClosingAuction extends Template {
   @Override
   public Update<Created<ContractId>> create() {
     return new Update.CreateUpdate<ContractId, Created<ContractId>>(new CreateCommand(ClosingAuction.TEMPLATE_ID, this.toValue()), x -> x, ContractId::new);
+  }
+
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseReopenBidding} instead
+   */
+  @Deprecated
+  public Update<Exercised<ContractId>> createAndExerciseReopenBidding(ReopenBidding arg) {
+    return createAnd().exerciseReopenBidding(arg);
+  }
+
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseReopenBidding} instead
+   */
+  @Deprecated
+  public Update<Exercised<ContractId>> createAndExerciseReopenBidding() {
+    return createAndExerciseReopenBidding(new ReopenBidding());
   }
 
   /**
@@ -497,6 +521,14 @@ public final class ClosingAuction extends Template {
   }
 
   public interface Exercises<Cmd> extends com.daml.ledger.javaapi.data.codegen.Exercises.Archivable<Cmd> {
+    default Update<Exercised<ContractId>> exerciseReopenBidding(ReopenBidding arg) {
+      return makeExerciseCmd(CHOICE_ReopenBidding, arg);
+    }
+
+    default Update<Exercised<ContractId>> exerciseReopenBidding() {
+      return exerciseReopenBidding(new ReopenBidding());
+    }
+
     default Update<Exercised<ImbalanceDisclosure.ContractId>> exercisePublishImbalance(
         PublishImbalance arg) {
       return makeExerciseCmd(CHOICE_PublishImbalance, arg);

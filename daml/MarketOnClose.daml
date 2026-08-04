@@ -333,15 +333,27 @@
 --   amount and assert the pool drains to exactly the last one. Delivery == receipt,
 --   always, and a violation aborts the close instead of quietly mis-paying.
 --
--- DUST DOES NOT TAKE DOWN THE CLOSE
+-- DUST DOES NOT TAKE DOWN THE CLOSE — ON EITHER LEG
 --   `PledgeToVenue` asserts `fillQty > 0.0`, which is right for that choice — you
 --   cannot pledge nothing. But a heavy-side order small enough that its pro-rata
 --   share rounds below 1e-10 gets a fill of exactly 0.0, and because the close is
 --   ONE atomic transaction that assert used to take down the ENTIRE auction. A
---   single dust order was a denial of service on the print. Zero fills are now
+--   single dust order was a denial of service on the print. Zero fills are
 --   FILTERED OUT before the pledge step and cancelled on close like any other order
 --   that did not trade: the trader keeps every unit and every cent they committed
 --   (the archive touches the ORDER, never the balance), and the auction prints.
+--   THE SAME BUG LIVED ON THE CASH LEG UNTIL RECENTLY, and it is worth saying so
+--   because the first fix looked complete and was not. A seller delivers `fillQty`
+--   of the ASSET; a buyer delivers `fillQty * closingPrice` of CASH — a SECOND
+--   product, with its own rounding. A buy fill with a perfectly positive quantity
+--   can still owe a cash amount that quantises to 0.0, and `Holding.Split 0.0`
+--   aborts. It is reachable exactly where `collarFloor` exists to be reached: a
+--   sub-0.50 print. So a buy leg now has to be settleable on BOTH legs —
+--   `q > 0 && q * price > 0` — and because dropping a POSITIVE quantity would leave
+--   the asset pool unable to drain, the crossed volume is re-derived as what the
+--   surviving buyers can actually pay for and the sell side is re-settled to it by
+--   the same published residual rule (largest fill carries the difference). The dust
+--   buyer trades nothing and keeps everything, exactly as the dust seller does.
 --
 -- COMPLETE-ORDER COMMITMENT — why the operator cannot quietly shrink the book
 --   Discovering the price from the book is only worth anything if the book is the
@@ -393,6 +405,76 @@
 --   So `SubmitOrder` ALSO DISCLOSES the committed holding to the operator (adds it
 --   as an observer). The close then reads/moves those holdings through legitimate
 --   visibility, never through deprecated divulgence.
+--
+-- ===========================================================================
+-- WHAT THIS DESIGN DOES **NOT** YET ENFORCE — the two trust assumptions, named.
+-- ===========================================================================
+-- Everything above is a property the ledger holds the venue to. These two are not.
+-- They are written here, in the same voice, because a design document that lists
+-- only its wins is marketing, and because both have a known, specific fix that this
+-- codebase already contains an implementation of somewhere else.
+--
+-- (1) THE PLEDGE IS NOT BOUND TO THE CLOSE — the operator can take a reserved leg
+--     without settling anything.
+--     `SealedOrder.PledgeToVenue` is `controller operator`, and a SealedOrder is
+--     signed by operator AND trader — so the trader's authority to move the reserved
+--     holding is present on that contract whenever the operator chooses to reach for
+--     it. Nothing binds the exercise to a `RunClose`. The operator can exercise
+--     `PledgeToVenue` STANDALONE, on one order, at any price it names, and the
+--     trader's entire reserved holding moves to the venue with no asset delivered
+--     back, no receipt written and no batch created. The economics of the close are
+--     enforced INSIDE `RunClose`; they are not enforced on the choice that actually
+--     moves the money, and a choice that moves money is the only place enforcement
+--     counts. Every other control here — the uncross, the collar, the completeness
+--     count, the conservation asserts — is downstream of an assumption that the
+--     venue only ever calls this from the close.
+--     WHAT THE FIX IS, PRECISELY: the allocate → approve → settle lifecycle, which
+--     is not hypothetical here — it is implemented, correctly, in
+--     `TokenStandardDvp.daml` in this same package. A trader ALLOCATES its leg to a
+--     specific settlement instruction; the instruction can only execute as part of
+--     the batch it belongs to; an unexecuted allocation is returnable to its owner.
+--     Under that shape a pledge is meaningless outside the close it names, which is
+--     exactly the property missing here. Porting the auction's settlement step onto
+--     it is the single most valuable change left in this file, and it is a rewrite
+--     of the settlement half of `RunClose`, not a patch.
+--     UNTIL THEN, STATE THE ASSUMPTION: this venue is trusted not to steal reserved
+--     collateral. Canton makes that trust auditable — every unauthorised pledge is a
+--     transaction the trader sees, signed by the venue, with no batch behind it —
+--     but auditable is not the same as prevented, and this file does not pretend
+--     otherwise.
+--
+-- (2) `NavFixing` PROVES LESS THAN THIS FILE USED TO CLAIM.
+--     `ClosingAuction.fixingRef` binds a close to a K-of-N committee attestation,
+--     and the claim was that "a venue cannot slip its own reference into a governed
+--     auction". That is FALSE AS WRITTEN, for two compounding reasons.
+--       * `Governance.NavFixing` is `signatory attestors` and carries its OWN
+--         `threshold` field. Nothing in this template says WHICH committee is
+--         acceptable. An operator can therefore create a fixing with
+--         `attestors = [operator]` and `threshold = 1`, satisfy every one of its
+--         `ensure` clauses, and bind the auction to it. The auction has been
+--         "governed" by a committee of one, which is the venue.
+--       * The assert `length f.attestors >= f.threshold` in `RunClose` can NEVER
+--         FIRE. It is already an `ensure` clause on `NavFixing` itself, so no
+--         contract that fails it can exist to be fetched. It reads like a K-of-N
+--         check and is a tautology — the exact species of vacuous check an auditor
+--         is right to be suspicious of, kept below only because it documents the
+--         invariant it re-states.
+--     WHAT IS ACTUALLY PROVEN by a bound fixing: the anchor this auction runs
+--     against is a number some set of parties signed, that this set was at least as
+--     large as the threshold IT chose, and that the accrued value of that fix is
+--     consistent with the anchor at the close's own ledger time. That is a real
+--     property — it rules out a venue quietly re-pointing a governed auction at a
+--     DIFFERENT number mid-session — and it is a strictly weaker one than "a venue
+--     cannot slip its own reference in".
+--     WHAT THE FIX IS: bind the auction to an EXPECTED COMMITTEE, not merely to a
+--     fixing. `Governance.OperatorCommittee` already exists and already has the
+--     member list and the threshold on it; the auction needs to carry the committee
+--     it accepts (or its members) and `RunClose` needs to assert that the fixing's
+--     attestors are a subset of THAT committee meeting THAT threshold. It is one
+--     more field on `ClosingAuction` — whose field list is the wire format the Java
+--     backends construct positionally through Daml codegen — plus one matching
+--     change in `LedgerCommands.createAuction`. Mechanical, and deliberately not
+--     done inside an audit fix days before a deadline.
 -- ===========================================================================
 
 module MarketOnClose where
@@ -945,6 +1027,24 @@ template ClosingAuction
         -- Sanity-check the pre-committed holding actually belongs to the trader.
         h <- fetch holdingCid
         assertMsg "committed holding must belong to the trader" (h.owner == trader)
+        -- ...AND THAT IT IS THE RIGHT TOKEN. This check used to be missing, and its
+        -- absence was a denial of service on every other participant, not merely a
+        -- sloppy order. A SELL delivers the ASSET and a BUY delivers the CASH leg, so
+        -- those are the only two instruments a sealed order can ever pre-commit. Lodge
+        -- a buy backed by AAPL instead of USDC and nothing rejects it here; the order
+        -- rests, it is counted into `submittedCount`, it prices the cross like any
+        -- other — and then at settlement the venue pools the pledged legs with
+        -- `mergeAll`, which asserts "can only merge the same instrument" and takes the
+        -- WHOLE close down with it. One malformed order, and NOBODY prints. Worse, the
+        -- order cannot simply be dropped to recover: the completeness assertion demands
+        -- the close run over the whole book, so the only exit is a real on-ledger
+        -- cancellation. Reject it at the door instead, where it costs one trader one
+        -- rejected submission.
+        let expectedInstrument = case side of
+              Sell -> instrumentId      -- a sell delivers the asset being auctioned
+              Buy  -> cashInstrument    -- a buy delivers the book's cash leg
+        assertMsg "committed holding is the wrong instrument for this side of the book"
+          (h.instrumentId == expectedInstrument)
         -- RESERVE THE EXACT BACKING (the fix for stale-holding CONTRACT_NOT_FOUND).
         -- Carve off EXACTLY the amount this order can consume into a DEDICATED
         -- holding that only this SealedOrder references, and disclose that slice to
@@ -1010,6 +1110,12 @@ template ClosingAuction
     -- the venue seals the book, resting interest is committed — you cannot see the
     -- cross coming and pull out of it. That is the rule on every real closing
     -- auction, and here it is enforced by the ledger rather than by a rulebook.
+    -- (`ReopenBidding` re-admits withdrawals, deliberately and by construction: a
+    -- book that failed to print has to be recoverable, and the honest price of that
+    -- is that reopening returns every resting order its option to leave. The venue
+    -- cannot use the gap to pick winners — `ClearOrder` is barred while sealed, so
+    -- there is no state in which the venue can act on the sealed book that a trader
+    -- cannot also act in.)
     --
     -- Returns (new auction cid, the unlocked holding).
     choice WithdrawOrder : (ContractId ClosingAuction, ContractId Holding)
@@ -1043,11 +1149,25 @@ template ClosingAuction
     -- and `RunClose` demands more orders than exist, so the close simply cannot run
     -- until the venue reconciles. The bypass is fail-SAFE — it can stop a print, it
     -- can never manufacture one over a truncated book.)
+    --
+    -- AND IT IS BARRED ONCE THE BOOK IS SEALED — the same no-cancel period the
+    -- TRADER has always been held to, now held over the VENUE. This was the sharpest
+    -- hole in the design and it is worth stating exactly. `WithdrawOrder` refuses
+    -- after `CloseBidding` so that no trader can watch the cross coming and pull out
+    -- of it; `ClearOrder` did not, and the operator signs EVERY sealed order, so it
+    -- can read the entire book the instant it seals. Seal → read the book → clear the
+    -- two orders that would move the print → close. Every counter still reconciles,
+    -- every cancellation is on the ledger, and the completeness assertion is
+    -- perfectly satisfied over the book that is LEFT. That is precisely the pricing
+    -- discretion this whole design exists to remove, reachable in three legitimate
+    -- choices. The venue may still clear the book — but only while the window is
+    -- open, i.e. before it can possibly know what clearing would do to the price.
     choice ClearOrder : ContractId ClosingAuction
       with
         orderCid : ContractId SealedOrder
       controller operator
       do
+        assertMsg "the venue cannot clear orders once the book is sealed" isOpen
         o <- fetch orderCid
         assertMsg "order rests in a different venue's book"    (o.operator == operator)
         assertMsg "order is for a different instrument"        (o.instrumentId == instrumentId)
@@ -1195,6 +1315,43 @@ template ClosingAuction
       controller operator
       do create this with isOpen = False
 
+    -- REOPEN BIDDING — THE RECOVERY PATH. Put the window back to open.
+    -- ------------------------------------------------------------------------
+    -- WHY THIS EXISTS, STATED PLAINLY: `CloseBidding` used to be a ONE-WAY DOOR. It
+    -- sets `isOpen = False`, which bars `SubmitOrder`, `WithdrawOrder` and (now)
+    -- `ClearOrder`, and the ONLY choice that consumed the sealed auction was
+    -- `RunClose`. So every way `RunClose` can legitimately decline to print — the
+    -- book does not cross anywhere inside the collar, the attested fixing has gone
+    -- stale, the operator handed over an incomplete list, one leg's holding was
+    -- spent — left the auction STRANDED. `RunClose` is atomic, so the failed attempt
+    -- changes nothing; the auction stays sealed for ever, the resting orders can
+    -- never be withdrawn because withdrawal needs an open window, and every trader's
+    -- reserved backing sits locked behind an order nobody can cancel. A single
+    -- recoverable error was a permanent outage with every participant's collateral
+    -- inside it.
+    --
+    -- WHAT REOPENING MEANS, AND THE PROPERTY IT GIVES BACK. The window re-admits
+    -- submissions AND withdrawals: a trader whose order is stuck behind a failed
+    -- close can get it — and its reserved holding — back out. That is the point. It
+    -- is also the honest cost, so say it: reopening returns the market to the state
+    -- it was in BEFORE the seal, which means the no-cancel period is only binding
+    -- for as long as the window stays sealed. A venue that seals, fails to print,
+    -- and reopens has given every resting order its option to withdraw back.
+    --
+    -- WHY THAT IS NOT A LOOPHOLE. Reopening leaks nothing and buys the venue no
+    -- discretion. It cannot alter `referencePrice`, cannot touch a single order, and
+    -- cannot change either counter — a reopened book is the SAME book, and the
+    -- completeness assertion still holds over it. Crucially, `ClearOrder` is now
+    -- barred while sealed too, so "seal, read the book, reopen, clear the two orders
+    -- that move the print" is not available either: the clear can only happen in the
+    -- open window, and the open window is exactly where every trader can withdraw as
+    -- well. The operator gains the ability to RETRY a close, and nothing else.
+    choice ReopenBidding : ContractId ClosingAuction
+      controller operator
+      do
+        assertMsg "the sealed-order window is already open" (not isOpen)
+        create this with isOpen = True
+
     -- RUN CLOSE — the headline. The operator supplies the WHOLE sealed book; the
     -- auction UNCROSSES it, prints the volume-maximising price (BOUNDED into the
     -- venue's price collar), and crosses `min(buyVol, sellVol)` at that one price,
@@ -1276,11 +1433,23 @@ template ClosingAuction
         -- WHAT THIS MEANS NOW, PRECISELY. The committee no longer dictates the
         -- print — the BOOK does. What the committee attests is the anchor the
         -- auction is allowed to run against: the number that enters the candidate
-        -- set and breaks a tie the orders could not. So a venue cannot slip its own
-        -- reference into a governed auction, and equally cannot hide behind the fix
-        -- to print away from the book. Both halves are ledger-enforced, and
+        -- set and breaks a tie the orders could not. The venue cannot hide behind
+        -- the fix to print away from the book — that half IS ledger-enforced, and
         -- Test:testCommitteeAttestedClose proves the print can legitimately land
         -- AWAY from the attested number when the book says so.
+        --
+        -- ⚠️ THE OTHER HALF IS NOT. This block used to claim "a venue cannot slip
+        -- its own reference into a governed auction". IT CAN. `NavFixing` is
+        -- `signatory attestors` with its own `threshold` field, and nothing here
+        -- says which committee is acceptable — so an operator can create a fixing
+        -- with `attestors = [operator]; threshold = 1`, satisfy every `ensure` on it,
+        -- and bind this auction to it. What a bound fixing actually proves is
+        -- narrower and still worth something: the anchor is a number SOME attestor
+        -- set signed, at or above its own chosen threshold, for this
+        -- instrument/cash/session, and consistent with the NAV accrued to this
+        -- close's ledger time. The fix for the rest is to bind the auction to an
+        -- EXPECTED committee — see the "WHAT THIS DESIGN DOES NOT YET ENFORCE"
+        -- section in the module header for exactly what that costs.
         --
         -- AND THE ANCHOR IS CHECKED AGAINST THE ACCRUED NAV, NOT THE STRUCK PRICE.
         -- This assert used to be `f.price == referencePrice` — exact equality with the
@@ -1312,6 +1481,14 @@ template ClosingAuction
             closeTime <- getTime
             assertMsg "auction anchor is not consistent with the attested NAV accrued to the close"
               (anchorConsistentWithNav (navAt f closeTime) referencePrice)
+            -- ⚠️ THIS ASSERT CAN NEVER FIRE, AND IT IS LABELLED RATHER THAN DELETED.
+            -- `length attestors >= threshold` is already an `ensure` clause on
+            -- `NavFixing`, so no contract violating it can exist to be fetched here.
+            -- It reads like a K-of-N gate and is a tautology. It stays because it
+            -- documents the invariant the fetch relies on — but nobody should count
+            -- it as a check, and the REAL K-of-N gate (attestors drawn from a
+            -- committee this auction named in advance) does not exist yet. See the
+            -- module header.
             assertMsg "fix does not carry enough member attestations"
               (length f.attestors >= f.threshold)
 
@@ -1415,17 +1592,96 @@ template ClosingAuction
         assertMsg "sell allocation does not sum to the crossed volume"
           (sum [q | (_, _, q) <- sellFills] == matched)
 
-        -- DUST DOES NOT ABORT THE CLOSE. An order whose share rounds below the
-        -- ledger's smallest representable unit gets a fill of exactly 0.0. It cannot
-        -- be pledged (`PledgeToVenue` rightly refuses to deliver nothing) and it must
-        -- not receive a receipt for a trade that never happened — so it is FILTERED
-        -- OUT here and cancelled on close below, exactly like an order that sat away
-        -- from the print. It used to abort the entire auction, which made a single
-        -- dust order a denial of service on the print. Dropping zeros cannot disturb
-        -- the conservation asserted above: they contribute 0 to both sums.
-        let buyLegs      = filter (\(_, _, q) -> q >  0.0) buyFills
-        let sellLegs     = filter (\(_, _, q) -> q >  0.0) sellFills
-        let roundedToNil = [cid | (cid, _, q) <- buyFills ++ sellFills, q <= 0.0]
+        -- ------------------------------------------------------------------
+        -- DUST DOES NOT ABORT THE CLOSE — ON EITHER LEG.
+        -- ------------------------------------------------------------------
+        -- An order whose share rounds below the ledger's smallest representable unit
+        -- gets a fill of exactly 0.0. It cannot be pledged (`PledgeToVenue` rightly
+        -- refuses to deliver nothing) and it must not receive a receipt for a trade
+        -- that never happened — so it is FILTERED OUT here and cancelled on close
+        -- below, exactly like an order that sat away from the print. It used to abort
+        -- the entire auction, which made a single dust order a denial of service.
+        --
+        -- THE HALF THAT WAS STILL BROKEN, AND IT IS THE SAME BUG ON THE OTHER LEG. A
+        -- seller delivers `fillQty` of the ASSET, so filtering `fillQty > 0` was
+        -- enough for the sell side. A BUYER delivers `fillQty * closingPrice` of
+        -- CASH, and THAT product has its own rounding: a fill with a perfectly
+        -- positive quantity can still owe a cash amount that quantises to 0.0, at
+        -- which point `deliverExact` hits `Holding.Split 0.0` and the whole close
+        -- dies — the identical denial of service, one leg over. It is reachable
+        -- exactly where `collarFloor` exists to be reached: a sub-0.50 print, where
+        -- `q * price` can round away for a `q` that is itself representable. So a buy
+        -- leg is only settleable if BOTH of its legs are: `q > 0` AND `q * price > 0`.
+        --
+        -- AND THE SELL SIDE HAS TO FOLLOW IT DOWN, which is the part a naive filter
+        -- gets wrong. Dropping a ZERO-quantity leg is free — it contributes 0 to the
+        -- allocation sums, so conservation is untouched. Dropping a POSITIVE-quantity
+        -- buy leg is NOT: the sellers have already been allocated the full `matched`,
+        -- so the asset pool would arrive one dust unit larger than the surviving
+        -- buyers are owed and `distribute` would abort on its final tripwire — the
+        -- same outage, moved three lines down. So the crossed volume is re-derived as
+        -- what the surviving buyers can actually PAY for, and the sell side is
+        -- re-settled to that number through the SAME published residual rule the file
+        -- already uses everywhere else: the largest sell leg carries the difference.
+        -- The dust buyer trades nothing and keeps everything, exactly as the dust
+        -- SELLER already did; one seller sells one ledger unit less; the print, the
+        -- price and everyone else's fill are untouched.
+        --
+        -- In every ordinary close this whole block is the IDENTITY: with a print of
+        -- any normal size `q * price > 0` for every `q > 0`, so `matchedNet == matched`
+        -- and `settleResidual` against a target it already sums to changes nothing.
+        let buyLegs    = filter (\(_, _, q) -> q > 0.0 && q * closingPrice > 0.0) buyFills
+        -- THE PAYABLE CROSS. Never larger than `matched`, and smaller only by the
+        -- quantity of buy fills that cannot pay for themselves.
+        let matchedNet = sum [q | (_, _, q) <- buyLegs]
+        -- If NOTHING crosses that can pay for itself, there is no settleable print.
+        -- Same class of outcome as "the book does not cross": nothing settles, and
+        -- with `ReopenBidding` the venue can put the window back and try again.
+        assertMsg "no fill at this print is large enough to pay for itself"
+          (matchedNet > 0.0)
+        -- Re-settle the sell side to the payable volume. `settleResidual` hands the
+        -- whole difference to the entry with the largest size key — the largest sell
+        -- fill — which is the published rule, unchanged, applied to a target that has
+        -- moved by dust.
+        let sellAdj  = settleResidual matchedNet
+              [ ((cid, o), q, q) | (cid, o, q) <- sellFills, q > 0.0 ]
+        let sellLegs = [ (cid, o, q) | ((cid, o), q) <- sellAdj, q > 0.0 ]
+        -- TRIPWIRE. The adjustment above only ever SHRINKS one leg, so this holds by
+        -- construction; it could only fail in a degenerate book where the dust
+        -- removed exceeds the largest sell fill outright, and there the close must
+        -- abort rather than deliver a pool that cannot drain.
+        assertMsg "the payable sell allocation does not sum to the payable crossed volume"
+          (sum [q | (_, _, q) <- sellLegs] == matchedNet)
+        -- CANCEL-ON-CLOSE SET: every fill that did not survive to a settleable leg,
+        -- on either side. Computed by DIFFERENCE against the surviving legs so the
+        -- two lists cannot drift — an order is cancelled iff it is not settled.
+        let settledCids  = [cid | (cid, _, _) <- buyLegs] ++ [cid | (cid, _, _) <- sellLegs]
+        let roundedToNil = [ cid | (cid, _, _) <- buyFills ++ sellFills
+                           , cid `notElem` settledCids ]
+
+        -- ------------------------------------------------------------------
+        -- ONE ISSUER PER LEG — fail EARLY and by NAME, not inside `mergeAll`.
+        -- ------------------------------------------------------------------
+        -- `SubmitOrder` now pins each order's committed holding to the right
+        -- INSTRUMENT ID, which closes the ordinary version of this hole. What an
+        -- instrument id cannot pin is the OBLIGOR: two issuers can both mint a token
+        -- calling itself "USDC", and pooling them hits `Holding.Merge`'s "can only
+        -- merge the same issuer" deep inside `mergeAll`, taking the close down with a
+        -- message that names neither the order nor the auction. Check it here, once,
+        -- before anything moves, so the failure is legible.
+        -- STATED HONESTLY, BECAUSE IT IS NOT A FULL FIX: this turns an inscrutable
+        -- abort into a named one, it does not prevent it. Preventing it needs the
+        -- auction to NAME the issuers it accepts, checked at `SubmitOrder` — two more
+        -- fields on `ClosingAuction`, whose field list is the wire format the Java
+        -- backends construct positionally through Daml codegen. That is a mechanical
+        -- change to this template plus `LedgerCommands.createAuction`, and it is the
+        -- right end state; it is deliberately not done inside an audit fix.
+        sellHoldings <- forA sellLegs (\(_, o, _) -> fetch o.holdingCid)
+        buyHoldings  <- forA buyLegs  (\(_, o, _) -> fetch o.holdingCid)
+        assertMsg "the asset legs of this book are not all issued by the same issuer"
+          (length (dedup [h.issuer | h <- sellHoldings]) <= 1)
+        assertMsg "the cash legs of this book are not all issued by the same issuer"
+          (length (dedup [h.issuer | h <- buyHoldings]) <= 1)
 
         -- 1. PLEDGE each allocated leg to the venue (the move happens inside each
         --    order's own choice, so that trader's authority is present);
@@ -1492,6 +1748,14 @@ template ClosingAuction
           pure FillRecord with
             seller = o.trader; buyer = operator; quantity = q; price = closingPrice; receipt = r)
 
+        -- THE BATCH IS NOT A TAPE. `fills` carries seller, buyer, size and price for
+        -- every cross, so it is the executed book with identities attached — and it
+        -- is observed by the AUDITOR ONLY. `traders` below is a record of whose
+        -- orders the close ran over; it no longer puts anybody on the observer line
+        -- (see the header of `Settlement.SettlementBatch`, which is where this was
+        -- fixed and why). Each trader learns its own execution from the
+        -- `SettlementReceipt` written just above, which names exactly the two parties
+        -- to that fill plus the auditor. Nobody learns anybody else's.
         create SettlementBatch with
           operator; auditor; instrumentId; closingPrice
           fills = buyRecs ++ sellRecs
@@ -1533,6 +1797,26 @@ template SealedOrder
     -- authority is present because the trader signs THIS order, so the leg moves;
     -- change (the unfilled residual, or over-committed cash) returns to the trader
     -- via `deliverExact`. Consuming: a pledged order is filled and archived.
+    --
+    -- ⚠️ THE TRUST ASSUMPTION THIS CHOICE CARRIES — READ IT BEFORE BELIEVING THE
+    -- REST OF THE FILE. It says "exercised during RunClose", and NOTHING ENFORCES
+    -- THAT. The choice is `controller operator`; the trader's authority sits on this
+    -- contract because the trader signs it; there is no reference to an auction, a
+    -- batch, or a discovered price anywhere in the body. So the operator can
+    -- exercise this STANDALONE, at any `closingPrice` it names, and take the
+    -- trader's whole reserved holding while delivering nothing back — no asset, no
+    -- receipt, no batch. Every economic control in this design (the uncross, the
+    -- collar, the completeness count, the conservation asserts, the receipts) lives
+    -- in `RunClose`, one level ABOVE the choice that actually moves the money.
+    -- The correct shape is allocate → approve → settle, and this package already
+    -- implements it properly in `TokenStandardDvp.daml`: a leg allocated to a
+    -- settlement instruction cannot move except as part of that instruction, and an
+    -- unexecuted allocation goes home. Porting the auction's settlement step onto
+    -- that lifecycle is a rewrite of the second half of `RunClose`, not a patch, and
+    -- it is the most valuable change left in this module.
+    -- What Canton does give in the meantime is VISIBILITY, not prevention: an
+    -- unauthorised pledge is a signed transaction the trader can see, with no batch
+    -- behind it. Say that, rather than implying the ledger stops it.
     choice PledgeToVenue : ContractId Holding
       with
         fillQty      : Decimal   -- the pro-rated units this order fills

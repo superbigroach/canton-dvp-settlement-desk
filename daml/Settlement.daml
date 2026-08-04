@@ -247,6 +247,45 @@ data FillRecord = FillRecord
 -- (inside a choice on its own sealed order — where its authority lives) to the
 -- venue, which pools and redistributes at the uniform close, and this contract is
 -- the venue's signed, immutable record of the whole batch.)
+--
+-- ===========================================================================
+-- WHO SEES THIS, AND THE LEAK THAT USED TO BE HERE. READ THIS BEFORE CHANGING
+-- THE OBSERVER LINE.
+-- ===========================================================================
+-- This contract carries `fills : [FillRecord]`, and a FillRecord names the
+-- SELLER, the BUYER, the QUANTITY and the PRICE of one cross. It is the executed
+-- book, in full, with identities attached.
+--   The observer line used to read `auditor :: traders`, and `MarketOnClose.RunClose`
+--   sets `traders = participants` — EVERY registered participant of the auction. So
+--   the moment the close printed, every trader on the venue could read who traded
+--   what with whom and in what size. That is not a leak at the margin; it
+--   contradicts the headline claim of the whole system. A sealed book whose
+--   contents are published to the entire roster one transaction later is a dark
+--   pool for the duration of the auction and a public tape for ever afterwards,
+--   and the information a front-runner wants ("that fund is working a 500k line")
+--   is just as valuable the day after the print as the second before it.
+--
+-- THE FIX, AND WHY THIS ONE AND NOT THE OTHER. There were two ways to close it:
+-- aggregate the batch (fill count, total volume, price) so it carries no
+-- identities, or stop publishing the batch to the traders. We do the SECOND, on
+-- purpose:
+--   * `SettlementReceipt` is ALREADY the need-to-know disclosure and it is already
+--     correct — one per filled order, observed by exactly the two parties to that
+--     fill plus the auditor. A trader learns its own execution from its own
+--     confirm. Nothing a trader is entitled to know is lost by removing it from
+--     this contract's observer line.
+--   * The per-fill detail cannot simply be deleted, because it is LOAD-BEARING for
+--     accountability: `LiquidityMandate.RecordPerformance` scores a provider's
+--     delivered size by walking `b.fills` for that provider's contra-side fills,
+--     and `MandateTerms.BarProvider` re-derives the same number before it will bar
+--     anybody. Aggregating the batch would remove the only on-ledger evidence that
+--     makes an obligation checkable — trading a privacy leak for an accountability
+--     hole.
+-- So: the venue signs it, the AUDITOR observes it, and nobody else does. The
+-- regulator sees the whole executed book (which is exactly its job); each trader
+-- sees its own receipt; no trader sees another's. That is the same need-to-know
+-- line the rest of this codebase draws, applied to the one contract that had
+-- quietly stopped drawing it.
 template SettlementBatch
   with
     operator     : Party      -- the auction venue that ran the close
@@ -254,8 +293,17 @@ template SettlementBatch
     instrumentId : Text       -- the instrument auctioned, e.g. "DEMO:AAPL"
     closingPrice : Decimal    -- the single price all crosses printed at
     fills        : [FillRecord]
+    -- ⚠️ VESTIGIAL — THIS FIELD NO LONGER GRANTS VISIBILITY. It records which
+    -- participants' orders the close was run over, as a fact about the batch. It is
+    -- deliberately NOT on the observer line any more (see above). It is kept, inert,
+    -- for the same reason `ClosingAuction.liquidityProvider` is kept: this record's
+    -- field list is decoded positionally by the Java backends through Daml codegen,
+    -- and removing a field breaks two committed, currently-green services for
+    -- correctness we already have.
     traders      : [Party]    -- the participants whose orders were considered
     settledAt    : Time
   where
     signatory operator
-    observer auditor :: traders
+    -- NEED-TO-KNOW. The compliance auditor, and no one else. Traders learn their
+    -- own executions from their own `SettlementReceipt`s.
+    observer auditor
