@@ -842,10 +842,33 @@ export default function App() {
         <section className="card cross">
           <div className="card-head">
             <h2>The Cross</h2>
-            <span className={`session-tag ${session.toLowerCase()}`}>{session}</span>
+            <div className="head-controls">
+              {/* THE MARKET THIS CROSS IS FOR. It used to be driven only by the Trade
+                  card's picker further up the page, which made the auction look like it
+                  was hardwired to whichever instrument happened to load first. It runs
+                  for ANY marked instrument — so the control belongs here, next to the
+                  book it changes. Shared state with Trade, so the two stay in step. */}
+              <select
+                className="cross-instrument"
+                value={asset}
+                disabled={busy}
+                aria-label="Market to cross"
+                onChange={(e) => setAsset(e.target.value)}
+              >
+                {instruments
+                  .filter((i) => i.kind !== 'Cash')
+                  .map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {i.id}
+                    </option>
+                  ))}
+              </select>
+              <span className={`session-tag ${session.toLowerCase()}`}>{session}</span>
+            </div>
           </div>
           <p className="hint">
-            The venue&rsquo;s sealed call auction for <strong>{asset}</strong>. Orders rest privately —
+            The venue&rsquo;s sealed call auction for <strong>{asset}</strong> — and it runs for any
+            market on the desk, not just this one. Orders rest privately —
             {actingIsVenue ? (
               <> as <strong>Venue</strong> you see the FULL book and run the cross.</>
             ) : (

@@ -709,3 +709,24 @@ button.primary.lp:hover:not(:disabled) {
 .nav-breakdown .now {
   font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 2px;
 }
+
+/* The market this cross is for, in the Cross card's own header — it runs for any
+   marked instrument, and the control belongs next to the book it changes. */
+.card-head .head-controls { display: flex; align-items: center; gap: 10px; }
+select.cross-instrument {
+  font-family: var(--mono); font-size: 12.5px; padding: 4px 8px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+select.cross-instrument:disabled { opacity: 0.55; }
+
+/* The ticket's submit sits on the same line as its inputs, so it matches their
+   height rather than stretching to the row. */
+.continuous-book .ticket .ticket-submit {
+  align-self: flex-end;
+  padding: 7px 14px;
+  font-size: 13px;
+  line-height: 1.2;
+  height: auto;
+  white-space: nowrap;
+}

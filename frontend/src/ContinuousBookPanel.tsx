@@ -336,7 +336,14 @@ export default function ContinuousBookPanel({
                 <option value="IOC">IOC (fill now, kill remainder)</option>
               </select>
             </label>
-            <button type="button" onClick={() => void place()} disabled={busy || !state.isOpen}>
+            {/* Sized to match Refresh in the row above — the ticket's controls are all
+                one line, and a button that outgrows its own row reads like an error. */}
+            <button
+              type="button"
+              className="ticket-submit"
+              onClick={() => void place()}
+              disabled={busy || !state.isOpen}
+            >
               {busy ? 'Working…' : 'Place order'}
             </button>
           </div>
