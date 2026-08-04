@@ -86,8 +86,11 @@ public class TokenRefresher {
                     .build();
             HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() / 100 != 2) {
+                // Keycloak answers a failure with {"error":"invalid_grant", …} and never
+                // with a token — but the body is redacted before logging anyway, so this
+                // line CANNOT print a credential even if that ever stopped being true.
                 log.warn("Token refresh failed ({}): {}", resp.statusCode(),
-                        truncate(resp.body()));
+                        truncate(redactTokens(resp.body())));
                 return;
             }
             JsonNode json = mapper.readTree(resp.body());
@@ -115,5 +118,19 @@ public class TokenRefresher {
             return "";
         }
         return s.length() > 200 ? s.substring(0, 200) + "…" : s;
+    }
+
+    /**
+     * Blank the value of any JSON field whose NAME contains "token" before it can reach
+     * a log. Deliberately name-based rather than value-based: it does not need to know
+     * what a token looks like, only that a field called {@code access_token},
+     * {@code refresh_token} or {@code id_token} must never be printed.
+     */
+    private static String redactTokens(String body) {
+        if (body == null) {
+            return "";
+        }
+        return body.replaceAll("(?i)(\"[a-z0-9_]*token[a-z0-9_]*\"\\s*:\\s*\")[^\"]*(\")",
+                "$1<redacted>$2");
     }
 }
