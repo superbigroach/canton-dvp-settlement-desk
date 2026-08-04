@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   api,
-  ApiError,
+  errorMessage,
   type Basket,
   type Instrument,
   type NavResponse,
@@ -59,7 +59,8 @@ export default function FundPanel({ parties, instruments, acting, onChanged, fla
     try {
       return await fn();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e));
+      // ONE formatter for every failure path — see errorMessage() in api.ts.
+      setErr(errorMessage(e));
       return undefined;
     } finally {
       setBusy(false);

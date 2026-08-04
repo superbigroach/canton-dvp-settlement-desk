@@ -189,6 +189,12 @@ public class SettlementController {
         if (seller.equals(buyer)) {
             throw new IllegalArgumentException("buyer and seller must be different parties");
         }
+        // A trade is THREE submissions (propose → accept → settle) under three different
+        // acting parties. Log the FULL party ids up front so that when one of the three
+        // fails, the log already says which party the failing actAs claim belongs to.
+        log.info("TRADE start seller={} buyer={} auditor={} asset={} {} cash={} {}",
+                seller, buyer, auditor, req.assetAmount(), req.assetInstrument(),
+                req.cashAmount(), req.cashInstrument());
 
         // Auto-resolve the exact holdings each leg will move.
         String assetCid = ledger.provisionExactHolding(seller, req.assetInstrument(), req.assetAmount());
@@ -205,6 +211,8 @@ public class SettlementController {
                 LedgerCommands.dvpAgreementTemplateId());
         Transaction tree = ledger.submit(seller, LedgerCommands.settleAgreement(agreementCid));
         List<String> receipts = ledger.createdOf(tree, LedgerCommands.settlementReceiptTemplateId());
+        log.info("TRADE done proposal={} agreement={} receipt={}", proposalCid, agreementCid,
+                receipts.isEmpty() ? "NONE" : receipts.get(0));
 
         BigDecimal unitPrice = req.cashAmount()
                 .divide(req.assetAmount(), 10, java.math.RoundingMode.HALF_UP)
@@ -233,6 +241,10 @@ public class SettlementController {
         String session = LedgerCommands.session(req.session());
         var sideEnum = LedgerCommands.side(req.side());
         boolean isBuy = "buy".equalsIgnoreCase(req.side().trim());
+        log.info("MOC ORDER start trader={} side={} qty={} instrument={} cash={} session={} "
+                        + "orderType={} limit={}",
+                trader, req.side(), req.quantity(), req.instrumentId(), cashInstrument, session,
+                blankTo(req.orderType(), "(inferred)"), req.limitPrice());
 
         // Find an open auction for this instrument/cash/session, else open a fresh one
         // whose participant set is every known trader (so anyone in the picker can join).
@@ -335,6 +347,11 @@ public class SettlementController {
                         new IllegalStateException("submit produced no sealed order"));
         String newAuctionCid = ledger.createdOf(tree, LedgerCommands.closingAuctionTemplateId())
                 .stream().findFirst().orElse(auctionCid);
+        // SubmitOrder is consuming: the auction cid the order was sent to is now DEAD.
+        // Logging both ids is what makes a later CONTRACT_NOT_FOUND traceable to the
+        // moment the successor was minted.
+        log.info("MOC ORDER done order={} auction {} -> {} (openedNewBook={}) backing={}",
+                orderCid, auctionCid, newAuctionCid, opened, holdingCid);
         return created(new Dtos.MocOrderResponse(orderCid, newAuctionCid, opened, closingPrice));
     }
 
@@ -552,6 +569,10 @@ public class SettlementController {
                     + " (POST /api/moc/clear) and re-seed.");
         }
 
+        log.info("MOC CLOSE start venue={} auction={} instrument={} session={} book={} buys + "
+                        + "{} sells (ledger expects {} live)",
+                venue, auctionCid, auction.instrumentId(), auction.session(),
+                buyCids.size(), sellCids.size(), expected);
         String sealedCid = ledger.submitForCreated(venue,
                 LedgerCommands.closeBidding(auctionCid), LedgerCommands.closingAuctionTemplateId());
         Transaction tree = ledger.submit(venue,
@@ -561,6 +582,8 @@ public class SettlementController {
         List<Dtos.MocFillView> fills = batch.fills().stream()
                 .map(f -> new Dtos.MocFillView(f.trader(), f.side(), f.quantity(), f.price()))
                 .toList();
+        log.info("MOC CLOSE done batch={} sealed={} discoveredPrice={} fills={}",
+                batch.contractId(), sealedCid, batch.closingPrice(), fills.size());
         return new Dtos.MocCloseResponse(batch.contractId(), auction.session(),
                 batch.closingPrice(), fills);
     }
@@ -625,6 +648,10 @@ public class SettlementController {
         MandateGate gate = resolveMandate(acting, venue, instrumentId, cashInstrument, sess,
                 a.referencePrice());
         if (!gate.granted()) {
+            // A refusal here is the MANDATE GATE working, not a fault — log it as such
+            // so it is not mistaken for the ledger failing during a demo.
+            log.info("IMBALANCE denied acting={} book={}/{}/{} reason={}",
+                    acting, instrumentId, cashInstrument, sess, gate.reason());
             return ResponseEntity
                     .status(actingIsVenue ? HttpStatus.CONFLICT : HttpStatus.FORBIDDEN)
                     .body(new Dtos.MocImbalanceResponse(false, instrumentId, cashInstrument,
@@ -1417,6 +1444,8 @@ public class SettlementController {
         var basket = basketByIdVisibleTo(ap, req.basketId());
         String admin = basket.administrator();
         BigDecimal shares = req.shares();
+        log.info("BASKET CREATE start basket={} ap={} admin={} shares={} components={}",
+                req.basketId(), ap, admin, shares, basket.components().size());
 
         // Provision each underlying leg to the exact creation-unit amount, in order.
         List<String> componentCids = new ArrayList<>();
@@ -1438,6 +1467,9 @@ public class SettlementController {
                 .filter(h -> h.instrumentId().equals(req.basketId()) && h.owner().equals(ap))
                 .map(LedgerService.HoldingView::contractId).findFirst().orElse(null);
         BigDecimal nav = navPerShareOf(basket).orElse(null);
+        log.info("BASKET CREATE done basket={} order={} agreement={} receipt={} mintedShares={}",
+                req.basketId(), orderCid, agreementCid,
+                receipts.isEmpty() ? "NONE" : receipts.get(0), mintedCid);
         return new Dtos.BasketCreateResponse(
                 receipts.isEmpty() ? null : receipts.get(0), mintedCid, shares, nav);
     }
@@ -1456,6 +1488,8 @@ public class SettlementController {
         var basket = basketByIdVisibleTo(ap, req.basketId());
         String admin = basket.administrator();
         BigDecimal shares = req.shares();
+        log.info("BASKET REDEEM start basket={} ap={} admin={} shares={}",
+                req.basketId(), ap, admin, shares);
 
         String basketHoldingCid = ledger.provisionAtLeastHolding(ap, req.basketId(), shares);
         String orderCid = ledger.submitForCreated(ap,
@@ -1477,6 +1511,9 @@ public class SettlementController {
         List<String> returned = ledger.createdHoldingsOf(tree).stream()
                 .filter(h -> h.owner().equals(ap) && !h.instrumentId().equals(req.basketId()))
                 .map(LedgerService.HoldingView::contractId).toList();
+        log.info("BASKET REDEEM done basket={} order={} agreement={} receipt={} returnedLegs={}",
+                req.basketId(), orderCid, agreementCid,
+                receipts.isEmpty() ? "NONE" : receipts.get(0), returned.size());
         return new Dtos.BasketRedeemResponse(
                 receipts.isEmpty() ? null : receipts.get(0), shares, returned);
     }

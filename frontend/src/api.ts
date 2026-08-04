@@ -340,20 +340,127 @@ export interface LedgerReceipt {
 }
 
 // ---- transport ------------------------------------------------------------
+//
+// THE RULE HERE: whatever went wrong, the user reads a SENTENCE. Never `undefined`,
+// never `[object Object]`, never a bare status number when the server took the trouble
+// to explain itself, and never a stack trace. This is on a projector.
+//
+// The backend answers failures as {message, code?, hint?, commandId?, ...}. `message`
+// is the sentence — for a Daml rejection it is the model's own words ("committed
+// holding is the wrong instrument"), and for a refused authorization it is the one
+// thing Canton lets us say plus the command id to quote to the node operator. The
+// extra fields are carried on the error object for anyone who wants them, but the
+// message alone is always enough to read out loud.
 
-/** The backend surfaces its errors as {message}. Unwrap it for a clean UI toast. */
-export class ApiError extends Error {}
+/** A failure the SERVER described. Carries the desk's diagnostic fields when present. */
+export class ApiError extends Error {
+  /** HTTP status, or 0 when the request never got a response at all. */
+  readonly status: number;
+  /** e.g. "PERMISSION_DENIED", "CONTRACT_NOT_FOUND", "DAML_INTERPRETATION_ERROR". */
+  readonly code?: string;
+  /** What the code means operationally and where to look next. */
+  readonly hint?: string;
+  /** The submission's command id — what a node operator greps their log for. */
+  readonly commandId?: string;
+  /** True when the LEDGER MODEL refused it: an expected outcome, not a fault. */
+  readonly damlRejection: boolean;
 
+  constructor(
+    message: string,
+    status = 0,
+    extra: { code?: string; hint?: string; commandId?: string; damlRejection?: boolean } = {},
+  ) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = extra.code;
+    this.hint = extra.hint;
+    this.commandId = extra.commandId;
+    this.damlRejection = extra.damlRejection ?? false;
+  }
+}
+
+/** A string, or '' — never 'undefined', 'null' or '[object Object]'. */
+function asText(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return '';
+}
+
+/**
+ * The sentence to show for ANY caught value. Use this in every `catch` — it is the
+ * single place that guarantees the three forbidden renderings can never reach the
+ * screen, including for values that are not Errors at all.
+ */
+export function errorMessage(e: unknown): string {
+  if (e instanceof ApiError) return e.message;
+  if (e instanceof Error) return asText(e.message) || e.name || 'the request failed';
+  return asText(e) || 'the request failed';
+}
+
+/** Parse, or null. A malformed body must not turn into a JSON syntax error on screen. */
+function parseJson(text: string): unknown {
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+/** A readable sentence for a status the server did not explain itself. */
+function statusSentence(status: number, path: string): string {
+  if (status === 0) return `no response from the settlement desk (${path})`;
+  if (status === 404) return `the settlement desk has no ${path}`;
+  if (status === 502 || status === 503 || status === 504) {
+    return 'the settlement desk or its Canton participant is not responding — check GET /api/diag';
+  }
+  return `the settlement desk returned HTTP ${status} for ${path}`;
+}
+
+/** Build the error for a non-OK response, preferring the server's own words. */
+function errorFrom(res: Response, body: unknown, rawText: string, path: string): ApiError {
+  const b = body && typeof body === 'object' ? (body as Record<string, unknown>) : null;
+  const message = b ? asText(b.message) : '';
+  const error = b ? asText(b.error) : '';
+  // A non-JSON body (a proxy's HTML page) is not worth rendering; a plain-text one is.
+  const plain = !rawText.includes('<') ? asText(rawText).slice(0, 300) : '';
+  return new ApiError(
+    message || error || plain || statusSentence(res.status, path),
+    res.status,
+    {
+      code: b ? asText(b.code) || undefined : undefined,
+      hint: b ? asText(b.hint) || undefined : undefined,
+      commandId: b ? asText(b.commandId) || undefined : undefined,
+      damlRejection: b ? b.damlRejection === true : false,
+    },
+  );
+}
+
+/** GET/POST the desk. Rejects ONLY with an {@link ApiError} carrying a real sentence. */
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...init,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`/api${path}`, {
+      headers: { 'Content-Type': 'application/json' },
+      ...init,
+    });
+  } catch (e) {
+    // fetch only rejects for network-level failures, and its own message ("Failed to
+    // fetch") says nothing about WHAT was unreachable. Say what was being called.
+    throw new ApiError(
+      `cannot reach the settlement desk at /api${path} — ${errorMessage(e)}`,
+      0,
+    );
+  }
   const text = await res.text();
-  const body = text ? JSON.parse(text) : null;
-  if (!res.ok) {
-    const msg = (body && (body.message || body.error)) || `HTTP ${res.status}`;
-    throw new ApiError(msg);
+  const body = parseJson(text);
+  if (!res.ok) throw errorFrom(res, body, text, path);
+  if (text && body === null) {
+    throw new ApiError(
+      `the settlement desk returned a non-JSON response for ${path}`,
+      res.status,
+    );
   }
   return body as T;
 }
@@ -420,16 +527,30 @@ export const api = {
     actingAs = '',
     cashInstrument = 'USDC',
   ): Promise<MocImbalance> => {
-    const res = await fetch(
-      `/api/moc/imbalance?instrumentId=${encodeURIComponent(instrumentId)}` +
-        `&cashInstrument=${encodeURIComponent(cashInstrument)}` +
-        `&session=${encodeURIComponent(session)}` +
-        (actingAs ? `&actingAs=${encodeURIComponent(actingAs)}` : ''),
-    );
+    const path =
+      `/moc/imbalance?instrumentId=${encodeURIComponent(instrumentId)}` +
+      `&cashInstrument=${encodeURIComponent(cashInstrument)}` +
+      `&session=${encodeURIComponent(session)}` +
+      (actingAs ? `&actingAs=${encodeURIComponent(actingAs)}` : '');
+    let res: Response;
+    try {
+      res = await fetch(`/api${path}`);
+    } catch (e) {
+      throw new ApiError(
+        `cannot reach the settlement desk at /api${path} — ${errorMessage(e)}`,
+        0,
+      );
+    }
     const text = await res.text();
-    const body = text ? JSON.parse(text) : null;
-    if (res.status === 403 || res.status === 409) return body as MocImbalance;
-    if (!res.ok) throw new ApiError((body && (body.message || body.error)) || `HTTP ${res.status}`);
+    const body = parseJson(text);
+    // 403/409 are ANSWERS ("you hold no mandate" / "nobody holds one"), not errors —
+    // but only when the body is actually the shaped answer. A 403 from something other
+    // than the mandate gate (a proxy, say) must still surface as a readable error.
+    if ((res.status === 403 || res.status === 409) && body && typeof body === 'object'
+        && 'mandateRequired' in (body as Record<string, unknown>)) {
+      return body as MocImbalance;
+    }
+    if (!res.ok) throw errorFrom(res, body, text, path);
     return body as MocImbalance;
   },
 

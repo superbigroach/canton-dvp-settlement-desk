@@ -3,6 +3,7 @@ package com.lucilla.settlement.config;
 import com.daml.ledger.api.v2.admin.PartyManagementServiceGrpc;
 import com.daml.ledger.api.v2.admin.PartyManagementServiceGrpc.PartyManagementServiceBlockingStub;
 import com.daml.ledger.rxjava.DamlLedgerClient;
+import com.lucilla.settlement.ledger.LedgerErrors;
 import io.grpc.CallOptions;
 import io.grpc.Channel;
 import io.grpc.ClientCall;
@@ -73,6 +74,26 @@ public class LedgerConnection {
     }
 
     /**
+     * The access token presented to the ledger, or blank when running unauthenticated
+     * against a local sandbox.
+     *
+     * <p>Mirrors {@code backend-devnet}'s method of the same name (where it returns the
+     * REFRESHED token rather than the static one) so that the diagnostics built on top
+     * of it are identical in both builds. <b>Callers must never log or serialise the
+     * return value</b> — {@link TokenInfo#of(String)} exists precisely so that expiry can
+     * be reported without the token ever being rendered.
+     */
+    public String activeToken() {
+        return props.getJwt();
+    }
+
+    /** True when a non-blank access token is configured. */
+    public boolean hasActiveToken() {
+        String t = activeToken();
+        return t != null && !t.isBlank();
+    }
+
+    /**
      * A blocking stub for the ledger's <b>party-management</b> admin service.
      *
      * <p>The high-level rxjava {@link DamlLedgerClient} does not expose the admin
@@ -139,8 +160,10 @@ public class LedgerConnection {
     }
 
     private DamlLedgerClient connect() {
-        log.info("Connecting to Ledger API at {}:{} (tls={}, jwt={})",
-                props.getHost(), props.getPort(), props.isTls(), props.hasJwt() ? "yes" : "no");
+        // Token PRESENCE and EXPIRY only — TokenInfo cannot render the token itself.
+        String tokenSummary = TokenInfo.of(activeToken()).summary();
+        log.info("Connecting to Ledger API at {}:{} (tls={}, token: {})",
+                props.getHost(), props.getPort(), props.isTls(), tokenSummary);
 
         DamlLedgerClient.Builder builder =
                 DamlLedgerClient.newBuilder(props.getHost(), props.getPort())
@@ -157,7 +180,19 @@ public class LedgerConnection {
         }
 
         DamlLedgerClient c = builder.build();
-        c.connect();
+        try {
+            c.connect();
+        } catch (RuntimeException e) {
+            // The lazy connect is the FIRST thing that fails when the endpoint, the TLS
+            // setting or the token is wrong, and by default it fails inside whichever
+            // request happened to touch the ledger first. Say what was attempted.
+            LedgerErrors.Failure f = LedgerErrors.of(e);
+            log.error("LEDGER CONNECT FAILED endpoint={}:{} tls={} token: {} status={} "
+                            + "description=\"{}\" | {}",
+                    props.getHost(), props.getPort(), props.isTls(), tokenSummary,
+                    f.codeLabel(), LedgerErrors.truncate(f.description()), f.hint());
+            throw e;
+        }
         // Ledger API v2 dropped the ledger-id handshake (and getLedgerId() with it);
         // a successful connect() is the confirmation.
         log.info("Connected to Ledger API v2 at {}:{}.", props.getHost(), props.getPort());

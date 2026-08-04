@@ -278,7 +278,7 @@ than merely ill-timed**, which is strictly better than the market-structure work
 
 ```
 daml build : clean
-daml test  : 33 scripts, 33 ok, 0 failed
+daml test  : 58 scripts, 58 ok, 0 failed
 backend/         ./gradlew clean build  SUCCESSFUL
 backend-devnet/  ./gradlew clean build  SUCCESSFUL
 frontend/        tsc --noEmit           clean

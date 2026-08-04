@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   api,
-  ApiError,
+  errorMessage,
   type Holding,
   type Instrument,
   type LedgerReceipt,
@@ -113,7 +113,7 @@ export default function App() {
     try {
       setHoldings(await api.holdings(label));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     }
   }, []);
 
@@ -183,7 +183,7 @@ export default function App() {
         const cp = ps.find((p) => p.label === 'Bob') ?? ps.find((p) => p.label !== first?.label);
         setCounterparty(cp?.label ?? '');
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(errorMessage(e));
       }
     })();
   }, []);
@@ -273,7 +273,8 @@ export default function App() {
     try {
       return await fn();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e));
+      // ONE formatter for every failure path — see errorMessage() in api.ts.
+      setError(errorMessage(e));
       return undefined;
     } finally {
       setBusy(false);

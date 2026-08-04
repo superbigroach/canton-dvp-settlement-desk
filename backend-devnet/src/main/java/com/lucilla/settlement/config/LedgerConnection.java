@@ -1,6 +1,7 @@
 package com.lucilla.settlement.config;
 
 import com.daml.ledger.rxjava.DamlLedgerClient;
+import com.lucilla.settlement.ledger.LedgerErrors;
 import io.grpc.netty.GrpcSslContexts;
 import io.netty.handler.ssl.SslContext;
 import jakarta.annotation.PreDestroy;
@@ -102,8 +103,10 @@ public class LedgerConnection {
     private DamlLedgerClient connect() {
         String token = activeToken();
         boolean hasToken = token != null && !token.isBlank();
-        log.info("Connecting to Ledger API at {}:{} (tls={}, jwt={})",
-                props.getHost(), props.getPort(), props.isTls(), hasToken ? "yes" : "no");
+        // Token PRESENCE and EXPIRY only — TokenInfo cannot render the token itself.
+        String tokenSummary = TokenInfo.of(token).summary();
+        log.info("Connecting to Ledger API at {}:{} (tls={}, token: {})",
+                props.getHost(), props.getPort(), props.isTls(), tokenSummary);
 
         DamlLedgerClient.Builder builder =
                 DamlLedgerClient.newBuilder(props.getHost(), props.getPort())
@@ -117,7 +120,19 @@ public class LedgerConnection {
         }
 
         DamlLedgerClient c = builder.build();
-        c.connect();
+        try {
+            c.connect();
+        } catch (RuntimeException e) {
+            // The lazy connect is the FIRST thing that fails when the endpoint, the TLS
+            // setting or the token is wrong, and by default it fails inside whichever
+            // request happened to touch the ledger first. Say what was attempted.
+            LedgerErrors.Failure f = LedgerErrors.of(e);
+            log.error("LEDGER CONNECT FAILED endpoint={}:{} tls={} token: {} status={} "
+                            + "description=\"{}\" | {}",
+                    props.getHost(), props.getPort(), props.isTls(), tokenSummary,
+                    f.codeLabel(), LedgerErrors.truncate(f.description()), f.hint());
+            throw e;
+        }
         // v2 (bindings 3.x) dropped the ledger-id handshake/getLedgerId(); a
         // successful connect() is the confirmation.
         log.info("Connected to Ledger API v2 at {}:{}.", props.getHost(), props.getPort());

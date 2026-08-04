@@ -151,7 +151,16 @@ select { cursor: pointer; appearance: none; padding-right: 30px;
 }
 .banner.error { background: rgba(198,91,91,0.12); border: 1px solid rgba(198,91,91,0.4); color: #f0b6b6; cursor: pointer; }
 .banner.ok    { background: rgba(62,155,114,0.12); border: 1px solid rgba(62,155,114,0.4); color: #a7e3c6; }
-.dismiss { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.dismiss { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; flex: none; }
+
+/* An error is now a SENTENCE — the ledger model's own words, sometimes followed by a
+   command id to quote to the node operator — rather than a status code. So it has to
+   WRAP: a flex item will not shrink below its content by default, and an unbroken
+   contract id or UUID would otherwise run off the side of a projector. Top-align so a
+   message that takes two lines does not float the dismiss link into the middle. */
+.banner { align-items: flex-start; }
+.banner > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.warn { overflow-wrap: anywhere; }
 
 /* ---------------- Quote card (Official Open/Close · NAV) ---------------- */
 

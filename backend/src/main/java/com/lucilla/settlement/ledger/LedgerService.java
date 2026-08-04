@@ -29,12 +29,14 @@ import com.lucilla.settlement.model.settlement.FillRecord;
 import com.lucilla.settlement.model.settlement.SettlementBatch;
 import com.lucilla.settlement.model.settlement.SettlementReceipt;
 import com.lucilla.settlement.model.basket.BasketReceipt;
+import io.grpc.StatusRuntimeException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -85,32 +87,136 @@ public class LedgerService {
                         + " contract was created by the transaction"));
     }
 
-    /** Submit a single command as {@code actAs} and block for the resulting transaction. */
+    /**
+     * Submit a single command as {@code actAs} and block for the resulting transaction.
+     *
+     * <p><b>THIS IS THE INSTRUMENTED SEAM.</b> Every submission logs twice — once
+     * BEFORE, once after — and the before-line is the important one, because a command
+     * that never comes back leaves nothing else behind.
+     *
+     * <p>The before-line carries exactly what someone else needs to find this
+     * submission in the PARTICIPANT'S log: the command id, the application/user id, the
+     * acting party as a FULL party id (a label matches nothing on a real node), the
+     * template and choice, and the key arguments. Canton refuses to tell the client why
+     * an authorization check failed — "the exact reason is logged on the participant,
+     * but not given to the user for security reasons" — so these handles are the only
+     * bridge between a failure seen here and the explanation held there.
+     */
     public Transaction submit(String actAs, HasCommands command) {
         DamlLedgerClient client = connection.get();
+        // Generated up-front (rather than inline) precisely so it can be LOGGED: this
+        // string is what a node operator greps for.
+        String commandId = UUID.randomUUID().toString();
+        String applicationId = connection.properties().getApplicationId();
+        String what = LedgerErrors.describe(command);
+
         CommandsSubmission submission = CommandsSubmission
-                .create(connection.properties().getApplicationId(),
-                        UUID.randomUUID().toString(),
+                .create(applicationId,
+                        commandId,
                         Optional.empty(),                 // v2: Optional<String> synchronizerId
                         List.of(command))
                 .withActAs(actAs);
         if (connection.properties().hasJwt()) {
-            // v2 takes the raw token, not an Optional.
+            // v2 takes the raw token, not an Optional. It goes into gRPC call metadata
+            // and is never part of the command, so nothing below can log it.
             submission = submission.withAccessToken(connection.properties().getJwt());
         }
+
+        log.info("LEDGER SUBMIT commandId={} applicationId={} actAs={} {} args={}",
+                commandId, applicationId, actAs, what, LedgerErrors.describeArgs(command));
+        long startedNanos = System.nanoTime();
         try {
             // Ledger API v2 removed the transaction-TREE command endpoints. We ask for a
             // flat Transaction with the LEDGER_EFFECTS shape, which still carries a
             // CreatedEvent for every contract the update creates — which is exactly what
             // firstCreatedOf / createdHoldingsOf / batchOf read back.
-            return client.getCommandClient()
+            Transaction tx = client.getCommandClient()
                     .submitAndWaitForTransaction(submission, ledgerEffectsFormat(actAs))
                     .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
                     .blockingGet();
+            long ms = (System.nanoTime() - startedNanos) / 1_000_000L;
+            // The resulting contract ids are the HANDLES for the next step, so they are
+            // logged as well as returned: a demo that stalls half way through a
+            // propose → accept → settle chain is diagnosed from exactly this line.
+            log.info("LEDGER OK     commandId={} updateId={} offset={} in={}ms created=[{}]",
+                    commandId, tx.getUpdateId(), tx.getOffset(), ms, createdSummary(tx));
+            recordSuccess(what, commandId, tx.getUpdateId());
+            return tx;
+        } catch (StatusRuntimeException e) {
+            // CAUGHT SPECIFICALLY. The gRPC Status code and description are the only
+            // machine-readable facts Canton hands back, and PERMISSION_DENIED,
+            // NOT_FOUND, INVALID_ARGUMENT, ABORTED, UNAVAILABLE and CONTRACT_NOT_FOUND
+            // each mean a different thing and are fixed in a different place.
+            throw failedSubmission(e, commandId, actAs, what);
         } catch (RuntimeException e) {
-            log.warn("Command submission failed (actAs={}): {}", actAs, e.getMessage());
-            throw new LedgerException(rootMessage(e), e);
+            // rxjava and the gRPC futures both wrap; LedgerErrors looks THROUGH the
+            // cause chain, so a wrapped StatusRuntimeException is classified identically
+            // and a genuine non-gRPC failure still gets a clean message.
+            throw failedSubmission(e, commandId, actAs, what);
         }
+    }
+
+    /**
+     * Log a failed submission in full, then wrap it for the web layer.
+     *
+     * <p>Three log lines on purpose: WHAT failed and how, WHAT TO DO about it, and — for
+     * a Daml rejection — the model's own sentence on its own line so it is impossible to
+     * miss among the gRPC scaffolding. The command id repeats on every line so that one
+     * {@code grep} for it returns the whole story.
+     */
+    private LedgerException failedSubmission(
+            RuntimeException e, String commandId, String actAs, String what) {
+        LedgerErrors.Failure f = LedgerErrors.of(e);
+        log.error("LEDGER FAIL   commandId={} actAs={} {} status={} grpc={} correlationId={} "
+                        + "at={} description=\"{}\"",
+                commandId, actAs, what, f.codeLabel(),
+                f.code() == null ? "-" : f.code().name(), f.correlationId(),
+                Instant.now(), LedgerErrors.truncate(f.description()));
+        log.error("LEDGER FAIL   commandId={} WHAT THIS MEANS: {}", commandId, f.hint());
+        if (f.damlMessage() != null) {
+            log.warn("LEDGER FAIL   commandId={} THE MODEL REJECTED IT: {}",
+                    commandId, f.damlMessage());
+        }
+        return new LedgerException(LedgerErrors.userMessage(f, commandId), e, f, commandId);
+    }
+
+    /** The contracts a transaction created, as {@code Entity cid} pairs, for the OK line. */
+    private static String createdSummary(Transaction tree) {
+        List<String> out = new ArrayList<>();
+        for (Event ev : tree.getEventsById().values()) {
+            if (ev instanceof CreatedEvent created) {
+                if (out.size() >= 10) {
+                    out.add("…more");
+                    break;
+                }
+                out.add(created.getTemplateId().getEntityName() + " " + created.getContractId());
+            }
+        }
+        return String.join(", ", out);
+    }
+
+    // -----------------------------------------------------------------------
+    // "Did this ever work?" — the first question worth asking mid-demo
+    // -----------------------------------------------------------------------
+
+    /** The most recent ledger interaction that SUCCEEDED. Reported by {@code GET /api/diag}. */
+    private volatile LastCall lastCall;
+
+    /**
+     * When the ledger last answered successfully, and what the call was. This is what
+     * separates "never connected" from "worked until thirty seconds ago" — two failures
+     * that look identical from the UI and have nothing else in common.
+     */
+    public Optional<LastCall> lastSuccessfulCall() {
+        return Optional.ofNullable(lastCall);
+    }
+
+    private void recordSuccess(String what, String commandId, String updateId) {
+        lastCall = new LastCall(what, commandId, updateId, Instant.now());
+    }
+
+    /** One successful ledger interaction. {@code commandId}/{@code updateId} are null for reads. */
+    public record LastCall(String what, String commandId, String updateId, Instant at) {
     }
 
     /**
@@ -731,19 +837,37 @@ public class LedgerService {
         RuntimeException last = null;
         for (int i = 1; i <= attempts; i++) {
             try {
-                return op.call();
+                T result = op.call();
+                recordSuccess("read " + what, null, null);
+                return result;
             } catch (Exception e) {
                 RuntimeException re = (e instanceof RuntimeException r) ? r : new RuntimeException(e);
+                // Classify BEFORE deciding: a PERMISSION_DENIED on a read is not a
+                // transient stream drop and must not be retried six times before
+                // surfacing as an unexplained 500.
+                LedgerErrors.Failure f = LedgerErrors.of(re);
                 String msg = rootMessage(re);
                 boolean transientErr = msg != null && (msg.contains("end-of-stream")
                         || msg.contains("RESOURCE_EXHAUSTED") || msg.contains("UNAVAILABLE")
                         || msg.contains("INTERNAL"));
                 if (!transientErr || i == attempts) {
+                    log.error("LEDGER READ FAIL ({}) after {} attempt(s) status={} grpc={} "
+                                    + "correlationId={} description=\"{}\"",
+                            what, i, f.codeLabel(), f.code() == null ? "-" : f.code().name(),
+                            f.correlationId(), LedgerErrors.truncate(f.description()));
+                    log.error("LEDGER READ FAIL ({}) WHAT THIS MEANS: {}", what, f.hint());
                     if (transientErr) {
                         throw new LedgerException("ledger read failed after " + attempts
-                                + " attempts (" + what + "): " + msg, re);
+                                + " attempts (" + what + "): " + msg, re, f, null);
                     }
-                    throw re;
+                    if (f.code() != null) {
+                        // A real gRPC rejection on a read: classified, so the web layer
+                        // can answer 403/404/503 instead of an opaque 500.
+                        throw new LedgerException(
+                                LedgerErrors.userMessage(f, null) + " (while reading " + what + ")",
+                                re, f, null);
+                    }
+                    throw re;   // not a ledger failure at all — let it surface as itself
                 }
                 last = re;
                 log.warn("Transient ledger read failure ({}), retry {}/{}: {}", what, i, attempts, msg);
@@ -759,11 +883,7 @@ public class LedgerService {
     }
 
     private static String rootMessage(Throwable t) {
-        Throwable c = t;
-        while (c.getCause() != null && c.getCause() != c) {
-            c = c.getCause();
-        }
-        return c.getMessage() != null ? c.getMessage() : t.toString();
+        return LedgerErrors.rootMessage(t);
     }
 
     /** Flat, JSON-friendly view of a known party. */
@@ -939,14 +1059,45 @@ public class LedgerService {
             List<FillView> fills) {
     }
 
-    /** Wraps ledger/command failures as a clean runtime error for the web layer. */
+    /**
+     * Wraps ledger/command failures as a clean runtime error for the web layer.
+     *
+     * <p>Carries the gRPC classification and the command id when there was one, so
+     * {@code ApiExceptionHandler} can answer with the RIGHT status (403 for a refused
+     * authorization, 409 for a stale contract id, 503 for a participant that is down,
+     * 422 for a Daml rejection) and hand the caller the handle a node operator needs.
+     * Both are optional: the desk's own pre-flight rejections ("Alice holds no USDC")
+     * are constructed with the message alone and keep the historical 422.
+     */
     public static class LedgerException extends RuntimeException {
+
+        /** The gRPC/Canton classification, or null when this never reached the ledger. */
+        private final transient LedgerErrors.Failure failure;
+
+        /** The submission's command id — THE string to quote to the node operator. */
+        private final String commandId;
+
         public LedgerException(String message) {
-            super(message);
+            this(message, null, null, null);
         }
 
         public LedgerException(String message, Throwable cause) {
+            this(message, cause, null, null);
+        }
+
+        public LedgerException(String message, Throwable cause,
+                LedgerErrors.Failure failure, String commandId) {
             super(message, cause);
+            this.failure = failure;
+            this.commandId = commandId;
+        }
+
+        public LedgerErrors.Failure failure() {
+            return failure;
+        }
+
+        public String commandId() {
+            return commandId;
         }
     }
 

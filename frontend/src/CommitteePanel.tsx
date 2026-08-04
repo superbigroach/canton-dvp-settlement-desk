@@ -28,7 +28,7 @@ import { useEffect, useState } from 'react';
 import AccrualTicker from './AccrualTicker';
 import {
   api,
-  ApiError,
+  errorMessage,
   type DayCountConvention,
   type FixingResponse,
   type Instrument,
@@ -121,7 +121,8 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
     try {
       return await fn();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e));
+      // ONE formatter for every failure path — see errorMessage() in api.ts.
+      setErr(errorMessage(e));
       return undefined;
     } finally {
       setBusy(false);

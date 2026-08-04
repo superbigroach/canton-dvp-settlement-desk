@@ -30,7 +30,7 @@
 // ============================================================================
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, ApiError, type AccruedNav } from './api';
+import { api, errorMessage, type AccruedNav } from './api';
 import {
   MICROS_PER_DAY,
   accruedAmount,
@@ -93,7 +93,8 @@ export default function AccrualTicker({ fixCid, actingAs, refreshMs = 20_000 }: 
       setSnap(s);
       setErr('');
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e));
+      // ONE formatter for every failure path — see errorMessage() in api.ts.
+      setErr(errorMessage(e));
     }
   }, [fixCid, actingAs]);
 
