@@ -500,15 +500,15 @@ button.primary.lp:hover:not(:disabled) {
    which sorts it AHEAD of every numbered card — so a newly added panel silently
    jumps to the top of the page instead of appearing where it was written. That is
    what happened to the Continuous Session and the pending-transfers card. */
-.grid > .trade             { order: 1; }  /* top-left */
-.grid > .committee         { order: 2; }  /* top-right */
-.grid > .continuous-book   { order: 3; }  /* left, directly under Trade */
-.grid > .cross             { order: 4; }  /* right, under the operator */
-.grid > .fund              { order: 5; }  /* left */
-.grid > .position          { order: 6; }  /* right — beside the Fund builder */
-.grid > .lp-imbalance      { order: 7; }
-.grid > .pending-transfers { order: 8; }
-.grid > .receipts          { order: 9; }
+.grid > .trade              { order: 1; }  /* top-left */
+.grid > .committee          { order: 4; }  /* right, under the order book */
+.grid > .continuous-book    { order: 2; }  /* top-right - the tall order-book card */
+.grid > .cross              { order: 3; }  /* left, directly under Trade */
+.grid > .fund               { order: 5; }  /* left */
+.grid > .position           { order: 6; }  /* right, beside the Fund builder */
+.grid > .lp-imbalance       { order: 7; }
+.grid > .pending-transfers  { order: 9; }
+.grid > .receipts           { order: 8; }
 
 /* =========================================================================
    CONTINUOUS ACCRUAL — the ticking, ledger-derived NAV.

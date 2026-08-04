@@ -43,8 +43,10 @@ const fmt = (n: number) =>
 const fmt2 = (n: number) =>
   n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// The auction prints a PRICE. NAV is a fund concept - a basket's net asset value -
+// and calling one market's close a NAV is what invites "why does cETH have a NAV?".
 const sessionLabel = (s: Session) =>
-  s === 'Open' ? 'Official Open' : 'Official Close · NAV';
+  s === 'Open' ? 'Official Open' : 'Official Close';
 
 export default function App() {
   const [parties, setParties] = useState<Party[]>([]);
@@ -468,7 +470,7 @@ export default function App() {
       )}
       {toast && <div className="banner ok">✓ {toast}</div>}
 
-      {/* -------- Official Open / Close · NAV quote card -------- */}
+      {/* -------- Official Open / Close price quote card -------- */}
       <section className="quote" aria-label="Official price quote">
         <div className="quote-left">
           <div className="quote-instrument">
