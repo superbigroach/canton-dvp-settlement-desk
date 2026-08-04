@@ -200,10 +200,18 @@ export default function ContinuousBookPanel({
     <section className="card continuous-book">
       <div className="card-head">
         <h2>Continuous Session</h2>
-        <span className="sub">
-          price–time priority · dark pre-trade · lit post-trade
-        </span>
       </div>
+      {/* This used to sit inside card-head, which is a no-wrap flex row — on a narrow
+          card the strapline collided with the heading. It is also the one thing about
+          this panel a viewer needs explained, so it earns a full line. */}
+      <p className="hint">
+        Limit interest <strong>rests</strong> here between auctions, matched by{' '}
+        <strong>price then time</strong> and settled at the maker&rsquo;s price.
+        <br />
+        <strong>Dark pre-trade</strong> — a resting order has no observers, so even the
+        auditor cannot see the book. <strong>Lit post-trade</strong> — every fill prints
+        to a public tape that names nobody.
+      </p>
 
       <div className="row wrap gap">
         <label>
