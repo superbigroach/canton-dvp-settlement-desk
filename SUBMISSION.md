@@ -11,7 +11,7 @@ prints one price the orders themselves determine, and settles every leg or none.
 - **Live demo:** **https://crossdesk-devnet-app.web.app** — connected to the shared
   HackCanton devnet node (`hackcanton-01`), **settling real on-chain transactions**
   (first atomic DvP: *alice-crossdesk → bob-crossdesk · 10 cETH @ 3,200 USDC*, 2026-07-19).
-  ⚠️ It runs the **pre-feedback** package `72ec9833…` — see §0.4.
+  ⚠️ It runs the **pre-feedback** package `72ec9833…` — see §0.6.
 - **Assets used:** **cETH** (onRails) and **CBTC** (BitSafe) as first-class instruments —
   and as of **2026-08-04 we hold 4.16 of BitSafe's real CBTC** on the devnet node, claimed
   through the CIP-56 registry flow, not self-issued (§0.4)
@@ -148,10 +148,10 @@ standard wallet can render the locked position with no knowledge of this app.
 🔴 Say this before a judge finds it:
 
 - The rebuild is **pushed** — `origin/master` and branch
-  **`feat/price-discovery-and-cip56`** are both at commit `5dfd724`. What you clone is
+  **`feat/price-discovery-and-cip56`** point at the same commit. What you clone is
   what is described here.
 - **The auction has not been run end-to-end against a live participant.** It is proven by
-  **Daml Script scenarios** (92 at commit `5dfd724`, all green) plus compiling backends and a
+  **Daml Script scenarios** (92, all green) plus compiling backends and a
   clean `tsc` — not by a
   cross printing on a shared node. Uploading a DAR to `hackcanton-01` is an admin-only
   action on the node operator's side; the request is in with NODERS and the package
@@ -265,7 +265,7 @@ declared party, the data does not exist for you.
 **Daml logic + tests (proves the whole model):**
 ```bash
 daml version              # must be 3.4.11 — daml.yaml pins it (the line devnet runs)
-daml build && daml test   # 92 scripts at commit 5dfd724, all pass
+daml build && daml test   # 92 scripts, all pass
 ```
 (63 scenarios in `daml/Test.daml`, 23 in `daml/ContinuousBookTest.daml`, 6 in
 `daml/TokenStandardTest.daml`, at the last commit on this branch — the suite is still
@@ -283,7 +283,7 @@ number. The build also links the six vendored `splice-api-token-*` DARs from `de
 
 ## 6 · What works today (verified)
 
-- ✅ **`daml test` — 92/92 green at commit `5dfd724`** (the suite is still growing —
+- ✅ **`daml test` — 92/92 green** (the suite is still growing —
   run it for the live number), including `testPriceDiscoveryUnit`,
   `testPriceDiscoveryBeatsReference`, `testCompleteBookRequired`, `testMixedSurplusTieBreak`,
   `testCollarClampsDown`, `testMocLocLadderEndToEnd`, `testMandateSeatIsContestable`,

@@ -70,7 +70,7 @@ Full narrative: **[`docs/HOW_IT_WORKS.md`](docs/HOW_IT_WORKS.md)**. Venue rules 
 primary sources: **[`docs/REAL_AUCTION_MECHANICS.md`](docs/REAL_AUCTION_MECHANICS.md)**.
 
 > ⚠️ **Where this code lives.** The rebuild is **pushed** — `origin/master` and
-> branch **`feat/price-discovery-and-cip56`** are both at `5dfd724`. The hosted
+> branch **`feat/price-discovery-and-cip56`** point at the same commit. The hosted
 > demo below, however, still runs the **pre-feedback** DAR (package `72ec9833…`):
 > uploading a new DAR to the shared node is an admin-only action on the node
 > operator's side, and package `147ddae1…` is built and pending that upload. See
@@ -92,7 +92,7 @@ node runs — the repo reproduces what the ledger executes. Install it per
 the `get.daml.com` one-liner installs the 2.x line and will not satisfy this pin.
 
 `daml test` runs every scenario in `daml/Test.daml` and `daml/TokenStandardTest.daml`
-— **92 of them at the last commit on this branch (`5dfd724`), all green**. The suite
+— **92 of them at the head of this branch, all green**. The suite
 is still growing, so run the command for the live number rather than trusting this
 sentence. `daml build` also links the six vendored Token Standard DARs from `deps/`;
 you can see them in the built package with:
@@ -726,7 +726,7 @@ of even the compliant path: **[`docs/TOKEN_STANDARD_DVP.md`](docs/TOKEN_STANDARD
 | Gap | Status |
 |---|---|
 | **The auction path is not CIP-56** | Only `daml/TokenStandardDvp.daml` is. `MarketOnClose` clears against legacy self-issued holdings. Migration route is `docs/TOKEN_STANDARD_DVP.md` §5; step 2 (`ClosingAuction` implementing `AllocationRequest`) is the single highest-value remaining piece and it is days, not hours. |
-| **The auction has never run end-to-end on a live participant** | The auction is verified by **Daml Script scenarios (92 at `5dfd724`) plus compiling backends and a clean `tsc`** — not by a cross printing on a shared node. The DAR upload to devnet is admin-only on the node operator's side, and the hosted demo still runs the pre-feedback package `72ec9833…`. The settlement path *was* proven live (atomic DvP, 2026-07-19, receipt `006ef8c599…`). |
+| **The auction has never run end-to-end on a live participant** | The auction is verified by **Daml Script scenarios (92, all green) plus compiling backends and a clean `tsc`** — not by a cross printing on a shared node. The DAR upload to devnet is admin-only on the node operator's side, and the hosted demo still runs the pre-feedback package `72ec9833…`. The settlement path *was* proven live (atomic DvP, 2026-07-19, receipt `006ef8c599…`). |
 | **No time priority in allocation** | Deliberate. A sealed order carries no on-ledger arrival timestamp, and the only ordering available is one the operator controls. Pro-rata by size is the rule the operator cannot game. |
 | **Unpriced MOC exists, but there is no *continuous* session** | `limitPrice = None` behaves correctly inside the call auction. What does not exist is the continuous book an MOC is normally lodged against, so there is no re-pricing of late LOCs against a reference price, no imbalance-only order type, and no paired/unpaired feed. |
 | **No auction phases** | No call phase, no freeze / no-cancel window, no volatility interruption or extension. The close is manually triggered by the venue; a production deployment would fire it from an off-ledger scheduler (a Daml Trigger or cron). *The scheduler decides the moment; every rule about who may do what, and at what price, stays on the ledger.* |
