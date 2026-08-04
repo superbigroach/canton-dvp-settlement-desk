@@ -496,21 +496,19 @@ button.primary.lp:hover:not(:disabled) {
    Decentralised Operator swapped up to the top-right where Position was.
    Uses CSS `order` so no markup moves (grid items reflow by order).
    ========================================================================= */
-/* PENDING TRANSFERS SPANS BOTH COLUMNS, AT THE TOP.
-   Its content is horizontal — a party field, a filter, a balances strip and a wide
-   table of inbound instructions. Squeezed into one grid column it wrapped into a
-   tall ribbon that wasted most of the row beside it. It is also the first thing to
-   do in the demo (claim the asset), so the top is where it belongs. */
-.grid > .pending-transfers { order: 0; grid-column: 1 / -1; }
-.pending-transfers .row { flex-wrap: wrap; align-items: flex-end; }
-
-.grid > .trade        { order: 1; }  /* top-left */
-.grid > .committee    { order: 2; }  /* top-right */
-.grid > .cross        { order: 3; }  /* directly under Trade (left column) */
-.grid > .receipts     { order: 4; }  /* under the operator (right column) */
-.grid > .lp-imbalance { order: 5; }
-.grid > .fund         { order: 6; }  /* bottom-left */
-.grid > .position     { order: 7; }  /* bottom-right — right beside the Fund builder */
+/* EVERY CARD NEEDS AN EXPLICIT ORDER. A grid item with none defaults to order:0,
+   which sorts it AHEAD of every numbered card — so a newly added panel silently
+   jumps to the top of the page instead of appearing where it was written. That is
+   what happened to the Continuous Session and the pending-transfers card. */
+.grid > .trade             { order: 1; }  /* top-left */
+.grid > .committee         { order: 2; }  /* top-right */
+.grid > .continuous-book   { order: 3; }  /* left, directly under Trade */
+.grid > .cross             { order: 4; }  /* right, under the operator */
+.grid > .fund              { order: 5; }  /* left */
+.grid > .position          { order: 6; }  /* right — beside the Fund builder */
+.grid > .lp-imbalance      { order: 7; }
+.grid > .pending-transfers { order: 8; }
+.grid > .receipts          { order: 9; }
 
 /* =========================================================================
    CONTINUOUS ACCRUAL — the ticking, ledger-derived NAV.

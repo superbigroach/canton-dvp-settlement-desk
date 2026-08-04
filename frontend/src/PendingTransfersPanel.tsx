@@ -45,9 +45,6 @@ function when(iso: string | null | undefined): string {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
 
-const fmtAmt = (n: number) =>
-  n.toLocaleString(undefined, { maximumFractionDigits: 6 });
-
 export default function PendingTransfersPanel({ acting, onChanged, flash }: Props) {
   // The party to query. Defaults to the desk's acting party, but is EDITABLE on
   // purpose: a foreign transfer is addressed to a party id somebody else typed into a
@@ -61,38 +58,6 @@ export default function PendingTransfersPanel({ acting, onChanged, flash }: Prop
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>('');
   const [loaded, setLoaded] = useState(false);
-
-  // Holdings are summed PER INSTRUMENT: a party's position is spread across many
-  // Holding contracts (reservations split them), so a raw list would show one asset
-  // five times and read as a bug.
-  const [balances, setBalances] = useState<{ instrumentId: string; amount: number }[]>([]);
-  const [balancesLoading, setBalancesLoading] = useState(false);
-
-  const loadBalances = useCallback(async (who: string) => {
-    if (!who) {
-      setBalances([]);
-      return;
-    }
-    setBalancesLoading(true);
-    try {
-      const hs = await api.holdings(who);
-      const byInstrument = new Map<string, number>();
-      for (const h of hs) {
-        byInstrument.set(h.instrumentId, (byInstrument.get(h.instrumentId) ?? 0) + Number(h.amount));
-      }
-      setBalances(
-        [...byInstrument.entries()]
-          .map(([instrumentId, amount]) => ({ instrumentId, amount }))
-          .sort((a, b) => a.instrumentId.localeCompare(b.instrumentId)),
-      );
-    } catch {
-      // A party the ledger does not know is a normal state here (the field is free
-      // text), not something to shout about — the pending list already says so.
-      setBalances([]);
-    } finally {
-      setBalancesLoading(false);
-    }
-  }, []);
 
   useEffect(() => {
     // Follow the desk's party picker unless the operator has typed their own id.
@@ -124,7 +89,6 @@ export default function PendingTransfersPanel({ acting, onChanged, flash }: Prop
 
   useEffect(() => {
     void load(party, direction);
-    void loadBalances(party);
     // Re-read when the party or direction changes; no polling — this is a ledger read.
   }, [party, direction, load]);
 
@@ -146,7 +110,7 @@ export default function PendingTransfersPanel({ acting, onChanged, flash }: Prop
           : `${choice === 'reject' ? 'Rejected' : 'Withdrew'} ${fmt(row.amount)} ${row.instrumentId}`,
       );
       onChanged();
-      await Promise.all([load(party, direction), loadBalances(party)]);
+      await load(party, direction);
     } catch (e) {
       setErr(errorMessage(e));
     } finally {
@@ -194,36 +158,9 @@ export default function PendingTransfersPanel({ acting, onChanged, flash }: Prop
             <option value="all">All (incl. my outgoing)</option>
           </select>
         </label>
-        <button className="ghost" disabled={busy} onClick={() => { void load(party, direction); void loadBalances(party); }}>
+        <button className="ghost" disabled={busy} onClick={() => void load(party, direction)}>
           Refresh
         </button>
-      </div>
-
-      {/* WHAT THIS PARTY ACTUALLY HOLDS, right where transfers are accepted.
-          Accepting a CIP-56 transfer is the moment a foreign registry's asset becomes
-          yours, and without a balance in view the click has no visible consequence —
-          you are asked to believe a row disappeared for a good reason. This is also
-          where the real BitSafe cBTC shows up, which is the claim worth being able to
-          point at rather than assert. */}
-      <div className="party-balances">
-        <div className="pb-head">
-          <span>Balances · {label(party) || '—'}</span>
-          {balancesLoading && <span className="muted">loading…</span>}
-        </div>
-        {balances.length === 0 ? (
-          <p className="muted">
-            {balancesLoading ? '' : `${label(party) || 'This party'} holds nothing yet.`}
-          </p>
-        ) : (
-          <div className="pb-chips">
-            {balances.map((b) => (
-              <span className="pb-chip" key={b.instrumentId}>
-                <span className="mono strong">{fmtAmt(b.amount)}</span>{' '}
-                <span className="pb-inst">{b.instrumentId}</span>
-              </span>
-            ))}
-          </div>
-        )}
       </div>
 
       {err && <p className="error">{err}</p>}
