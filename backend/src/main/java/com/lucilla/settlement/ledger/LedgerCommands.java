@@ -2,6 +2,7 @@ package com.lucilla.settlement.ledger;
 
 import com.daml.ledger.javaapi.data.codegen.Update;
 import com.lucilla.settlement.model.holding.Holding;
+import com.lucilla.settlement.model.marketonclose.ordercommitment.ReserveHolding;
 import com.lucilla.settlement.model.instrument.Instrument;
 import com.lucilla.settlement.model.marketonclose.ClosingAuction;
 import com.lucilla.settlement.model.marketonclose.ImbalanceDisclosure;
@@ -22,6 +23,8 @@ import com.lucilla.settlement.model.basket.CreationAgreement;
 import com.lucilla.settlement.model.basket.RedemptionOrder;
 import com.lucilla.settlement.model.basket.RedemptionAgreement;
 import com.lucilla.settlement.model.basket.BasketReceipt;
+import com.lucilla.settlement.model.tokenstandarddvp.TokenStandardHolding;
+import com.lucilla.settlement.model.tokenstandarddvp.TokenStandardRegistry;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -181,9 +184,16 @@ public final class LedgerCommands {
     public static Update<?> submitOrder(
             String auctionCid, String trader, Side side,
             BigDecimal quantity, Optional<BigDecimal> limitPrice, String holdingCid) {
+        // CIP-56 migration: SubmitOrder's 5th argument is now an OrderCommitment variant,
+        // not a bare holding cid. ReserveHolding is the LEGACY path — the venue carves a
+        // reserved slice out of the trader's own Holding. The other variant,
+        // DeclareTokenHolding, is the Token Standard path: a standard holding cannot be
+        // locked before the print exists (the registry's factory demands a concrete
+        // TransferLeg, which needs a price), so a CIP-56 order DECLARES its backing and
+        // allocates after the cross. See daml/TokenSettlement.daml.
         return new ClosingAuction.ContractId(auctionCid)
                 .exerciseSubmitOrder(trader, side, quantity, limitPrice,
-                        new Holding.ContractId(holdingCid));
+                        new ReserveHolding(new Holding.ContractId(holdingCid)));
     }
 
     // ---- The venue price collar (MIRRORED from MarketOnClose.daml) ----------
@@ -638,6 +648,52 @@ public final class LedgerCommands {
 
     public static com.daml.ledger.javaapi.data.Identifier basketReceiptTemplateId() {
         return BasketReceipt.TEMPLATE_ID;
+    }
+
+    // ---- CIP-56 token standard (TokenStandardDvp.daml) --------------------
+    // The registry's on-ledger half. These two creates are all the off-ledger
+    // Registry API needs in order to have something real to serve: the factory
+    // contract it discloses, and the holdings whose sum IS an instrument's total
+    // supply. Everything else on the token-standard path is driven by wallets
+    // exercising the standard's own interface choices, never by this desk.
+
+    /**
+     * Create the registry's factory contract — the ONE contract that implements both
+     * {@code TransferInstructionV1.TransferFactory} and
+     * {@code AllocationInstructionV1.AllocationFactory}.
+     *
+     * <p>{@code admin} is its only signatory and it has NO observers, which is exactly
+     * why the off-ledger API exists: a wallet cannot see this contract on its own
+     * stream and must receive it as an explicitly disclosed contract.
+     */
+    public static Update<?> createTokenStandardRegistry(String admin) {
+        return new TokenStandardRegistry(admin).create();
+    }
+
+    /**
+     * Mint a free (unlocked) {@code TokenStandardHolding}.
+     *
+     * <p>Requires the authority of BOTH the registry admin and the owner — the standard's
+     * holding is co-signed, unlike the legacy issuer-only {@code Holding}. CIP-56 v1 says
+     * nothing about issuance, so this is a registry-specific step by design, not by
+     * omission.
+     */
+    public static Update<?> createTokenStandardHolding(
+            String admin, String owner, String instrumentId, BigDecimal amount) {
+        return new TokenStandardHolding(
+                admin, owner,
+                new com.lucilla.settlement.model.splice.api.token.holdingv1.InstrumentId(
+                        admin, instrumentId),
+                amount, Optional.empty())
+                .create();
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier tokenStandardRegistryTemplateId() {
+        return TokenStandardRegistry.TEMPLATE_ID;
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier tokenStandardHoldingTemplateId() {
+        return TokenStandardHolding.TEMPLATE_ID;
     }
 
     public static Side side(String raw) {

@@ -38,9 +38,12 @@
 --                              excess supply drags the print DOWN).
 --   testAllocationUnit       — THE ALLOCATION RULE as pure arithmetic: orders priced
 --                              THROUGH the print fill in full, only the marginal
---                              level is rationed, dust rounds to zero without
---                              exploding, and every allocation sums EXACTLY to the
---                              crossed volume.
+--                              level is rationed and it is rationed EARLIEST-FIRST on
+--                              the ledger-minted `SealedOrder.seqNo`, exactly one
+--                              order is ever partly filled, the result is
+--                              PERMUTATION-INVARIANT in the list the operator hands
+--                              over, and every allocation sums EXACTLY to the crossed
+--                              volume with no division and therefore no residual.
 --   testMixedSurplusTieBreak — Xetra §11.1.1 step 4(a): with bid surplus below and
 --                              ask surplus above, the print is narrowed to the
 --                              BOUNDARY pair before the anchor gets a vote — which
@@ -83,9 +86,21 @@
 --                              the print lands ABOVE the anchor, because it reserved
 --                              at the TOP OF THE COLLAR — the highest price the close
 --                              can legally print.
---   testUnpricedInterestRationedProRata — unpriced interest larger than the whole
---                              cross rations AMONG THE UNPRICED, and every limit
---                              order behind them gets nothing.
+--   testUnpricedInterestRationedByTime — unpriced interest larger than the whole
+--                              cross rations AMONG THE UNPRICED — earliest arrival
+--                              first, so size buys nothing — and every limit order
+--                              behind them gets nothing at all.
+--   testTimePriorityAtTheMargin — THE TIME-PRIORITY HEADLINE, end to end: two
+--                              identical bids at the print, and the one that arrived
+--                              FIRST fills in full while the other is the single
+--                              partial fill; a better-priced bid that arrived LAST
+--                              still jumps both. Price beats time; time breaks the
+--                              price tie; exactly one order is partly filled.
+--   testResubmissionLosesItsPlace — withdrawing and re-lodging an identical order
+--                              mints a NEW, higher arrival number, so the trader goes
+--                              to the back of the queue. The honest cost of a queue,
+--                              and a property nobody had to write down: it falls out
+--                              of `seqNo` being stamped at submission.
 --   testMocIsNeverAwayFromTheCross — an unpriced sell trades at a print far below
 --                              where a limit would have stopped it, while a limited
 --                              sell beside it is cancelled away from the cross.
@@ -97,6 +112,23 @@
 --                              venue) see the NET book imbalance; a normal trader
 --                              does NOT; the DLP sees only the aggregate (not the
 --                              individual orders); the DLP offsets to clear the cross.
+--
+-- THE CIP-56 CLOSE — the same auction settling REAL Canton Network Token Standard
+-- assets, over two INDEPENDENT registries, with the venue never taking custody. The
+-- full section is at the END of this file; the scripts are:
+--   testTokenStandardCross     — the headline: two registries, three traders, one
+--                              print, two bilateral pairs, one atomic settlement.
+--   testCip56OrderCannotBePledged — the security fix. `PledgeToVenue` — the venue's
+--                              one unenforced power — has no target on a CIP-56 book.
+--   testTokenStandardBindsTheRegistry — a "cETH" from a different admin is refused.
+--   testTokenStandardNoDeliveryWithoutPayment — allocations are bound to their own
+--                              legs, and the venue cannot settle a subset of a cross.
+--   testTokenStandardRequestsStayDark — after the print, each sender sees ONLY its
+--                              own obligations; a rival and an outsider see nothing.
+--   testTokenStandardDoorChecks — wrong instrument / insufficient / already-locked /
+--                              somebody else's holding, all through the standard's
+--                              own `HoldingView`.
+--   testSettlementModelsDoNotMix — each close refuses the other's book, by name.
 -- ===========================================================================
 
 module Test where
@@ -104,7 +136,7 @@ module Test where
 import Daml.Script
 import DA.Assert ((===))
 import DA.List (head)
-import DA.Optional (isNone, isSome)
+import DA.Optional (fromSome, isNone, isSome)
 import DA.Time (addRelTime, hours, days, seconds)
 
 import Instrument
@@ -115,6 +147,20 @@ import Agent
 import Governance
 import Basket
 import LiquidityMandate
+import TokenSettlement
+
+-- THE CIP-56 SIDE. `TokenStandardDvp` is imported here as a STAND-IN REGISTRY and
+-- nothing more: it implements the six official `Splice.Api.Token.*V1` interfaces, and
+-- the tests below use it exactly the way they would use onRails' cETH registry or
+-- BitSafe's cBTC registry — through the interfaces, never through the templates.
+-- MarketOnClose and TokenSettlement do not import it, and could not tell it apart
+-- from any other conforming registry.
+import TokenStandardDvp
+import DA.TextMap qualified as TextMap
+import Splice.Api.Token.HoldingV1 qualified as TS
+import Splice.Api.Token.AllocationV1 qualified as TS
+import Splice.Api.Token.AllocationInstructionV1 qualified as TS
+import Splice.Api.Token.AllocationRequestV1 qualified as TS
 
 -- Instrument ids — keep string literals consistent across scenarios.
 aapl : Text
@@ -176,7 +222,8 @@ submitOrder :
 submitOrder auctionCid trader side quantity limitPrice holdingCid =
   submit trader do
     exerciseCmd auctionCid SubmitOrder with
-      trader; side; quantity; limitPrice = Some limitPrice; holdingCid
+      trader; side; quantity; limitPrice = Some limitPrice
+      commitment = ReserveHolding holdingCid
 
 -- An UNPRICED MOC: no limit argument, because an MOC does not have a limit. It buys
 -- (or sells) the close, whatever the close turns out to be.
@@ -186,7 +233,8 @@ submitMocOrder :
 submitMocOrder auctionCid trader side quantity holdingCid =
   submit trader do
     exerciseCmd auctionCid SubmitOrder with
-      trader; side; quantity; limitPrice = None; holdingCid
+      trader; side; quantity; limitPrice = None
+      commitment = ReserveHolding holdingCid
 
 -- ---------------------------------------------------------------------------
 -- liveMandateOf — re-read a provider's CURRENT LiquidityMandate cid.
@@ -670,8 +718,13 @@ testWithdrawAndVenueClear = do
   -- Alice WITHDRAWS her order through the auction. It is gone from the book; her
   -- 2,600 USDC is unlocked back to a free, private holding (venue no longer
   -- observes it); the auction comes back with cancelledCount = 1.
-  (a3, unlocked) <- submit alice do
+  -- `WithdrawOrder` now returns `Optional (ContractId Holding)`: a CIP-56 order has
+  -- nothing locked to give back (see `SealedOrder.Cancel`). A legacy order always
+  -- does, so this is `Some` here and `fromSome` is a statement about the model, not a
+  -- partial function being waved through.
+  (a3, unlockedOpt) <- submit alice do
     exerciseCmd a2 WithdrawOrder with trader = alice; orderCid = aliceBuy
+  let unlocked = fromSome unlockedOpt
   goneA <- queryContractId venue aliceBuy
   assertMsg "withdrawn order must be archived" (isNone goneA)
   aliceUsd <- ownedAmount alice usdc
@@ -1003,8 +1056,9 @@ testCancellationKeepsTheBookHonest = do
 
   -- DAVE WITHDRAWS his own bid through the auction: order archived, his 1,300 USDC
   -- unlocked back to him, cancelledCount = 1.
-  (a5, daveUnlocked) <- submit dave do
+  (a5, daveUnlockedOpt) <- submit dave do
     exerciseCmd a4 WithdrawOrder with trader = dave; orderCid = daveBuy
+  let daveUnlocked = fromSome daveUnlockedOpt
   assertMsg "the withdrawn order is off the book" . isNone
     =<< queryContractId venue daveBuy
   Some du <- queryContractId dave daveUnlocked
@@ -2473,74 +2527,116 @@ testNavPerShare = do
 --     partially executed."
 --   Euronext §3.1: buys above / sells below the traded price "are filled in their
 --     entirety (price priority)"; only at-price orders are rationed.
---   Nasdaq Rule 4754(b)(3): class → PRICE → display → time.
+--   Nasdaq Rule 4754(b)(3): class → PRICE → display → TIME.
 --   NYSE Rule 7.35B(h)(1): better-priced orders "are GUARANTEED to participate."
 -- What CrossDesk used to do — pro-rate the ENTIRE eligible side — is the one thing
 -- none of them do, and it is why this test exists.
+--
+-- AND THE MARGIN IS NOW RATIONED ON TIME, which is the other thing all three
+-- mechanical venues share and CrossDesk used to be unable to do. `SealedOrder.seqNo`
+-- is minted by the ledger at submission (`submittedCount + 1`, stamped in the same
+-- consuming transaction that increments the count), so the allocator's sort key is
+-- (class, price, arrival) — total, unique, and authored by nobody. The third slot of
+-- every tuple below is that arrival number.
 -- ---------------------------------------------------------------------------
 testAllocationUnit : Script ()
 testAllocationUnit = do
-  -- (1) THROUGH THE PRINT FILLS IN FULL; THE MARGINAL LEVEL IS RATIONED.
+  -- (1) THROUGH THE PRINT FILLS IN FULL; THE MARGINAL LEVEL IS RATIONED ON TIME.
   -- Fifteen units of demand to hand out. The 110 bid is priced through a 100 print
-  -- and takes all 10 of what it asked for. The two 100 bids are the marginal level:
-  -- 5 units left over 20 of interest, so 2.5 each. Under the old rule all three
-  -- would have been cut to 5 and the 110 bid would have gained nothing for bidding
-  -- up — which is exactly the equilibrium that makes oversizing rational.
+  -- and takes all 10 of what it asked for. The two 100 bids are the marginal level,
+  -- with 5 units left between them — and the EARLIER one takes all 5 while the later
+  -- one gets nothing. Under the old pro-rata rule they split it 2.5/2.5; under the
+  -- rule before THAT all three were cut to 5 and the 110 bid gained nothing for
+  -- bidding up. Xetra: "the maximum of ONE order ... can be partially executed."
   allocateSide Buy 15.0
-    [("thru", Some 110.0, 10.0), ("at1", Some 100.0, 10.0), ("at2", Some 100.0, 10.0)]
-    === [("thru", 10.0), ("at1", 2.5), ("at2", 2.5)]
+    [ ("thru", Some 110.0, 10.0, 1), ("at1", Some 100.0, 10.0, 2)
+    , ("at2", Some 100.0, 10.0, 3) ]
+    === [("thru", 10.0), ("at1", 5.0), ("at2", 0.0)]
 
-  -- (2) THREE LEVELS, AND THE WORST-PRICED ONE GETS NOTHING. Ten units: the 120 bid
-  -- clears in full, the 110 bid takes the remaining 4, and the 100 bid — eligible,
-  -- but behind two better prices — is allocated ZERO. Eligibility is not precedence.
-  -- Note the input is deliberately out of order: priority comes from the PRICE.
+  -- (2) PRICE STILL BEATS TIME, and the input proves it: the 120 bid arrived LAST
+  -- and clears in full anyway, the 110 bid takes the remaining 4, and the 100 bid —
+  -- eligible, earliest of all three, but behind two better prices — is allocated
+  -- ZERO. Time is the tie-break INSIDE a price level, never across levels.
   allocateSide Buy 10.0
-    [("lo", Some 100.0, 10.0), ("hi", Some 120.0, 6.0), ("mid", Some 110.0, 8.0)]
+    [ ("lo", Some 100.0, 10.0, 1), ("hi", Some 120.0, 6.0, 2)
+    , ("mid", Some 110.0, 8.0, 3) ]
     === [("hi", 6.0), ("mid", 4.0), ("lo", 0.0)]
 
   -- (3) THE SELL SIDE IS THE MIRROR IMAGE: a LOWER limit is the more aggressive
   -- offer, so it is the one that fills first. (This is the book in TEST 3f.)
-  allocateSide Sell 15.0 [("high", Some 256.0, 10.0), ("low", Some 250.0, 10.0)]
+  allocateSide Sell 15.0
+    [("high", Some 256.0, 10.0, 1), ("low", Some 250.0, 10.0, 2)]
     === [("low", 10.0), ("high", 5.0)]
 
   -- (4) THE LIGHT SIDE IS NOT A SPECIAL CASE. When the crossed volume equals the
-  -- side's own total, every level fills in full and the same function is a no-op —
-  -- which is why the close no longer branches on "which side is heavy".
-  allocateSide Buy 20.0 [("a", Some 260.0, 12.0), ("b", Some 255.0, 8.0)]
+  -- side's own total, every order fills in full and the same function is a no-op —
+  -- which is why the close does not branch on "which side is heavy".
+  allocateSide Buy 20.0
+    [("a", Some 260.0, 12.0, 1), ("b", Some 255.0, 8.0, 2)]
     === [("a", 12.0), ("b", 8.0)]
 
-  -- (5) THE ALLOCATION SUMS EXACTLY TO THE CROSSED VOLUME. This is the audit's
-  -- worked example: three equal bids of 100 against 100 units of supply. A third of
-  -- 100 is not representable, the three raw shares sum to 99.9999999999, and the
-  -- pool holds 100. The residual (one ledger unit, 1e-10) is carried by the largest
-  -- order at the level — all three tie on size, so it goes to the first in the book.
-  -- The point is the LAST line: the fills sum to the crossed volume on the nose, so
-  -- nobody has to silently absorb a pool remainder and no receipt can misstate it.
+  -- (5) THE CASE THAT USED TO PRODUCE A ROUNDING RESIDUAL, AND NO LONGER CAN. The
+  -- audit's worked example: three equal bids of 100 against 100 units of supply. A
+  -- third of 100 is not representable in a 10dp Decimal, so pro-rata produced three
+  -- fills of 33.3333333333 summing to 99.9999999999 against a pool of 100 and
+  -- somebody had to absorb the dust. A QUEUE NEVER DIVIDES: the earliest bid takes
+  -- the whole 100 and the other two take nothing. There is no residual to allocate
+  -- because there is no division to round.
   let thirds = allocateSide Buy 100.0
-        [("a", Some 260.0, 100.0), ("b", Some 260.0, 100.0), ("c", Some 260.0, 100.0)]
-  thirds === [("a", 33.3333333334), ("b", 33.3333333333), ("c", 33.3333333333)]
+        [ ("a", Some 260.0, 100.0, 1), ("b", Some 260.0, 100.0, 2)
+        , ("c", Some 260.0, 100.0, 3) ]
+  thirds === [("a", 100.0), ("b", 0.0), ("c", 0.0)]
   sum (map snd thirds) === 100.0
 
-  -- (6) THE RESIDUAL GOES TO THE LARGEST ORDER, NOT TO WHOEVER IS LAST. Here the
-  -- raw shares round UP and sum to one unit MORE than the crossed volume, so the
-  -- residual is negative — and it is still the big order that carries it, even
-  -- though it is listed FIRST. That is the whole difference from the old behaviour,
-  -- where array position decided who absorbed the rounding.
-  let sixths = allocateSide Buy 1.0
-        [("big", Some 100.0, 4.0), ("s1", Some 100.0, 1.0), ("s2", Some 100.0, 1.0)]
-  sixths === [("big", 0.6666666666), ("s1", 0.1666666667), ("s2", 0.1666666667)]
-  sum (map snd sixths) === 1.0
+  -- (6) PERMUTATION INVARIANCE — the property the venue's honesty rests on. The
+  -- operator hands `RunClose` the book as a LIST, so if the allocator could be
+  -- steered by list order the venue would pick the marginal winner by sorting an
+  -- array after reading the whole sealed book. It cannot: the sort key
+  -- (class, price, seqNo) is a strict TOTAL order because no two orders in one book
+  -- share an arrival number, so the SAME orders in a different array order produce
+  -- byte-identical fills. This was the one real virtue of pro-rata, and it is kept.
+  allocateSide Buy 100.0
+    [ ("c", Some 260.0, 100.0, 3), ("a", Some 260.0, 100.0, 1)
+    , ("b", Some 260.0, 100.0, 2) ]
+    === thirds
 
-  -- (7) DUST ROUNDS TO ZERO AND NOTHING EXPLODES. A 1e-10 order alongside a million
-  -- gets a share of about 1e-16, which is below the ledger's smallest unit, so its
-  -- allocation is exactly 0.0 — and the side still sums to the crossed volume.
-  -- `RunClose` filters that order out before pledging instead of aborting on it.
-  let dusty = allocateSide Sell 1.0
-        [("whale", Some 250.0, 1000000.0), ("dust", Some 250.0, 0.0000000001)]
-  dusty === [("whale", 1.0), ("dust", 0.0)]
-  sum (map snd dusty) === 1.0
+  -- (7) EXACTLY ONE ORDER IS EVER PARTIALLY FILLED. Xetra T7 §11.1.1 states that as
+  -- the rule ("the maximum of ONE order ... can be partially executed"); here it is
+  -- an arithmetic consequence of walking a queue. Seven units over three 5-lots: the
+  -- first is whole, the second straddles the boundary, the third gets nothing.
+  let queued = allocateSide Buy 7.0
+        [ ("q1", Some 100.0, 5.0, 1), ("q2", Some 100.0, 5.0, 2)
+        , ("q3", Some 100.0, 5.0, 3) ]
+  queued === [("q1", 5.0), ("q2", 2.0), ("q3", 0.0)]
+  length (filter (\(_, q) -> q > 0.0 && q < 5.0) queued) === 1
 
-  -- (8) THE COLLAR, as pure arithmetic. Nasdaq: "the greater of $0.50 or 10%."
+  -- (8) TIME PRIORITY INSIDE THE UNPRICED CLASS. Nasdaq's rung (A) is verbatim "MOC
+  -- orders, WITH TIME AS THE SECONDARY PRIORITY", so when unpriced interest alone
+  -- exceeds the cross the rationing happens INSIDE the class, earliest first — and
+  -- the limit order behind them gets nothing however well it is priced. Under
+  -- pro-rata the two MOCs split 10 as 2.5 / 7.5 by size; now the early one is whole.
+  allocateSide Buy 10.0
+    [("mocA", None, 10.0, 1), ("mocC", None, 30.0, 2), ("loc260", Some 260.0, 10.0, 3)]
+    === [("mocA", 10.0), ("mocC", 0.0), ("loc260", 0.0)]
+
+  -- (9) DUST IS NOT A SPECIAL CASE IN EITHER DIRECTION, and this is the honest cost
+  -- of a queue. Arriving SECOND behind a whale that absorbs the whole cross, a 1e-10
+  -- order is allocated exactly 0.0 — the same outcome pro-rata produced by rounding,
+  -- reached by a rule instead of by an accident of precision.
+  let dustLate = allocateSide Sell 1.0
+        [("whale", Some 250.0, 1000000.0, 1), ("dust", Some 250.0, 0.0000000001, 2)]
+  dustLate === [("whale", 1.0), ("dust", 0.0)]
+  sum (map snd dustLate) === 1.0
+  -- Arriving FIRST, the same dust order fills IN FULL and the whale takes the rest.
+  -- That is not a defect, it is what "first come, first served" means, and it is why
+  -- a queue can never round anybody's fill away: both amounts are exact and they sum
+  -- to the crossed volume without a residual rule being consulted at all.
+  let dustEarly = allocateSide Sell 1.0
+        [("dust", Some 250.0, 0.0000000001, 1), ("whale", Some 250.0, 1000000.0, 2)]
+  dustEarly === [("dust", 0.0000000001), ("whale", 0.9999999999)]
+  sum (map snd dustEarly) === 1.0
+
+  -- (10) THE COLLAR, as pure arithmetic. Nasdaq: "the greater of $0.50 or 10%."
   -- At a 255 anchor the percentage dominates; at a 2.00 anchor 10% would be 0.20 and
   -- the ABSOLUTE FLOOR binds instead — which is the reason every venue with a
   -- percentage band publishes one (Nasdaq $0.50, Euronext EUR 0.02, NYSE $0.15).
@@ -2613,7 +2709,8 @@ testMixedSurplusTieBreak = do
       thruAt100 = sum [o.quantity | o <- book, o.side == Buy, thru 100.0 o]
   thruAt90  === 20.0
   thruAt100 === 10.0
-  allocateSide Buy 10.0 [("bid200", Some 200.0, 10.0), ("bid100", Some 100.0, 10.0)]
+  allocateSide Buy 10.0
+    [("bid200", Some 200.0, 10.0, 1), ("bid100", Some 100.0, 10.0, 2)]
     === [("bid200", 10.0), ("bid100", 0.0)]
 
 -- ---------------------------------------------------------------------------
@@ -2629,9 +2726,17 @@ testMixedSurplusTieBreak = do
 --
 -- Book (AAPL / USDC, anchor 255):
 --   SELL Bob   1,000,000 @ 250      BUY Alice 1 @ 260  (reserves 260)
---   SELL Carol 0.0000000001 @ 250   ← the dust
+--   SELL Carol 0.0000000001 @ 250   ← the dust, and it arrives SECOND
 -- Every candidate trades 1 unit and every one is sell-heavy by the same amount, so
--- market pressure prints at the bottom: 250. Carol's ration is ~1e-16 → 0.0.
+-- market pressure prints at the bottom: 250.
+--
+-- WHY CAROL STILL GETS 0.0, THOUGH THE REASON CHANGED. Under the old pro-rata rule
+-- her ration was ~1e-16 — below the ledger's smallest unit — so it ROUNDED to zero.
+-- Under time priority nothing rounds: Bob and Carol are both at 250 and Bob arrived
+-- first, so Bob's `min(remaining, quantity)` takes the entire 1-unit cross and there
+-- is nothing left when the queue reaches Carol. Same fill, arrived at by a published
+-- rule instead of by an accident of precision — and the liveness property this test
+-- was written to pin is unchanged: a zero fill must not abort the close.
 -- ---------------------------------------------------------------------------
 testDustDoesNotAbortTheClose : Script ()
 testDustDoesNotAbortTheClose = do
@@ -2701,9 +2806,27 @@ testDustDoesNotAbortTheClose = do
 -- path an exchange confirm that disagrees with the ledger is not a rounding
 -- nuisance; it is a broken confirm, and who benefits was decided by array position.
 --
--- The audit's own worked example, run for real: three bids of 100 against one offer
--- of 100 at a 260 print. 100/3 is not representable — the raw shares are
--- 33.3333333333 and sum to 99.9999999999 against a pool of 100.
+-- WHAT CHANGED UNDER TIME PRIORITY, AND WHY THE TEST IS STILL THE RIGHT TEST. The
+-- audit's worked example — three bids of 100 against one offer of 100 — was chosen
+-- because 100/3 is not representable, so pro-rata's raw shares summed to
+-- 99.9999999999 against a pool of 100 and SOMEBODY had to receive the extra unit.
+-- `allocateSide` no longer divides, so that book now fills the earliest bid whole and
+-- leaves the other two empty, and there is no residual to misreport. The defect this
+-- test exists to catch — a receipt that does not equal the delivery — is NOT fixed by
+-- that, because `distribute` is still the thing that hands out the pool and the LAST
+-- recipient is still the slot that used to absorb whatever was left. So the book is
+-- re-cut to keep the probe sharp: THREE fills of different sizes, the last of them a
+-- PARTIAL fill at the margin, and every one of them checked against its confirm.
+--
+-- Book (AAPL / USDC, anchor 255):
+--   SELL Bob 100 @ 260  (arrival 1)   BUY Alice 40 @ 260  (arrival 2)
+--                                     BUY Carol 40 @ 260  (arrival 3)
+--                                     BUY Dave  40 @ 260  (arrival 4)
+-- 120 units of demand into 100 of supply, all at one price. Alice and Carol fill
+-- whole; Dave is the marginal order and takes the remaining 20 — exactly one partial
+-- fill, which is Xetra's published rule (T7 §11.1.1) rather than an accident here.
+-- Dave is also LAST in the list the venue supplies, which is precisely the slot the
+-- old `distribute` handed the entire pool remainder to.
 -- ---------------------------------------------------------------------------
 testFillsMatchReceipts : Script ()
 testFillsMatchReceipts = do
@@ -2712,10 +2835,10 @@ testFillsMatchReceipts = do
   carol <- allocatePartyByHint (PartyIdHint "Carol")
   dave  <- allocatePartyByHint (PartyIdHint "Dave")
 
-  -- Each buyer reserves at its own limit: 100 × 260 = 26,000.
-  aliceCash <- mint issuer usdc alice 26000.0
-  carolCash <- mint issuer usdc carol 26000.0
-  daveCash  <- mint issuer usdc dave  26000.0
+  -- Each buyer reserves at its own limit: 40 × 260 = 10,400.
+  aliceCash <- mint issuer usdc alice 10400.0
+  carolCash <- mint issuer usdc carol 10400.0
+  daveCash  <- mint issuer usdc dave  10400.0
   bobAsset  <- mint issuer aapl bob   100.0
 
   auctionCid <- submit venue do
@@ -2726,9 +2849,9 @@ testFillsMatchReceipts = do
       submittedCount = 0; cancelledCount = 0; isOpen = True
 
   (a1, bobSell)  <- submitOrder auctionCid bob   Sell 100.0 260.0 bobAsset
-  (a2, aliceBuy) <- submitOrder a1         alice Buy  100.0 260.0 aliceCash
-  (a3, carolBuy) <- submitOrder a2         carol Buy  100.0 260.0 carolCash
-  (a4, daveBuy)  <- submitOrder a3         dave  Buy  100.0 260.0 daveCash
+  (a2, aliceBuy) <- submitOrder a1         alice Buy   40.0 260.0 aliceCash
+  (a3, carolBuy) <- submitOrder a2         carol Buy   40.0 260.0 carolCash
+  (a4, daveBuy)  <- submitOrder a3         dave  Buy   40.0 260.0 daveCash
 
   sealed   <- submit venue do exerciseCmd a4 CloseBidding
   batchCid <- submit venue do
@@ -2756,20 +2879,25 @@ testFillsMatchReceipts = do
   carolAapl === carolR.assetAmount
   daveAapl  === daveR.assetAmount
 
-  -- THE RESIDUAL RULE, STATED AND DETERMINISTIC: the marginal level is rationed
-  -- pro-rata by size and the one-unit (1e-10) rounding residual is carried by the
-  -- LARGEST order at that level — here all three tie on size, so it goes to the
-  -- first in the book the close was handed. Alice therefore holds one extra unit,
-  -- her receipt SAYS one extra unit, and the three fills sum to exactly the 100 the
-  -- uncross crossed.
-  aliceR.assetAmount === 33.3333333334
-  carolR.assetAmount === 33.3333333333
-  daveR.assetAmount  === 33.3333333333
+  -- THE QUEUE, STATED AND DETERMINISTIC: two whole fills and exactly ONE partial one
+  -- at the margin, and the three of them sum to exactly the 100 the uncross crossed
+  -- — with no division anywhere, so no residual has to be allocated to anybody.
+  aliceR.assetAmount === 40.0
+  carolR.assetAmount === 40.0
+  daveR.assetAmount  === 20.0
   (aliceR.assetAmount + carolR.assetAmount + daveR.assetAmount) === 100.0
+  assertMsg "exactly one order may be partially filled (Xetra T7 §11.1.1)"
+    (length (filter (\f -> f.quantity > 0.0 && f.quantity < 40.0)
+                    (filter (\f -> f.buyer /= venue) batch.fills)) == 1)
 
-  -- The cash leg is settled by the same rule and it balances too: the seller's
-  -- confirm equals the USDC he actually holds, and equals the whole pool the three
-  -- buyers pledged (100 × 260).
+  -- AND DAVE — the marginal fill, and the LAST entry in the array the venue handed
+  -- the close — got back the 20 × 260 = 5,200 he did not spend, to the cent. That is
+  -- the slot the old `distribute` used to quietly overpay out of the pool remainder.
+  daveUsd <- ownedAmount dave usdc
+  daveUsd === 5200.0
+
+  -- The cash leg balances too: the seller's confirm equals the USDC he actually
+  -- holds, and equals the whole pool the three buyers pledged (100 × 260).
   bobUsd  <- ownedAmount bob usdc
   bobAapl <- ownedAmount bob aapl
   bobUsd  === bobR.cashAmount
@@ -3146,10 +3274,13 @@ testMocClassPriority = do
   setupInstruments issuer
   carol <- allocatePartyByHint (PartyIdHint "Carol")
 
-  -- THE ALLOCATION RULE FIRST, AS PURE ARITHMETIC. The MOC is listed SECOND on
-  -- purpose: precedence comes from the CLASS, not from array position, and both
-  -- orders here are eligible at the print.
-  allocateSide Buy 10.0 [("loc260", Some 260.0, 10.0), ("moc", None, 10.0)]
+  -- THE ALLOCATION RULE FIRST, AS PURE ARITHMETIC. The MOC is listed second AND
+  -- ARRIVED SECOND, on purpose: precedence comes from the CLASS, ahead of both price
+  -- and time, and both orders here are eligible at the print. An unpriced order that
+  -- reached the book after a limit order still outranks it — Nasdaq 4754(b)(3) puts
+  -- MOC on rung (A) and everything priced on rung (B), and time is only ever the
+  -- tie-break WITHIN a rung.
+  allocateSide Buy 10.0 [("loc260", Some 260.0, 10.0, 1), ("moc", None, 10.0, 2)]
     === [("moc", 10.0), ("loc260", 0.0)]
 
   bobAsset  <- mint issuer aapl bob   10.0
@@ -3299,9 +3430,13 @@ testMocLocLadderEndToEnd = do
   carol <- allocatePartyByHint (PartyIdHint "Carol")
   dave  <- allocatePartyByHint (PartyIdHint "Dave")
 
-  -- THE LADDER AS PURE ARITHMETIC, before a single leg moves.
+  -- THE LADDER AS PURE ARITHMETIC, before a single leg moves. The arrival numbers are
+  -- the ones the ledger will actually stamp below (Bob's sell is 1, so Alice is 2,
+  -- Carol 3, Dave 4) — and note that neither price nor time decides anything here
+  -- except at the margin: Dave is alone at the print, so he is the one partial fill.
   allocateSide Buy 15.0
-    [("dave255", Some 255.0, 10.0), ("carol260", Some 260.0, 5.0), ("aliceMoc", None, 5.0)]
+    [ ("dave255", Some 255.0, 10.0, 4), ("carol260", Some 260.0, 5.0, 3)
+    , ("aliceMoc", None, 5.0, 2) ]
     === [("aliceMoc", 5.0), ("carol260", 5.0), ("dave255", 5.0)]
 
   bobAsset  <- mint issuer aapl bob   15.0
@@ -3449,7 +3584,8 @@ testUnpricedBuyFundedAboveTheAnchor = do
   bobUsd  === 1100.0
 
 -- ---------------------------------------------------------------------------
--- TEST 22 — UNPRICED INTEREST BIGGER THAN THE CROSS RATIONS AMONG THE UNPRICED.
+-- TEST 22 — UNPRICED INTEREST BIGGER THAN THE CROSS RATIONS AMONG THE UNPRICED,
+--           ON TIME.
 -- ---------------------------------------------------------------------------
 -- Nasdaq Rule 4754(b)(3) rung (A) allocates MOC first "with time as the secondary
 -- priority" — so when unpriced interest ALONE exceeds the crossed volume, the
@@ -3457,31 +3593,39 @@ testUnpricedBuyFundedAboveTheAnchor = do
 -- a corner case: an index reconstitution day is exactly a book where the unpriced
 -- side dwarfs everything else.
 --
--- CrossDesk rations that level pro-rata BY SIZE rather than on time, for the reason
--- given in the module header: a SealedOrder carries no on-ledger arrival timestamp,
--- so the only "time" available at the close is the order of the array the OPERATOR
--- hands to RunClose — and rationing on that would let the venue choose who fills by
--- permuting a list. Pro-rata by size is invariant to that permutation.
+-- THIS TEST USED TO ASSERT PRO-RATA BY SIZE, and the reason it gave was true when it
+-- was written: a SealedOrder carried no on-ledger arrival order, so the only "time"
+-- available at the close was the order of the array the OPERATOR hands `RunClose` —
+-- and rationing on that would have let the venue choose the marginal winner by
+-- permuting a list. `SealedOrder.seqNo` removed that obstacle: `SubmitOrder` is
+-- consuming, so the ledger mints `submittedCount + 1` inside the trader's own
+-- submitting transaction and the venue authors none of it. So the class is rationed
+-- the way Nasdaq's own rung (A) says: EARLIEST FIRST.
 --
 -- Book (AAPL / USDC, anchor 255):
---   SELL Bob 10 @ 250     BUY Alice 10 UNPRICED   BUY Carol 30 UNPRICED
---                         BUY Dave  10 @ 260 (LOC — behind BOTH of them)
+--   SELL Bob 10 @ 250   (arrival 1)  BUY Alice 10 UNPRICED  (arrival 2)
+--                                    BUY Carol 30 UNPRICED  (arrival 3)
+--                                    BUY Dave  10 @ 260     (arrival 4, LOC)
 -- Every candidate trades 10 and is buy-heavy by 40, so the print goes to the top:
--- 260. Forty units of unpriced demand chase ten units of supply: Alice takes
--- 10 × 10/40 = 2.5, Carol takes 30 × 10/40 = 7.5, and Dave — bidding 260 INTO a 260
--- print, the best price he could possibly have named — gets nothing.
+-- 260. Forty units of unpriced demand chase ten units of supply, and the queue —
+-- not the sizes — decides: Alice, who got there first, takes all 10; Carol's 30
+-- units of unpriced demand take NOTHING despite being three times the size; and
+-- Dave — bidding 260 INTO a 260 print, the best price he could possibly have
+-- named — gets nothing either, because class outranks price. Pro-rata would have
+-- split the 10 as 2.5 / 7.5 by size.
 -- ---------------------------------------------------------------------------
-testUnpricedInterestRationedProRata : Script ()
-testUnpricedInterestRationedProRata = do
+testUnpricedInterestRationedByTime : Script ()
+testUnpricedInterestRationedByTime = do
   Parties{..} <- setup
   setupInstruments issuer
   carol <- allocatePartyByHint (PartyIdHint "Carol")
   dave  <- allocatePartyByHint (PartyIdHint "Dave")
 
-  -- PURE ARITHMETIC FIRST: pro-rata WITHIN the unpriced class, zero for the limit.
+  -- PURE ARITHMETIC FIRST: time priority WITHIN the unpriced class, zero for the
+  -- limit order behind them. Size buys nothing at all — Carol is 3x Alice's order.
   allocateSide Buy 10.0
-    [("mocA", None, 10.0), ("mocC", None, 30.0), ("loc260", Some 260.0, 10.0)]
-    === [("mocA", 2.5), ("mocC", 7.5), ("loc260", 0.0)]
+    [("mocA", None, 10.0, 2), ("mocC", None, 30.0, 3), ("loc260", Some 260.0, 10.0, 4)]
+    === [("mocA", 10.0), ("mocC", 0.0), ("loc260", 0.0)]
 
   bobAsset  <- mint issuer aapl bob   10.0
   aliceCash <- mint issuer usdc alice 2805.0   -- MOC: 10 × (255 + 25.50)
@@ -3500,6 +3644,16 @@ testUnpricedInterestRationedProRata = do
   (a3, carolBuy) <- submitMocOrder a2         carol Buy  30.0       carolCash
   (a4, daveBuy)  <- submitOrder    a3         dave  Buy  10.0 260.0 daveCash
 
+  -- THE ARRIVAL NUMBERS ARE ON THE LEDGER, not in the operator's array — read them
+  -- BEFORE the close, because an order that does not trade is cancelled on close and
+  -- there is nothing left to query afterwards. Bob's sell was the first accepted
+  -- submission, so Alice is 2 and Carol is 3, and 2 < 3 is the entire reason the ten
+  -- units go where they go.
+  Some aliceO <- queryContractId venue aliceBuy
+  Some carolO <- queryContractId venue carolBuy
+  aliceO.seqNo === 2
+  carolO.seqNo === 3
+
   sealed   <- submit venue do exerciseCmd a4 CloseBidding
   batchCid <- submit venue do
     exerciseCmd sealed RunClose with
@@ -3508,26 +3662,28 @@ testUnpricedInterestRationedProRata = do
 
   Some batch <- queryContractId auditor batchCid
   batch.closingPrice === 260.0
-  length batch.fills === 3          -- 2 unpriced buys + 1 sell. Dave is not there.
+  length batch.fills === 2          -- 1 unpriced buy + 1 sell. Only Alice traded.
 
-  -- PRO-RATA BY SIZE INSIDE THE CLASS: 10 and 30 share the 10 that crossed, and the
-  -- two fills sum EXACTLY to the crossed volume.
+  -- TIME PRIORITY INSIDE THE CLASS: the first-arrived unpriced order takes the whole
+  -- cross, and its single fill IS the crossed volume.
   let aliceFill = head (filter (\f -> f.buyer == alice) batch.fills)
-      carolFill = head (filter (\f -> f.buyer == carol) batch.fills)
-  aliceFill.quantity === 2.5
-  carolFill.quantity === 7.5
-  (aliceFill.quantity + carolFill.quantity) === 10.0
+  aliceFill.quantity === 10.0
+  assertMsg "the later unpriced order must not appear in the batch"
+    (null (filter (\f -> f.buyer == carol) batch.fills))
 
   aliceAapl <- ownedAmount alice aapl
   carolAapl <- ownedAmount carol aapl
-  aliceAapl === 2.5
-  carolAapl === 7.5
-  -- Change back off the collar-sized reservations: Alice spent 2.5 × 260 = 650 of
-  -- 2,805; Carol spent 7.5 × 260 = 1,950 of 8,415.
+  aliceAapl === 10.0
+  carolAapl === 0.0
+  -- Change back off the collar-sized reservation: Alice spent 10 × 260 = 2,600 of the
+  -- 2,805 she pinned at the top of the band. Carol traded nothing and keeps all 8,415
+  -- — being second in a queue is not being charged.
   aliceUsd <- ownedAmount alice usdc
   carolUsd <- ownedAmount carol usdc
-  aliceUsd === 2155.0
-  carolUsd === 6465.0
+  aliceUsd === 205.0
+  carolUsd === 8415.0
+  assertMsg "an unpriced order behind another unpriced order is cancelled on close"
+    . isNone =<< queryContractId venue carolBuy
 
   -- THE LIMIT ORDER BEHIND THEM GETS NOTHING — and is charged nothing. Dave bid the
   -- print exactly and was still outranked by the class above him; his order is
@@ -3542,6 +3698,225 @@ testUnpricedInterestRationedProRata = do
   -- Bob sold his 10 at the print.
   bobUsd <- ownedAmount bob usdc
   bobUsd === 2600.0
+
+-- ---------------------------------------------------------------------------
+-- TEST 22a — TIME PRIORITY AT THE MARGIN, END TO END ON THE LEDGER.
+-- ---------------------------------------------------------------------------
+-- THE HEADLINE OF THE TIME-PRIORITY WORK, and the one a trader checks first. Two
+-- IDENTICAL bids sit at the print. Every mechanical closing auction in the world
+-- fills the one that got there first and leaves the other with whatever is left:
+--   Nasdaq Rule 4754(b)(3): "order class -> price -> display status -> TIME", and
+--     rung (A) is verbatim "MOC orders, WITH TIME AS THE SECONDARY PRIORITY".
+--   Xetra T7 §11.1.1: "price/TIME priority is valid so that the maximum of ONE
+--     order ... can be partially executed."
+--   Euronext Trading Manual §3.1: orders "limited EQUAL to the uncrossing price are
+--     filled on a FIRST-COME/FIRST-SERVED basis (time priority)."
+-- CrossDesk could not do this until the ledger could mint an arrival order that the
+-- venue does not author. It can now: `SubmitOrder` is CONSUMING, so it stamps
+-- `SealedOrder.seqNo = submittedCount + 1` inside the trader's own transaction.
+--
+-- Book (AAPL / USDC, anchor 255):
+--   SELL Bob   12 @ 250   (arrival 1)
+--   BUY  Alice  6 @ 255   (arrival 2)  ← at the print, EARLY
+--   BUY  Carol  6 @ 255   (arrival 3)  ← at the print, LATE — same price, same size
+--   BUY  Dave   4 @ 260   (arrival 4)  ← through the print, and the LAST to arrive
+-- 250 and 255 both trade 12 and both leave the same 4 of unfilled demand; both carry
+-- a bid surplus, so market pressure prints at the higher of them — 255.
+-- THE THREE RUNGS, ALL VISIBLE IN ONE BOOK:
+--   PRICE beats TIME  — Dave arrived last and is filled first, in full, because he is
+--                       priced THROUGH the print (NYSE 7.35B(h)(1): better-priced
+--                       orders are "guaranteed to participate").
+--   TIME breaks a PRICE TIE — Alice and Carol are indistinguishable on class, price
+--                       and size; Alice arrived first, so Alice is whole (6) and
+--                       Carol is the single partial fill (2).
+--   EXACTLY ONE PARTIAL — which is Xetra's rule, produced here by walking a queue.
+-- Under the pro-rata rule this replaces, all three would have been cut to
+-- 12 x 6/16 = 4.5, 4.5 and 12 x 4/16 = 3.0: Dave's better price would have bought him
+-- eligibility and no precedence, and arriving early would have bought nothing at all.
+-- ---------------------------------------------------------------------------
+testTimePriorityAtTheMargin : Script ()
+testTimePriorityAtTheMargin = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  carol <- allocatePartyByHint (PartyIdHint "Carol")
+  dave  <- allocatePartyByHint (PartyIdHint "Dave")
+
+  -- THE LADDER AS PURE ARITHMETIC FIRST, with the arrival numbers the ledger will
+  -- actually stamp. Note the list is handed over in a deliberately unhelpful order.
+  allocateSide Buy 12.0
+    [ ("carol255", Some 255.0, 6.0, 3), ("dave260", Some 260.0, 4.0, 4)
+    , ("alice255", Some 255.0, 6.0, 2) ]
+    === [("dave260", 4.0), ("alice255", 6.0), ("carol255", 2.0)]
+
+  bobAsset  <- mint issuer aapl bob   12.0
+  aliceCash <- mint issuer usdc alice 1530.0   -- 6 × 255, her own limit
+  carolCash <- mint issuer usdc carol 1530.0   -- 6 × 255, identical to Alice's
+  daveCash  <- mint issuer usdc dave  1040.0   -- 4 × 260
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bob, carol, dave]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+
+  (a1, bobSell)  <- submitOrder auctionCid bob   Sell 12.0 250.0 bobAsset
+  (a2, aliceBuy) <- submitOrder a1         alice Buy   6.0 255.0 aliceCash
+  (a3, carolBuy) <- submitOrder a2         carol Buy   6.0 255.0 carolCash
+  (a4, daveBuy)  <- submitOrder a3         dave  Buy   4.0 260.0 daveCash
+
+  -- THE ARRIVAL NUMBERS ARE ON THE LEDGER, minted by the submissions themselves. The
+  -- operator supplied none of them and no choice on either template can rewrite one.
+  Some aliceO <- queryContractId venue aliceBuy
+  Some carolO <- queryContractId venue carolBuy
+  Some daveO  <- queryContractId venue daveBuy
+  aliceO.seqNo === 2
+  carolO.seqNo === 3
+  daveO.seqNo  === 4
+
+  sealed   <- submit venue do exerciseCmd a4 CloseBidding
+  -- The venue hands the buy list in an order that would favour Carol if array
+  -- position meant anything. It does not.
+  batchCid <- submit venue do
+    exerciseCmd sealed RunClose with
+      buyOrders  = [carolBuy, daveBuy, aliceBuy]
+      sellOrders = [bobSell]
+
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 255.0
+  length batch.fills === 4          -- 3 buys + 1 sell: everybody traded something
+
+  let aliceFill = head (filter (\f -> f.buyer == alice) batch.fills)
+      carolFill = head (filter (\f -> f.buyer == carol) batch.fills)
+      daveFill  = head (filter (\f -> f.buyer == dave ) batch.fills)
+  -- PRICE BEATS TIME: last to arrive, first to be filled, in full.
+  daveFill.quantity  === 4.0
+  -- TIME BREAKS THE PRICE TIE: identical orders, and the earlier one is whole.
+  aliceFill.quantity === 6.0
+  carolFill.quantity === 2.0
+  (aliceFill.quantity + carolFill.quantity + daveFill.quantity) === 12.0
+
+  -- THE COUNTERFACTUAL, AS ARITHMETIC. Pro-rata across the whole eligible side gave
+  -- every order the same haircut regardless of price or arrival — which is the
+  -- equilibrium where the only way to get filled is to oversize.
+  let proRata : Decimal -> Decimal
+      proRata q = (q * 12.0) / 16.0
+  proRata 6.0 === 4.5
+  proRata 4.0 === 3.0
+  assertMsg "the earlier at-the-print order must do strictly better than pro-rata"
+    (aliceFill.quantity > proRata 6.0)
+  assertMsg "the better-priced order must do strictly better than pro-rata"
+    (daveFill.quantity > proRata 4.0)
+
+  -- BALANCES. Alice spends every cent she reserved (6 × 255 = 1,530); Carol spends
+  -- 2 × 255 = 510 of hers and keeps 1,020; Dave pays the print, not his limit, so 20
+  -- of his 1,040 comes back. Bob sold all 12 at 255 = 3,060.
+  aliceAapl <- ownedAmount alice aapl
+  aliceUsd  <- ownedAmount alice usdc
+  carolAapl <- ownedAmount carol aapl
+  carolUsd  <- ownedAmount carol usdc
+  daveAapl  <- ownedAmount dave  aapl
+  daveUsd   <- ownedAmount dave  usdc
+  bobAapl   <- ownedAmount bob   aapl
+  bobUsd    <- ownedAmount bob   usdc
+  aliceAapl === 6.0
+  aliceUsd  === 0.0
+  carolAapl === 2.0
+  carolUsd  === 1020.0
+  daveAapl  === 4.0
+  daveUsd   === 20.0
+  bobAapl   === 0.0
+  bobUsd    === 3060.0
+
+-- ---------------------------------------------------------------------------
+-- TEST 22b — CANCEL AND RE-LODGE, AND YOU GO TO THE BACK OF THE QUEUE.
+-- ---------------------------------------------------------------------------
+-- THE PROPERTY THAT MAKES A QUEUE A QUEUE. Every real venue treats a cancel/replace
+-- as a NEW order for time-priority purposes — you cannot hold a place in line and
+-- change your mind for free. Here that is not a rule anybody had to write: `seqNo` is
+-- minted at submission and `WithdrawOrder` ARCHIVES the order, so re-lodging mints a
+-- fresh, higher number. The mechanism is the policy.
+--
+-- It is also the honest cost of time priority, and it is worth pinning with a test
+-- rather than a sentence: under the pro-rata rule this replaces, withdrawing and
+-- re-lodging an identical order cost a trader NOTHING at all.
+--
+-- Book (AAPL / USDC, anchor 255):
+--   SELL Bob   6 @ 250   (arrival 1)
+--   BUY  Alice 6 @ 255   (arrival 2)  ← then WITHDRAWN and re-lodged as arrival 4
+--   BUY  Carol 6 @ 255   (arrival 3)
+-- Twelve units of demand into six of supply, both bids identical and at the print.
+-- Alice was first. After her round trip she is LAST, and Carol — who never moved —
+-- takes the entire cross.
+-- ---------------------------------------------------------------------------
+testResubmissionLosesItsPlace : Script ()
+testResubmissionLosesItsPlace = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  carol <- allocatePartyByHint (PartyIdHint "Carol")
+
+  bobAsset  <- mint issuer aapl bob   6.0
+  aliceCash <- mint issuer usdc alice 1530.0   -- 6 × 255
+  carolCash <- mint issuer usdc carol 1530.0   -- 6 × 255, identical
+
+  auctionCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"; referencePrice = 255.0
+      participants = [alice, bob, carol]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+
+  (a1, bobSell)   <- submitOrder auctionCid bob   Sell 6.0 250.0 bobAsset
+  (a2, aliceBuy1) <- submitOrder a1         alice Buy  6.0 255.0 aliceCash
+  (a3, carolBuy)  <- submitOrder a2         carol Buy  6.0 255.0 carolCash
+
+  -- Alice was ahead of Carol.
+  Some aliceO1 <- queryContractId venue aliceBuy1
+  Some carolO  <- queryContractId venue carolBuy
+  aliceO1.seqNo === 2
+  carolO.seqNo  === 3
+
+  -- ...and then she pulls the order and lodges the identical one again. The
+  -- withdrawal unlocks her reserved cash (the archive touches the ORDER, never the
+  -- balance) and bumps `cancelledCount`, so the book count still reconciles.
+  (a4, aliceFreedOpt) <- submit alice do
+    exerciseCmd a3 WithdrawOrder with trader = alice; orderCid = aliceBuy1
+  let aliceFreed = fromSome aliceFreedOpt
+  (a5, aliceBuy2)  <- submitOrder a4 alice Buy 6.0 255.0 aliceFreed
+
+  -- THE WHOLE POINT: the re-lodged order carries a NEW, HIGHER arrival number. It is
+  -- the fourth submission this book accepted, and it is stamped as such.
+  Some aliceO2 <- queryContractId venue aliceBuy2
+  aliceO2.seqNo === 4
+  assertMsg "re-lodging must not preserve the original place in the queue"
+    (aliceO2.seqNo > carolO.seqNo)
+
+  sealed   <- submit venue do exerciseCmd a5 CloseBidding
+  batchCid <- submit venue do
+    exerciseCmd sealed RunClose with
+      buyOrders  = [aliceBuy2, carolBuy]
+      sellOrders = [bobSell]
+
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 255.0
+  -- TWO fill records: Carol's buy and Bob's sell. Alice queued behind the order she
+  -- used to be in front of, and there was nothing left when the walk reached her.
+  length batch.fills === 2
+  assertMsg "the re-lodged order must not appear in the batch"
+    (null (filter (\f -> f.buyer == alice) batch.fills))
+
+  -- Carol takes the whole cross; Alice trades nothing and — as always — is charged
+  -- nothing. Losing priority is not losing money.
+  carolAapl <- ownedAmount carol aapl
+  carolUsd  <- ownedAmount carol usdc
+  aliceAapl <- ownedAmount alice aapl
+  aliceUsd  <- ownedAmount alice usdc
+  carolAapl === 6.0
+  carolUsd  === 0.0
+  aliceAapl === 0.0
+  aliceUsd  === 1530.0
+  bobUsd <- ownedAmount bob usdc
+  bobUsd === 1530.0
 
 -- ---------------------------------------------------------------------------
 -- TEST 23 — AN UNPRICED ORDER IS NEVER "AWAY FROM THE CROSS".
@@ -3689,7 +4064,7 @@ testReopenRecoversAFailedClose = do
   submitMustFail bob do
     exerciseCmd sealed SubmitOrder with
       trader = bob; side = Sell; quantity = 10.0
-      limitPrice = Some 250.0; holdingCid = bobAsset
+      limitPrice = Some 250.0; commitment = ReserveHolding bobAsset
   submitMustFail venue do
     exerciseCmd sealed ClearOrder with orderCid = aliceBuy
 
@@ -3708,8 +4083,9 @@ testReopenRecoversAFailedClose = do
   -- 4. THE STRANDED TRADER IS WHOLE AGAIN. Her order comes off the book and her
   --    2,600 USDC comes back as a private holding — the collateral that was locked
   --    behind an un-cancellable order for as long as the seal stood.
-  (a2, unlocked) <- submit alice do
+  (a2, unlockedOpt) <- submit alice do
     exerciseCmd reopened WithdrawOrder with trader = alice; orderCid = aliceBuy
+  let unlocked = fromSome unlockedOpt
   aliceUsd0 <- ownedAmount alice usdc
   aliceUsd0 === 2600.0
   Some uh <- queryContractId alice unlocked
@@ -3775,18 +4151,18 @@ testWrongInstrumentOrderRejected = do
   submitMustFail alice do
     exerciseCmd auctionCid SubmitOrder with
       trader = alice; side = Buy; quantity = 10.0
-      limitPrice = Some 260.0; holdingCid = aliceAsset
+      limitPrice = Some 260.0; commitment = ReserveHolding aliceAsset
   -- ...and a SELL delivers the ASSET, so backing it with cash is rejected too.
   submitMustFail bob do
     exerciseCmd auctionCid SubmitOrder with
       trader = bob; side = Sell; quantity = 10.0
-      limitPrice = Some 250.0; holdingCid = bobCash
+      limitPrice = Some 250.0; commitment = ReserveHolding bobCash
   -- An UNPRICED MOC is held to exactly the same rule — there is no order type that
   -- gets to pre-commit a token the book does not settle in.
   submitMustFail alice do
     exerciseCmd auctionCid SubmitOrder with
       trader = alice; side = Buy; quantity = 10.0
-      limitPrice = None; holdingCid = aliceAsset
+      limitPrice = None; commitment = ReserveHolding aliceAsset
 
   -- NOTHING RESTED. Three rejected submissions left the book empty and the counter
   -- untouched — a rejected order cannot pad `submittedCount` and jam the close.
@@ -4116,3 +4492,744 @@ testForgedPerformanceCannotBar = do
   perf.owed      === 8.0
   perf.met       === True
   assertMsg "a mandate that met its commitment survives" (isSome outcome.mandate)
+
+
+-- ===========================================================================
+-- THE CIP-56 CLOSE — the sealed auction settling REAL registry assets.
+-- ===========================================================================
+-- The question this whole section exists to answer: can the Market-on-Close cross
+-- trade a Canton Network Token Standard asset that THIS CODEBASE DID NOT ISSUE?
+--
+-- The fixture below is built so that the answer means something. There are TWO
+-- independent registries — one administering cETH (standing in for onRails), one
+-- administering the cash leg (standing in for a bank) — and the auction knows
+-- nothing about either beyond a party id and a ticker. Every asset movement goes
+-- through `AllocationFactory_Allocate` on the REGISTRY'S OWN factory and
+-- `Allocation_ExecuteTransfer` on the REGISTRY'S OWN allocation. Neither
+-- MarketOnClose nor TokenSettlement imports the registry module; neither has a
+-- choice on any holding; neither could name the template if it wanted to.
+--
+--   testTokenStandardCross          — the headline. Two registries, three traders,
+--                                     one print, two bilateral pairs, one atomic
+--                                     settlement — and the venue never holds a unit.
+--   testCip56OrderCannotBePledged   — THE SECURITY FIX. The trust assumption
+--                                     `PledgeToVenue` carried is closed by
+--                                     construction on a CIP-56 book.
+--   testTokenStandardBindsTheRegistry — a "cETH" from a different admin is refused.
+--   testTokenStandardNoDeliveryWithoutPayment — an allocation is bound to its own
+--                                     leg, and the venue cannot settle a subset.
+--   testTokenStandardRequestsStayDark — after the print, each sender sees ONLY its
+--                                     own obligations.
+--   testTokenStandardDoorChecks     — the wrong-instrument check, the buying-power
+--                                     check and the already-locked check, on a real
+--                                     standard holding.
+--   testSettlementModelsDoNotMix    — each close refuses the other's book, by name.
+-- ===========================================================================
+
+-- | The two-registry fixture. `assetRegistry` stands in for onRails (cETH);
+-- `cashRegistry` for a completely separate cash issuer. That they are DIFFERENT
+-- parties is the point: a cross that settles across two unrelated registries is the
+-- thing a venue-issued stand-in can never demonstrate.
+data TokenVenue = TokenVenue
+  with
+    assetRegistry : Party
+    cashRegistry  : Party
+    venue         : Party
+    auditor       : Party
+    alice         : Party
+    bob           : Party
+    bank          : Party
+    eve           : Party
+    cETH          : TS.InstrumentId
+    cUSD          : TS.InstrumentId
+    assetFactory  : ContractId TokenStandardRegistry
+    cashFactory   : ContractId TokenStandardRegistry
+    assetDisclose : Disclosure
+    cashDisclose  : Disclosure
+    now           : Time
+
+setupTokenVenue : Script TokenVenue
+setupTokenVenue = do
+  assetRegistry <- allocatePartyByHint (PartyIdHint "onRails")
+  cashRegistry  <- allocatePartyByHint (PartyIdHint "CashRegistry")
+  venue         <- allocatePartyByHint (PartyIdHint "Venue")
+  auditor       <- allocatePartyByHint (PartyIdHint "Auditor")
+  alice         <- allocatePartyByHint (PartyIdHint "Alice")
+  bob           <- allocatePartyByHint (PartyIdHint "Bob")
+  bank          <- allocatePartyByHint (PartyIdHint "Bank")
+  eve           <- allocatePartyByHint (PartyIdHint "Eve")
+
+  -- CIP-56 instrument identity is {admin, id} — NOT a bare ticker. This is what
+  -- lets the close bind a book to a REGISTRY rather than to a string.
+  let cETH = TS.InstrumentId with admin = assetRegistry; id = ceth
+      cUSD = TS.InstrumentId with admin = cashRegistry;  id = usdc
+
+  assetFactory <- submit assetRegistry $
+    createCmd TokenStandardRegistry with admin = assetRegistry
+  cashFactory  <- submit cashRegistry $
+    createCmd TokenStandardRegistry with admin = cashRegistry
+  -- Wallets obtain a registry's factory as an explicitly DISCLOSED contract over the
+  -- Registry API in production, so the tests do it that way rather than making the
+  -- factory public.
+  assetDisclose <- fromSome <$> queryDisclosure assetRegistry assetFactory
+  cashDisclose  <- fromSome <$> queryDisclosure cashRegistry cashFactory
+  now <- getTime
+  pure TokenVenue with ..
+
+-- | Mint a free standard holding. CIP-56 v1 deliberately does not standardise
+-- issuance, so this is the one registry-specific step BY DESIGN.
+issueToken : Party -> Party -> TS.InstrumentId -> Decimal -> Script (ContractId TS.Holding)
+issueToken admin owner instrumentId amount =
+  toInterfaceContractId <$>
+    submit (actAs [admin, owner]) (createCmd TokenStandardHolding with
+      admin; owner; instrumentId; amount; lock = None)
+
+-- | A party's FREE (unlocked) balance of a standard instrument.
+tokenBalance : Party -> TS.InstrumentId -> Script Decimal
+tokenBalance p instrumentId = do
+  hs <- query @TokenStandardHolding p
+  pure $ sum [h.amount | (_, h) <- hs, h.owner == p, h.instrumentId == instrumentId, isNone h.lock]
+
+-- | A party's LOCKED balance — committed to a settlement and no longer spendable.
+tokenLocked : Party -> TS.InstrumentId -> Script Decimal
+tokenLocked p instrumentId = do
+  hs <- query @TokenStandardHolding p
+  pure $ sum [h.amount | (_, h) <- hs, h.owner == p, h.instrumentId == instrumentId, isSome h.lock]
+
+-- | A sender's OWN legs, read off the standard `AllocationRequest` interface exactly
+-- as a CIP-56 wallet would — no app-specific API anywhere in the path.
+readOwnLegs : Party -> Script TS.AllocationRequestView
+readOwnLegs p = do
+  reqs <- queryInterface @TS.AllocationRequest p
+  case [v | (_, Some v) <- reqs] of
+    [v] -> pure v
+    _   -> abort "expected exactly one AllocationRequest for this sender"
+
+-- | Drive `AllocationFactory_Allocate` on a registry's factory as a wallet would:
+-- the spec is built ENTIRELY from what the standard interface showed the sender.
+allocateFromRequest
+  :  TokenVenue -> Party -> ContractId TokenStandardRegistry -> Disclosure -> Party
+  -> TS.AllocationRequestView -> Text -> [ContractId TS.Holding]
+  -> Script (ContractId TS.Allocation)
+allocateFromRequest env sender factoryCid disclosure admin reqView legId inputHoldingCids = do
+  let spec = TS.AllocationSpecification with
+        settlement = reqView.settlement
+        transferLegId = legId
+        transferLeg = fromSome (TextMap.lookup legId reqView.transferLegs)
+  res <- submit (actAs sender <> disclose disclosure) $
+    exerciseCmd (toInterfaceContractId @TS.AllocationFactory factoryCid)
+      TS.AllocationFactory_Allocate with
+        expectedAdmin = admin
+        allocation = spec
+        requestedAt = env.now
+        inputHoldingCids
+        extraArgs = noExtraArgs
+  case res.output of
+    TS.AllocationInstructionResult_Completed allocationCid -> pure allocationCid
+    _ -> abort "the registry was expected to create the allocation in a single step"
+
+-- | Open a CIP-56 auction over cETH against the cash registry's cash.
+openTokenAuction : TokenVenue -> Decimal -> Script (ContractId ClosingAuction)
+openTokenAuction env anchor =
+  submit env.venue $ createCmd ClosingAuction with
+    operator = env.venue; auditor = env.auditor
+    instrumentId = ceth; cashInstrument = usdc
+    session = "Close"; referencePrice = anchor
+    participants = [env.alice, env.bob, env.bank]
+    liquidityProvider = None; fixingRef = None
+    submittedCount = 0; cancelledCount = 0; isOpen = True
+
+-- | Lodge a sealed order backed by a DECLARED standard holding (checked, not locked).
+submitTokenOrder
+  :  ContractId ClosingAuction -> Party -> Side -> Decimal -> Decimal
+  -> ContractId TS.Holding
+  -> Script (ContractId ClosingAuction, ContractId SealedOrder)
+submitTokenOrder auctionCid trader side quantity limitPrice tokenCid =
+  submit trader $ exerciseCmd auctionCid SubmitOrder with
+    trader; side; quantity; limitPrice = Some limitPrice
+    commitment = DeclareTokenHolding tokenCid
+
+
+-- ---------------------------------------------------------------------------
+-- 1. THE HEADLINE. A real token-standard cross, end to end.
+-- ---------------------------------------------------------------------------
+-- Alice bids 5 cETH at 2,500. Bob offers 3 at 2,350; the Bank offers 2 at 2,400. The
+-- anchor is 2,400. The uncross prints 2,400 — the same tie-break ladder, the same
+-- collar, the same class -> price -> arrival-sequence allocation as every other close
+-- in this file — and the print crosses 5 units across TWO bilateral pairs.
+--
+-- Then the part that is new: nothing settles until each sender has ALLOCATED through
+-- its own registry's factory, and when it does, every leg of both pairs moves in ONE
+-- transaction. The venue is never an owner of anything at any point.
+testTokenStandardCross : Script ()
+testTokenStandardCross = do
+  env@TokenVenue{..} <- setupTokenVenue
+
+  -- Real CIP-56 holdings, issued by two DIFFERENT registries.
+  bobCeth   <- issueToken assetRegistry bob   cETH 4.0
+  bankCeth  <- issueToken assetRegistry bank  cETH 3.0
+  aliceCash <- issueToken cashRegistry  alice cUSD 13000.0
+
+  auctionCid <- openTokenAuction env 2400.0
+  -- The sealed orders declare their backing; NOTHING is locked (see `OrderBacking`).
+  (a1, aliceBuy) <- submitTokenOrder auctionCid alice Buy  5.0 2500.0 aliceCash
+  (a2, bobSell)  <- submitTokenOrder a1        bob   Sell 3.0 2350.0 bobCeth
+  (a3, bankSell) <- submitTokenOrder a2        bank  Sell 2.0 2400.0 bankCeth
+
+  -- Every balance is still free and spendable while the orders rest. Under the
+  -- legacy model these would already be carved off and disclosed to the venue.
+  tokenBalance alice cUSD >>= (=== 13000.0)
+  tokenLocked  alice cUSD >>= (=== 0.0)
+  tokenBalance bob   cETH >>= (=== 4.0)
+
+  sealed <- submit venue $ exerciseCmd a3 CloseBidding
+
+  -- ---- THE PRINT. No asset moves in this transaction. ----
+  closeRes <- submit venue $ exerciseCmd sealed RunCloseTokenStandard with
+    buyOrders = [aliceBuy]
+    sellOrders = [bobSell, bankSell]
+    assetAdmin = assetRegistry
+    cashAdmin = cashRegistry
+    settlementId = "MOC-CETH-2026-08-05"
+    allocateBefore = addRelTime now (hours 1)
+    settleBefore = addRelTime now (hours 2)
+
+  Some cross <- queryContractId venue closeRes.cross
+  cross.closingPrice === 2400.0
+  cross.crossedQty === 5.0
+  cross.matchCount === 2
+  length closeRes.matches === 2
+  -- Three senders: Alice owes two cash legs, Bob and the Bank one asset leg each.
+  length closeRes.requests === 3
+
+  -- STILL NOTHING HAS MOVED. The cross is a statement of obligations, not a transfer.
+  tokenBalance alice cUSD >>= (=== 13000.0)
+  tokenBalance bob   cETH >>= (=== 4.0)
+  tokenBalance alice cETH >>= (=== 0.0)
+
+  -- ---- EACH SENDER ALLOCATES, THROUGH ITS OWN REGISTRY. ----
+  -- Every spec below is built from what the STANDARD interface showed the sender.
+  aliceReq <- readOwnLegs alice
+  bobReq   <- readOwnLegs bob
+  bankReq  <- readOwnLegs bank
+  -- Alice owes both cash legs; Bob and the Bank owe one asset leg each.
+  TextMap.size aliceReq.transferLegs === 2
+  TextMap.size bobReq.transferLegs   === 1
+  TextMap.size bankReq.transferLegs  === 1
+  aliceReq.settlement.settlementRef.id === "MOC-CETH-2026-08-05"
+  aliceReq.settlement.executor === venue
+
+  bobAlloc <- allocateFromRequest env bob assetFactory assetDisclose assetRegistry
+    bobReq "asset-1" [bobCeth]
+  bankAlloc <- allocateFromRequest env bank assetFactory assetDisclose assetRegistry
+    bankReq "asset-2" [bankCeth]
+  -- Alice's FIRST allocation locks 7,200 and returns 5,800 as change; her second uses
+  -- that change. Change handling is the registry's, not ours.
+  aliceAlloc1 <- allocateFromRequest env alice cashFactory cashDisclose cashRegistry
+    aliceReq "cash-1" [aliceCash]
+  aliceChange <- do
+    hs <- query @TokenStandardHolding alice
+    case [toInterfaceContractId @TS.Holding cid
+         | (cid, h) <- hs, h.owner == alice, h.instrumentId == cUSD, isNone h.lock] of
+      (c :: _) -> pure c
+      []       -> abort "Alice should be holding her change"
+  aliceAlloc2 <- allocateFromRequest env alice cashFactory cashDisclose cashRegistry
+    aliceReq "cash-2" [aliceChange]
+
+  -- THE LOCKS ARE REAL AND VISIBLE IN THE STANDARD'S OWN `HoldingView.lock`. The
+  -- committed funds are unspendable — and they have NOT changed owner. This is the
+  -- whole difference from a pledge.
+  tokenLocked  alice cUSD >>= (=== 12000.0)
+  tokenBalance alice cUSD >>= (=== 1000.0)
+  tokenLocked  bob   cETH >>= (=== 3.0)
+  tokenBalance bob   cETH >>= (=== 1.0)
+  -- Nothing has crossed.
+  tokenBalance alice cETH >>= (=== 0.0)
+  tokenBalance bob   cUSD >>= (=== 0.0)
+
+  -- ---- SETTLE. Every leg of every pair, one transaction. ----
+  let (m1, m2) = case closeRes.matches of
+        [x, y] -> (x, y)
+        _      -> error "expected exactly two matched pairs"
+  batchCid <- submit venue $ exerciseCmd closeRes.cross AuctionCross_Settle with
+    legs =
+      [ MatchSettleInstruction with
+          matchCid = m1; assetAllocation = bobAlloc
+          cashAllocation = aliceAlloc1; legArgs = TextMap.empty
+      , MatchSettleInstruction with
+          matchCid = m2; assetAllocation = bankAlloc
+          cashAllocation = aliceAlloc2; legArgs = TextMap.empty
+      ]
+
+  -- DELIVERY VERSUS PAYMENT, ACROSS TWO REGISTRIES, AT ONE UNIFORM PRICE.
+  tokenBalance alice cETH >>= (=== 5.0)
+  tokenBalance bob   cETH >>= (=== 1.0)
+  tokenBalance bank  cETH >>= (=== 1.0)
+  tokenBalance bob   cUSD >>= (=== 7200.0)   -- 3 @ 2,400
+  tokenBalance bank  cUSD >>= (=== 4800.0)   -- 2 @ 2,400
+  tokenBalance alice cUSD >>= (=== 1000.0)   -- 13,000 committed, 12,000 spent
+  tokenLocked  alice cUSD >>= (=== 0.0)
+  tokenLocked  bob   cETH >>= (=== 0.0)
+
+  -- THE VENUE NEVER OWNED A UNIT OF EITHER LEG — not before, not during, not after.
+  -- Under `PledgeToVenue` it owned both, momentarily, on every close.
+  tokenBalance venue cETH >>= (=== 0.0)
+  tokenBalance venue cUSD >>= (=== 0.0)
+  tokenLocked  venue cETH >>= (=== 0.0)
+  tokenLocked  venue cUSD >>= (=== 0.0)
+
+  -- The batch is the venue's signed record, and the auditor's alone.
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 2400.0
+  length batch.fills === 2
+  -- AND THE FILLS NAME REAL COUNTERPARTIES. Under the CCP-style legacy close every
+  -- fill named the venue on one side; here a receipt says who you actually traded
+  -- with, because under the standard you actually traded with them.
+  assertMsg "every fill names two real traders, never the venue"
+    (all (\f -> f.seller /= venue && f.buyer /= venue) batch.fills)
+  sum [f.quantity | f <- batch.fills] === 5.0
+
+
+-- ---------------------------------------------------------------------------
+-- 2. THE SECURITY FIX. `PledgeToVenue` cannot reach a CIP-56 order.
+-- ---------------------------------------------------------------------------
+-- The trust assumption this venue has carried since it was written: `PledgeToVenue`
+-- is `controller operator` on a contract the TRADER signs, and nothing binds it to a
+-- close — so the operator could exercise it standalone, at any price it named, and
+-- take the trader's whole reserved holding while delivering nothing.
+--
+-- On a CIP-56 book that attack does not merely fail a check; IT HAS NO TARGET.
+-- There is no reserved slice, because a standard holding cannot be locked before the
+-- price exists, and there is no choice on `HoldingV1.Holding` for a venue to
+-- exercise even if there were. The venue's only power over a trader's assets is
+-- `Allocation_ExecuteTransfer` on an allocation the trader itself created, naming
+-- the exact amount and the exact receiver.
+testCip56OrderCannotBePledged : Script ()
+testCip56OrderCannotBePledged = do
+  env@TokenVenue{..} <- setupTokenVenue
+  bobCeth <- issueToken assetRegistry bob cETH 10.0
+
+  auctionCid    <- openTokenAuction env 2400.0
+  (_, bobSell)  <- submitTokenOrder auctionCid bob Sell 3.0 2350.0 bobCeth
+
+  -- THE ATTACK, EXACTLY AS THE MODULE HEADER DESCRIBES IT: the operator reaches for
+  -- the trader's leg standalone, outside any close, at a price of its own choosing.
+  submitMustFail venue $ exerciseCmd bobSell PledgeToVenue with
+    fillQty = 3.0; closingPrice = 1.0
+  -- ...and it is refused at any price, and for the whole order.
+  submitMustFail venue $ exerciseCmd bobSell PledgeToVenue with
+    fillQty = 3.0; closingPrice = 2400.0
+
+  -- Bob's cETH is exactly where it was, unlocked and entirely his.
+  tokenBalance bob cETH >>= (=== 10.0)
+  tokenLocked  bob cETH >>= (=== 0.0)
+  tokenBalance venue cETH >>= (=== 0.0)
+
+  -- AND THE VENUE CANNOT MINT A LEG FOR ITSELF BY FORGING A PAIR. It may create a
+  -- `MatchSettlement` naming whatever it likes — a single-signatory contract can
+  -- always be created by its signatory, in Daml as anywhere — but with no signature
+  -- from either trader it cannot settle, and no allocation exists that matches a
+  -- specification no sender was ever shown.
+  forged <- submit venue $ createCmd MatchSettlement with
+    operator = venue; auditor
+    signers = []
+    settlementId = "FORGED"
+    assetInstrument = cETH
+    cashInstrument = cUSD
+    closingPrice = 1.0
+    match = AuctionMatch with
+      buyer = venue; seller = bob; quantity = 3.0; cashAmount = 3.0; legIndex = 1
+    createdAt = now
+    allocateBefore = addRelTime now (hours 1)
+    settleBefore = addRelTime now (hours 2)
+  Some f <- queryContractId venue forged
+  assertMsg "a forged pair carries no trader signature" (null f.signers)
+  tokenBalance bob   cETH >>= (=== 10.0)
+  tokenBalance venue cETH >>= (=== 0.0)
+
+
+-- ---------------------------------------------------------------------------
+-- 3. A BOOK IS BOUND TO A REGISTRY, NOT TO A TICKER.
+-- ---------------------------------------------------------------------------
+-- `RunCloseTokenStandard` takes the two registry parties as choice arguments, which
+-- invites the obvious question: what stops a venue naming the wrong ones? This does.
+-- Every order recorded the FULL `InstrumentId` — admin and symbol — of the holding
+-- its trader proved it held, and the close refuses to build legs in any other
+-- instrument. A "cETH" minted by somebody who is not onRails is a different
+-- instrument and the print does not happen.
+testTokenStandardBindsTheRegistry : Script ()
+testTokenStandardBindsTheRegistry = do
+  env@TokenVenue{..} <- setupTokenVenue
+  rogue <- allocatePartyByHint (PartyIdHint "RogueRegistry")
+  _ <- submit rogue $ createCmd TokenStandardRegistry with admin = rogue
+  let rogueCeth = TS.InstrumentId with admin = rogue; id = ceth
+
+  -- Bob's "cETH" carries the right TICKER and the wrong ADMIN, so it passes the
+  -- door check (which is about the side of the book) and is caught at the close.
+  bobFake   <- issueToken rogue        bob   rogueCeth 4.0
+  aliceCash <- issueToken cashRegistry alice cUSD      13000.0
+
+  auctionCid <- openTokenAuction env 2400.0
+  (a1, aliceBuy) <- submitTokenOrder auctionCid alice Buy  3.0 2500.0 aliceCash
+  (a2, bobSell)  <- submitTokenOrder a1        bob   Sell 3.0 2350.0 bobFake
+  sealed <- submit venue $ exerciseCmd a2 CloseBidding
+
+  submitMustFail venue $ exerciseCmd sealed RunCloseTokenStandard with
+    buyOrders = [aliceBuy]; sellOrders = [bobSell]
+    assetAdmin = assetRegistry     -- the venue claims onRails; Bob's token is not
+    cashAdmin = cashRegistry
+    settlementId = "MOC-WRONG-REGISTRY"
+    allocateBefore = addRelTime now (hours 1)
+    settleBefore = addRelTime now (hours 2)
+
+  -- Naming the ROGUE registry instead does not rescue it either: Alice's cash leg is
+  -- then the one that does not match, so the venue cannot pick a registry that suits
+  -- one side of the book at the other side's expense.
+  submitMustFail venue $ exerciseCmd sealed RunCloseTokenStandard with
+    buyOrders = [aliceBuy]; sellOrders = [bobSell]
+    assetAdmin = rogue
+    cashAdmin = assetRegistry
+    settlementId = "MOC-WRONG-REGISTRY-2"
+    allocateBefore = addRelTime now (hours 1)
+    settleBefore = addRelTime now (hours 2)
+
+  tokenBalance alice cETH >>= (=== 0.0)
+  tokenBalance bob   cUSD >>= (=== 0.0)
+
+
+-- ---------------------------------------------------------------------------
+-- 4. NO DELIVERY WITHOUT PAYMENT, AND NO SETTLING A SUBSET.
+-- ---------------------------------------------------------------------------
+-- Three refusals, all of them on the money path:
+--   (a) the two allocations swapped — each is bound to its OWN leg id;
+--   (b) a subset of the cross — `matchCount` is the settlement's own completeness
+--       commitment, the mirror of the book's;
+--   (c) the buyer's leg missing entirely — the seller's asset does not move.
+-- Then the honest path settles, so the test also proves the refusals were about the
+-- substitution and not about the setup.
+testTokenStandardNoDeliveryWithoutPayment : Script ()
+testTokenStandardNoDeliveryWithoutPayment = do
+  env@TokenVenue{..} <- setupTokenVenue
+  bobCeth   <- issueToken assetRegistry bob   cETH 4.0
+  aliceCash <- issueToken cashRegistry  alice cUSD 8000.0
+
+  auctionCid <- openTokenAuction env 2400.0
+  (a1, aliceBuy) <- submitTokenOrder auctionCid alice Buy  3.0 2500.0 aliceCash
+  (a2, bobSell)  <- submitTokenOrder a1        bob   Sell 3.0 2350.0 bobCeth
+  sealed <- submit venue $ exerciseCmd a2 CloseBidding
+
+  closeRes <- submit venue $ exerciseCmd sealed RunCloseTokenStandard with
+    buyOrders = [aliceBuy]; sellOrders = [bobSell]
+    assetAdmin = assetRegistry; cashAdmin = cashRegistry
+    settlementId = "MOC-DVP-001"
+    allocateBefore = addRelTime now (hours 1)
+    settleBefore = addRelTime now (hours 2)
+  let matchCid = head closeRes.matches
+
+  aliceReq <- readOwnLegs alice
+  bobReq   <- readOwnLegs bob
+  bobAlloc   <- allocateFromRequest env bob assetFactory assetDisclose assetRegistry
+    bobReq "asset-1" [bobCeth]
+  aliceAlloc <- allocateFromRequest env alice cashFactory cashDisclose cashRegistry
+    aliceReq "cash-1" [aliceCash]
+
+  -- (a) SWAPPED. The asset slot is handed the cash allocation and vice versa. Both
+  -- specification checks fail; neither leg moves.
+  submitMustFail venue $ exerciseCmd closeRes.cross AuctionCross_Settle with
+    legs = [ MatchSettleInstruction with
+               matchCid; assetAllocation = aliceAlloc
+               cashAllocation = bobAlloc; legArgs = TextMap.empty ]
+
+  -- (b) A SUBSET OF THE CROSS. One pair exists, so an empty leg list is the subset;
+  -- `matchCount` refuses it.
+  submitMustFail venue $ exerciseCmd closeRes.cross AuctionCross_Settle with
+    legs = []
+
+  -- (c) THE PAYMENT LEG MISSING — the venue tries to pass the seller's own
+  -- allocation twice, which is the only way to present a "settlement" with no cash
+  -- in it. Refused, and Bob's cETH is still Bob's.
+  submitMustFail venue $ exerciseCmd closeRes.cross AuctionCross_Settle with
+    legs = [ MatchSettleInstruction with
+               matchCid; assetAllocation = bobAlloc
+               cashAllocation = bobAlloc; legArgs = TextMap.empty ]
+  tokenBalance alice cETH >>= (=== 0.0)
+  tokenLocked  bob   cETH >>= (=== 3.0)
+
+  -- ...AND THE HONEST SETTLEMENT WORKS.
+  _ <- submit venue $ exerciseCmd closeRes.cross AuctionCross_Settle with
+    legs = [ MatchSettleInstruction with
+               matchCid; assetAllocation = bobAlloc
+               cashAllocation = aliceAlloc; legArgs = TextMap.empty ]
+  tokenBalance alice cETH >>= (=== 3.0)
+  tokenBalance bob   cUSD >>= (=== 7200.0)
+  tokenBalance alice cUSD >>= (=== 800.0)
+
+
+-- ---------------------------------------------------------------------------
+-- 5. THE DARK POOL SURVIVES THE PRINT.
+-- ---------------------------------------------------------------------------
+-- A sealed book that publishes the executed cross to everyone one transaction later
+-- is a dark pool for the length of the auction and a public tape for ever after. The
+-- standard explicitly permits a partial leg list — "depending on the confidentiality
+-- requirements of the app" — and this venue's confidentiality requirement is the
+-- entire product, so each sender's `AllocationRequest` carries ONLY its own legs.
+testTokenStandardRequestsStayDark : Script ()
+testTokenStandardRequestsStayDark = do
+  env@TokenVenue{..} <- setupTokenVenue
+  bobCeth   <- issueToken assetRegistry bob   cETH 4.0
+  bankCeth  <- issueToken assetRegistry bank  cETH 3.0
+  aliceCash <- issueToken cashRegistry  alice cUSD 13000.0
+
+  auctionCid <- openTokenAuction env 2400.0
+  (a1, aliceBuy) <- submitTokenOrder auctionCid alice Buy  5.0 2500.0 aliceCash
+  (a2, bobSell)  <- submitTokenOrder a1        bob   Sell 3.0 2350.0 bobCeth
+  (a3, bankSell) <- submitTokenOrder a2        bank  Sell 2.0 2400.0 bankCeth
+  sealed <- submit venue $ exerciseCmd a3 CloseBidding
+  _ <- submit venue $ exerciseCmd sealed RunCloseTokenStandard with
+    buyOrders = [aliceBuy]; sellOrders = [bobSell, bankSell]
+    assetAdmin = assetRegistry; cashAdmin = cashRegistry
+    settlementId = "MOC-DARK-001"
+    allocateBefore = addRelTime now (hours 1)
+    settleBefore = addRelTime now (hours 2)
+
+  -- BOB SEES ONE LEG: his own delivery. He does not learn that the Bank sold, nor at
+  -- what size, nor that Alice's order was bigger than his fill.
+  bobReq <- readOwnLegs bob
+  TextMap.size bobReq.transferLegs === 1
+  let bobLegs = map snd (TextMap.toList bobReq.transferLegs)
+  assertMsg "Bob's request must contain only legs he sends"
+    (all (\l -> l.sender == bob) bobLegs)
+  assertMsg "Bob must not learn that the Bank traded"
+    (all (\l -> l.receiver /= bank) bobLegs)
+
+  -- THE BANK LIKEWISE, and it does not learn Bob exists.
+  bankReq <- readOwnLegs bank
+  TextMap.size bankReq.transferLegs === 1
+  assertMsg "the Bank must not learn that Bob traded"
+    (all (\l -> l.receiver /= bob && l.sender /= bob)
+         (map snd (TextMap.toList bankReq.transferLegs)))
+
+  -- A RIVAL PARTICIPANT AND AN OUTSIDER SEE NOTHING AT ALL — not the requests, not
+  -- the pairs, not the cross.
+  eveReqs <- queryInterface @TS.AllocationRequest eve
+  assertMsg "an outsider must see no allocation requests" (null eveReqs)
+  eveMatches <- query @MatchSettlement eve
+  assertMsg "an outsider must see no matched pairs" (null eveMatches)
+  bobMatches <- query @MatchSettlement bob
+  assertMsg "a trader sees only the pair it is party to" (length bobMatches == 1)
+  eveCross <- query @AuctionCross eve
+  assertMsg "an outsider must not see the cross record" (null eveCross)
+
+
+-- ---------------------------------------------------------------------------
+-- 6. THE DOOR CHECKS, ON A REAL STANDARD HOLDING.
+-- ---------------------------------------------------------------------------
+-- The wrong-instrument check is one of the properties this venue must not lose in
+-- the migration, and it is not lost: it runs through the standard's own
+-- `HoldingView`. Two more come with it — the holding must belong to the trader and
+-- must cover the worst price the order can legally execute at (which for an unpriced
+-- MOC is the top of the collar, exactly as a reservation would have been sized).
+--
+-- ⚠️ AND IT IS A CHECK, NOT A LOCK. That is stated in `OrderBacking` and it is
+-- restated here so nobody reads this test as proof of funding: the holding is
+-- unlocked and spendable the instant the transaction commits. Delivery is guaranteed
+-- by the ALLOCATION, later.
+testTokenStandardDoorChecks : Script ()
+testTokenStandardDoorChecks = do
+  env@TokenVenue{..} <- setupTokenVenue
+  bobCeth   <- issueToken assetRegistry bob   cETH 2.0
+  aliceCash <- issueToken cashRegistry  alice cUSD 1000.0
+  aliceCeth <- issueToken assetRegistry alice cETH 1.0
+  auctionCid <- openTokenAuction env 2400.0
+
+  -- A BUY delivers the CASH leg, so backing it with cETH is rejected...
+  submitMustFail alice $ exerciseCmd auctionCid SubmitOrder with
+    trader = alice; side = Buy; quantity = 1.0; limitPrice = Some 2500.0
+    commitment = DeclareTokenHolding aliceCeth
+  -- ...and a SELL delivers the ASSET, so backing it with cash is rejected too.
+  submitMustFail alice $ exerciseCmd auctionCid SubmitOrder with
+    trader = alice; side = Sell; quantity = 1.0; limitPrice = Some 2350.0
+    commitment = DeclareTokenHolding aliceCash
+
+  -- BUYING POWER. Alice's 1,000 cannot back a 1 @ 2,500 bid.
+  submitMustFail alice $ exerciseCmd auctionCid SubmitOrder with
+    trader = alice; side = Buy; quantity = 1.0; limitPrice = Some 2500.0
+    commitment = DeclareTokenHolding aliceCash
+  -- Nor can Bob's 2 cETH back a 3-unit offer.
+  submitMustFail bob $ exerciseCmd auctionCid SubmitOrder with
+    trader = bob; side = Sell; quantity = 3.0; limitPrice = Some 2350.0
+    commitment = DeclareTokenHolding bobCeth
+
+  -- A HOLDING ALREADY COMMITTED ELSEWHERE IS NOT BACKING. The lock is the standard's
+  -- own `HoldingV1.Lock`, so this reads through the interface like everything else.
+  bobLocked <- submit (actAs [assetRegistry, bob]) $
+    createCmd TokenStandardHolding with
+      admin = assetRegistry; owner = bob; instrumentId = cETH; amount = 5.0
+      lock = Some (settlementLock [venue] (addRelTime now (hours 1)) "another settlement")
+  submitMustFail bob $ exerciseCmd auctionCid SubmitOrder with
+    trader = bob; side = Sell; quantity = 1.0; limitPrice = Some 2350.0
+    commitment = DeclareTokenHolding (toInterfaceContractId bobLocked)
+
+  -- A trader cannot back an order with somebody ELSE'S holding.
+  submitMustFail bob $ exerciseCmd auctionCid SubmitOrder with
+    trader = bob; side = Sell; quantity = 1.0; limitPrice = Some 2350.0
+    commitment = DeclareTokenHolding aliceCeth
+
+  -- NOTHING RESTED. Six rejected submissions left the book empty and the counter
+  -- untouched — a rejected order cannot pad `submittedCount` and jam the close.
+  Some au <- queryContractId venue auctionCid
+  au.submittedCount === 0
+  au.cancelledCount === 0
+
+  -- AND THE CORRECTLY-BACKED ORDER RESTS. An UNPRICED MOC buy is held to the top of
+  -- the collar (2,400 + 240 = 2,640), which is the highest price this book can
+  -- legally print — the same bound a reservation would have been sized against.
+  aliceBig <- issueToken cashRegistry alice cUSD 2640.0
+  (a1, _) <- submit alice $ exerciseCmd auctionCid SubmitOrder with
+    trader = alice; side = Buy; quantity = 1.0; limitPrice = None
+    commitment = DeclareTokenHolding aliceBig
+  Some au2 <- queryContractId venue a1
+  au2.submittedCount === 1
+  -- One cent short of the collar top and the same order is refused.
+  aliceShort <- issueToken cashRegistry alice cUSD 2639.99
+  submitMustFail alice $ exerciseCmd a1 SubmitOrder with
+    trader = alice; side = Buy; quantity = 1.0; limitPrice = None
+    commitment = DeclareTokenHolding aliceShort
+
+
+-- ---------------------------------------------------------------------------
+-- 7. THE TWO SETTLEMENT MODELS DO NOT MIX, AND EACH SAYS SO BY NAME.
+-- ---------------------------------------------------------------------------
+-- `ClosingAuction` carries no "mode" field — its field list is the wire format the
+-- Java backends construct positionally, and this migration deliberately did not
+-- break that. So the mode is a property of the ORDERS, asserted at the close. A book
+-- of pre-funded legacy orders cannot be settled through the standard (there are no
+-- declarations to bind to a registry) and a book of CIP-56 orders cannot be pledged
+-- (there is nothing reserved to pledge). Both refusals name the choice to use
+-- instead, rather than failing three frames down in `PledgeToVenue`.
+testSettlementModelsDoNotMix : Script ()
+testSettlementModelsDoNotMix = do
+  env@TokenVenue{..} <- setupTokenVenue
+  issuer <- allocatePartyByHint (PartyIdHint "Issuer")
+
+  -- A CIP-56 BOOK, CLOSED THE OLD WAY.
+  bobCeth   <- issueToken assetRegistry bob   cETH 4.0
+  aliceCash <- issueToken cashRegistry  alice cUSD 8000.0
+  tsAuction <- openTokenAuction env 2400.0
+  (t1, tsBuy)  <- submitTokenOrder tsAuction alice Buy  3.0 2500.0 aliceCash
+  (t2, tsSell) <- submitTokenOrder t1        bob   Sell 3.0 2350.0 bobCeth
+  tsSealed <- submit venue $ exerciseCmd t2 CloseBidding
+  submitMustFail venue $ exerciseCmd tsSealed RunClose with
+    buyOrders = [tsBuy]; sellOrders = [tsSell]
+
+  -- A LEGACY BOOK, CLOSED THE NEW WAY.
+  bobLegacy   <- mint issuer ceth bob   4.0
+  aliceLegacy <- mint issuer usdc alice 8000.0
+  legacyAuction <- submit venue $ createCmd ClosingAuction with
+    operator = venue; auditor
+    instrumentId = ceth; cashInstrument = usdc
+    session = "Close"; referencePrice = 2400.0
+    participants = [alice, bob]; liquidityProvider = None; fixingRef = None
+    submittedCount = 0; cancelledCount = 0; isOpen = True
+  (l1, legacyBuy)  <- submitOrder legacyAuction alice Buy  3.0 2500.0 aliceLegacy
+  (l2, legacySell) <- submitOrder l1            bob   Sell 3.0 2350.0 bobLegacy
+  legacySealed <- submit venue $ exerciseCmd l2 CloseBidding
+  submitMustFail venue $ exerciseCmd legacySealed RunCloseTokenStandard with
+    buyOrders = [legacyBuy]; sellOrders = [legacySell]
+    assetAdmin = assetRegistry; cashAdmin = cashRegistry
+    settlementId = "MOC-MIXED"
+    allocateBefore = addRelTime now (hours 1)
+    settleBefore = addRelTime now (hours 2)
+
+  -- Both books are intact and the legacy one can still be closed the way it was
+  -- built: this migration added a path, it did not break the one that was there.
+  batchCid <- submit venue $ exerciseCmd legacySealed RunClose with
+    buyOrders = [legacyBuy]; sellOrders = [legacySell]
+  Some batch <- queryContractId auditor batchCid
+  batch.closingPrice === 2400.0
+  ownedAmount alice ceth >>= (=== 3.0)
+
+
+-- ---------------------------------------------------------------------------
+-- 8. THE RECOVERY PATH — a sender that will not deliver, handled honestly.
+-- ---------------------------------------------------------------------------
+-- This is the exposure the CIP-56 model takes on, so it gets a test rather than a
+-- footnote. Delivery is not pre-funded: a filled trader can decline to allocate, and
+-- because `AuctionCross_Settle` demands every pair, one refusal stops the batch.
+--
+-- WHAT THE LEDGER GIVES IN EXCHANGE, AND IT IS THE THING THE PRE-FUNDED DESIGN COULD
+-- NEVER PRODUCE: the refusal is `AllocationRequest_Reject` — a signed, on-ledger,
+-- attributable act naming the party that walked away from a print it bid into. The
+-- pre-funded model had no such event because it never needed one; it also had no way
+-- to stop the venue helping itself to the collateral, which is the trade.
+--
+-- AND NOBODY LOSES ANYTHING. `AuctionCross_Abort` releases every allocation back to
+-- the sender that made it. The seller who DID deliver on time gets its asset back
+-- unlocked and whole — it was never the venue's, at any point, even for an instant.
+testTokenStandardAbortReturnsEveryAllocation : Script ()
+testTokenStandardAbortReturnsEveryAllocation = do
+  env@TokenVenue{..} <- setupTokenVenue
+  bobCeth   <- issueToken assetRegistry bob   cETH 4.0
+  aliceCash <- issueToken cashRegistry  alice cUSD 8000.0
+
+  auctionCid <- openTokenAuction env 2400.0
+  (a1, aliceBuy) <- submitTokenOrder auctionCid alice Buy  3.0 2500.0 aliceCash
+  (a2, bobSell)  <- submitTokenOrder a1        bob   Sell 3.0 2350.0 bobCeth
+  sealed <- submit venue $ exerciseCmd a2 CloseBidding
+
+  closeRes <- submit venue $ exerciseCmd sealed RunCloseTokenStandard with
+    buyOrders = [aliceBuy]; sellOrders = [bobSell]
+    assetAdmin = assetRegistry; cashAdmin = cashRegistry
+    settlementId = "MOC-ABORT-001"
+    allocateBefore = addRelTime now (hours 1)
+    settleBefore = addRelTime now (hours 2)
+  let matchCid = head closeRes.matches
+
+  -- BOB DELIVERS. His cETH is locked by HIS OWN REGISTRY, in his own name.
+  bobReq   <- readOwnLegs bob
+  bobAlloc <- allocateFromRequest env bob assetFactory assetDisclose assetRegistry
+    bobReq "asset-1" [bobCeth]
+  tokenLocked  bob cETH >>= (=== 3.0)
+  tokenBalance bob cETH >>= (=== 1.0)
+
+  -- ALICE WALKS AWAY, through the standard's own choice. This is the attributable
+  -- artefact: a rejection signed by Alice, on the ledger, naming the settlement.
+  aliceReqs <- queryInterface @TS.AllocationRequest alice
+  let aliceReqCid = case aliceReqs of
+        ((cid, _) :: _) -> cid
+        []              -> error "Alice should have an allocation request"
+  _ <- submit alice $ exerciseCmd aliceReqCid TS.AllocationRequest_Reject with
+    actor = alice
+    extraArgs = noExtraArgs
+  -- ...and a party that owes nothing on this cross cannot reject on her behalf.
+  bobReqs <- queryInterface @TS.AllocationRequest bob
+  let bobReqCid = case bobReqs of
+        ((cid, _) :: _) -> cid
+        []              -> error "Bob should have an allocation request"
+  submitMustFail eve $ exerciseCmd bobReqCid TS.AllocationRequest_Reject with
+    actor = eve
+    extraArgs = noExtraArgs
+
+  -- THE CROSS CANNOT SETTLE. There is no cash allocation to present, and the venue
+  -- cannot manufacture one — Bob's own allocation does not match the cash leg.
+  submitMustFail venue $ exerciseCmd closeRes.cross AuctionCross_Settle with
+    legs = [ MatchSettleInstruction with
+               matchCid; assetAllocation = bobAlloc
+               cashAllocation = bobAlloc; legArgs = TextMap.empty ]
+  -- And Bob's asset is still locked in BOB'S name — not the venue's.
+  tokenLocked  bob   cETH >>= (=== 3.0)
+  tokenBalance venue cETH >>= (=== 0.0)
+  tokenBalance alice cETH >>= (=== 0.0)
+
+  -- THE VENUE STANDS THE CROSS DOWN. Every allocation goes home.
+  submit venue $ exerciseCmd closeRes.cross AuctionCross_Abort with
+    pairs = [ MatchAbortInstruction with
+                matchCid; allocations = [bobAlloc]; extraArgs = noExtraArgs ]
+
+  -- BOB IS WHOLE: 4 cETH, unlocked, his. Alice never parted with a cent.
+  tokenBalance bob   cETH >>= (=== 4.0)
+  tokenLocked  bob   cETH >>= (=== 0.0)
+  tokenBalance alice cUSD >>= (=== 8000.0)
+  tokenLocked  alice cUSD >>= (=== 0.0)
+  tokenBalance venue cETH >>= (=== 0.0)
+  tokenBalance venue cUSD >>= (=== 0.0)

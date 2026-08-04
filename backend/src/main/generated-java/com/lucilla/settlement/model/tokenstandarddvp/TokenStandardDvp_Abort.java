@@ -23,7 +23,7 @@ import java.util.List;
 import java.util.Objects;
 
 public class TokenStandardDvp_Abort extends DamlRecord<TokenStandardDvp_Abort> {
-  public static final String _packageId = "b2aa4af53dbf06e12822d2b51bfa82a52c41f27f936b81b8364b62cfe358689c";
+  public static final String _packageId = "147ddae1818ea7e3662c51714525ac4d6de9c853914d723962bb7ed563ad363d";
 
   public final List<Allocation.ContractId> allocations;
 

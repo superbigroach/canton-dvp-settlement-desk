@@ -39,6 +39,7 @@ import com.lucilla.settlement.model.governance.NavFixing;
 import com.lucilla.settlement.model.holding.Holding;
 import com.lucilla.settlement.model.liquiditymandate.LiquidityMandate;
 import com.lucilla.settlement.model.settlement.SettlementBatch;
+import com.lucilla.settlement.model.tokensettlement.AuctionCloseResult;
 import java.lang.Boolean;
 import java.lang.Deprecated;
 import java.lang.IllegalArgumentException;
@@ -47,6 +48,7 @@ import java.lang.Object;
 import java.lang.Override;
 import java.lang.String;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -57,9 +59,9 @@ import java.util.Set;
 public final class ClosingAuction extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#canton-dvp-settlement-desk", "MarketOnClose", "ClosingAuction");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("b2aa4af53dbf06e12822d2b51bfa82a52c41f27f936b81b8364b62cfe358689c", "MarketOnClose", "ClosingAuction");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("147ddae1818ea7e3662c51714525ac4d6de9c853914d723962bb7ed563ad363d", "MarketOnClose", "ClosingAuction");
 
-  public static final String PACKAGE_ID = "b2aa4af53dbf06e12822d2b51bfa82a52c41f27f936b81b8364b62cfe358689c";
+  public static final String PACKAGE_ID = "147ddae1818ea7e3662c51714525ac4d6de9c853914d723962bb7ed563ad363d";
 
   public static final String PACKAGE_NAME = "canton-dvp-settlement-desk";
 
@@ -100,18 +102,18 @@ public final class ClosingAuction extends Template {
         SubmitOrder::jsonEncoder,
         _x0 -> _x0.jsonEncoder(JsonLfEncoders::contractId, JsonLfEncoders::contractId));
 
-  public static final Choice<ClosingAuction, WithdrawOrder, Tuple2<ContractId, Holding.ContractId>> CHOICE_WithdrawOrder = 
+  public static final Choice<ClosingAuction, WithdrawOrder, Tuple2<ContractId, Optional<Holding.ContractId>>> CHOICE_WithdrawOrder = 
       Choice.create("WithdrawOrder", value$ -> value$.toValue(), value$ ->
         WithdrawOrder.valueDecoder().decode(value$), value$ ->
         Tuple2.<com.lucilla.settlement.model.marketonclose.ClosingAuction.ContractId,
-        com.lucilla.settlement.model.holding.Holding.ContractId>valueDecoder(v$0 ->
+        java.util.Optional<com.lucilla.settlement.model.holding.Holding.ContractId>>valueDecoder(v$0 ->
           new ContractId(v$0.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected value$ to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()),
-        v$1 ->
-          new Holding.ContractId(v$1.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected value$ to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()))
+        PrimitiveValueDecoders.fromOptional(v$1 ->
+            new Holding.ContractId(v$1.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected value$ to be of type com.daml.ledger.javaapi.data.ContractId")).getValue())))
         .decode(value$), new WithdrawOrder.JsonDecoder$().get(),
-        new Tuple2.JsonDecoder$().get(JsonLfDecoders.contractId(ContractId::new), JsonLfDecoders.contractId(Holding.ContractId::new)),
+        new Tuple2.JsonDecoder$().get(JsonLfDecoders.contractId(ContractId::new), JsonLfDecoders.optional(JsonLfDecoders.contractId(Holding.ContractId::new))),
         WithdrawOrder::jsonEncoder,
-        _x0 -> _x0.jsonEncoder(JsonLfEncoders::contractId, JsonLfEncoders::contractId));
+        _x0 -> _x0.jsonEncoder(JsonLfEncoders::contractId, JsonLfEncoders.optional(JsonLfEncoders::contractId)));
 
   public static final Choice<ClosingAuction, ClearOrder, ContractId> CHOICE_ClearOrder = 
       Choice.create("ClearOrder", value$ -> value$.toValue(), value$ -> ClearOrder.valueDecoder()
@@ -119,6 +121,13 @@ public final class ClosingAuction extends Template {
         new ContractId(value$.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected value$ to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()),
         new ClearOrder.JsonDecoder$().get(), JsonLfDecoders.contractId(ContractId::new),
         ClearOrder::jsonEncoder, JsonLfEncoders::contractId);
+
+  public static final Choice<ClosingAuction, RunCloseTokenStandard, AuctionCloseResult> CHOICE_RunCloseTokenStandard = 
+      Choice.create("RunCloseTokenStandard", value$ -> value$.toValue(), value$ ->
+        RunCloseTokenStandard.valueDecoder().decode(value$), value$ ->
+        AuctionCloseResult.valueDecoder().decode(value$),
+        new RunCloseTokenStandard.JsonDecoder$().get(), new AuctionCloseResult.JsonDecoder$().get(),
+        RunCloseTokenStandard::jsonEncoder, AuctionCloseResult::jsonEncoder);
 
   public static final Choice<ClosingAuction, RunClose, SettlementBatch.ContractId> CHOICE_RunClose = 
       Choice.create("RunClose", value$ -> value$.toValue(), value$ -> RunClose.valueDecoder()
@@ -139,8 +148,8 @@ public final class ClosingAuction extends Template {
         "com.lucilla.settlement.model.marketonclose.ClosingAuction", TEMPLATE_ID, ContractId::new,
         v -> ClosingAuction.templateValueDecoder().decode(v), ClosingAuction::fromJson,
         Contract::new, List.of(CHOICE_ReopenBidding, CHOICE_SubmitOrder, CHOICE_RunClose,
-        CHOICE_Archive, CHOICE_WithdrawOrder, CHOICE_PublishImbalance, CHOICE_CloseBidding,
-        CHOICE_ClearOrder));
+        CHOICE_WithdrawOrder, CHOICE_PublishImbalance, CHOICE_CloseBidding, CHOICE_ClearOrder,
+        CHOICE_Archive, CHOICE_RunCloseTokenStandard));
 
   public final String operator;
 
@@ -254,16 +263,16 @@ public final class ClosingAuction extends Template {
   @Deprecated
   public Update<Exercised<Tuple2<ContractId, SealedOrder.ContractId>>> createAndExerciseSubmitOrder(
       String trader, Side side, BigDecimal quantity, Optional<BigDecimal> limitPrice,
-      Holding.ContractId holdingCid) {
+      OrderCommitment commitment) {
     return createAndExerciseSubmitOrder(new SubmitOrder(trader, side, quantity, limitPrice,
-        holdingCid));
+        commitment));
   }
 
   /**
    * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseWithdrawOrder} instead
    */
   @Deprecated
-  public Update<Exercised<Tuple2<ContractId, Holding.ContractId>>> createAndExerciseWithdrawOrder(
+  public Update<Exercised<Tuple2<ContractId, Optional<Holding.ContractId>>>> createAndExerciseWithdrawOrder(
       WithdrawOrder arg) {
     return createAnd().exerciseWithdrawOrder(arg);
   }
@@ -272,7 +281,7 @@ public final class ClosingAuction extends Template {
    * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseWithdrawOrder} instead
    */
   @Deprecated
-  public Update<Exercised<Tuple2<ContractId, Holding.ContractId>>> createAndExerciseWithdrawOrder(
+  public Update<Exercised<Tuple2<ContractId, Optional<Holding.ContractId>>>> createAndExerciseWithdrawOrder(
       String trader, SealedOrder.ContractId orderCid) {
     return createAndExerciseWithdrawOrder(new WithdrawOrder(trader, orderCid));
   }
@@ -292,6 +301,27 @@ public final class ClosingAuction extends Template {
   public Update<Exercised<ContractId>> createAndExerciseClearOrder(
       SealedOrder.ContractId orderCid) {
     return createAndExerciseClearOrder(new ClearOrder(orderCid));
+  }
+
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseRunCloseTokenStandard} instead
+   */
+  @Deprecated
+  public Update<Exercised<AuctionCloseResult>> createAndExerciseRunCloseTokenStandard(
+      RunCloseTokenStandard arg) {
+    return createAnd().exerciseRunCloseTokenStandard(arg);
+  }
+
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseRunCloseTokenStandard} instead
+   */
+  @Deprecated
+  public Update<Exercised<AuctionCloseResult>> createAndExerciseRunCloseTokenStandard(
+      List<SealedOrder.ContractId> buyOrders, List<SealedOrder.ContractId> sellOrders,
+      String assetAdmin, String cashAdmin, String settlementId, Instant allocateBefore,
+      Instant settleBefore) {
+    return createAndExerciseRunCloseTokenStandard(new RunCloseTokenStandard(buyOrders, sellOrders,
+        assetAdmin, cashAdmin, settlementId, allocateBefore, settleBefore));
   }
 
   /**
@@ -554,16 +584,16 @@ public final class ClosingAuction extends Template {
 
     default Update<Exercised<Tuple2<ContractId, SealedOrder.ContractId>>> exerciseSubmitOrder(
         String trader, Side side, BigDecimal quantity, Optional<BigDecimal> limitPrice,
-        Holding.ContractId holdingCid) {
-      return exerciseSubmitOrder(new SubmitOrder(trader, side, quantity, limitPrice, holdingCid));
+        OrderCommitment commitment) {
+      return exerciseSubmitOrder(new SubmitOrder(trader, side, quantity, limitPrice, commitment));
     }
 
-    default Update<Exercised<Tuple2<ContractId, Holding.ContractId>>> exerciseWithdrawOrder(
+    default Update<Exercised<Tuple2<ContractId, Optional<Holding.ContractId>>>> exerciseWithdrawOrder(
         WithdrawOrder arg) {
       return makeExerciseCmd(CHOICE_WithdrawOrder, arg);
     }
 
-    default Update<Exercised<Tuple2<ContractId, Holding.ContractId>>> exerciseWithdrawOrder(
+    default Update<Exercised<Tuple2<ContractId, Optional<Holding.ContractId>>>> exerciseWithdrawOrder(
         String trader, SealedOrder.ContractId orderCid) {
       return exerciseWithdrawOrder(new WithdrawOrder(trader, orderCid));
     }
@@ -574,6 +604,19 @@ public final class ClosingAuction extends Template {
 
     default Update<Exercised<ContractId>> exerciseClearOrder(SealedOrder.ContractId orderCid) {
       return exerciseClearOrder(new ClearOrder(orderCid));
+    }
+
+    default Update<Exercised<AuctionCloseResult>> exerciseRunCloseTokenStandard(
+        RunCloseTokenStandard arg) {
+      return makeExerciseCmd(CHOICE_RunCloseTokenStandard, arg);
+    }
+
+    default Update<Exercised<AuctionCloseResult>> exerciseRunCloseTokenStandard(
+        List<SealedOrder.ContractId> buyOrders, List<SealedOrder.ContractId> sellOrders,
+        String assetAdmin, String cashAdmin, String settlementId, Instant allocateBefore,
+        Instant settleBefore) {
+      return exerciseRunCloseTokenStandard(new RunCloseTokenStandard(buyOrders, sellOrders,
+          assetAdmin, cashAdmin, settlementId, allocateBefore, settleBefore));
     }
 
     default Update<Exercised<SettlementBatch.ContractId>> exerciseRunClose(RunClose arg) {

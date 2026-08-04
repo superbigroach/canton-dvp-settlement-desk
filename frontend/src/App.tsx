@@ -15,6 +15,7 @@ import {
 } from './api';
 import CommitteePanel from './CommitteePanel';
 import FundPanel from './FundPanel';
+import PendingTransfersPanel from './PendingTransfersPanel';
 
 const CASH = 'USDC';
 
@@ -959,6 +960,20 @@ export default function App() {
             Refresh
           </button>
         </section>
+
+        {/* -------- CIP-56 · claim an asset issued by ANOTHER registry --------
+            A transfer from a foreign registry arrives as a pending
+            TransferInstruction and is not a holding until the receiver accepts it.
+            This is where a real third-party asset (BitSafe CBTC) is claimed — the
+            direct answer to "your tokens are self-issued stand-ins". */}
+        <PendingTransfersPanel
+          acting={acting}
+          onChanged={() => {
+            void loadHoldings(acting);
+            void loadReceipts(acting);
+          }}
+          flash={flash}
+        />
 
         {/* -------- Decentralised operator · committee-attested NAV -------- */}
         <CommitteePanel parties={parties} instruments={instruments} flash={flash} />

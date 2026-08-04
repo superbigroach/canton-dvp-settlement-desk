@@ -24,6 +24,31 @@ ledger:
   application-id: ${LEDGER_APPLICATION_ID:canton-dvp-desk}
   connect-timeout-seconds: ${LEDGER_CONNECT_TIMEOUT_SECONDS:10}
 
+# ---------------------------------------------------------------------------
+# CIP-56 token standard — the off-ledger Registry API (/registry/...) and the
+# wallet side that claims assets from OTHER registries (/api/token-standard/...).
+# Every value here is optional; with none set the registry API discovers its own
+# admin from the ledger and foreign accepts are attempted with an empty context.
+# ---------------------------------------------------------------------------
+registry:
+  # Pin the instrument-admin party this desk's registry serves. Leave blank to
+  # DISCOVER it from the live TokenStandardRegistry contract — the right default,
+  # because a local sandbox re-mints its party namespace on every run.
+  admin: ${REGISTRY_ADMIN:}
+  # A FOREIGN registry's API root, used for any instrument admin without an
+  # explicit override below. Accepting a transfer from another registry may
+  # require a choice context that only that registry can produce.
+  #   e.g. REGISTRY_REMOTE_URL=https://cbtc-faucet.bitsafe.finance
+  remote-url: ${REGISTRY_REMOTE_URL:}
+  # Per-admin overrides: comma-separated  admin=url  pairs, where `admin` is a
+  # full party id or its label.
+  #   e.g. REGISTRY_REMOTE_URLS="bitsafe=https://registry.bitsafe.example"
+  remote-urls: ${REGISTRY_REMOTE_URLS:}
+  # Prefer the token-standard interface package this backend was compiled against
+  # when resolving an interface exercise. Turn OFF only if a participant cannot
+  # resolve that exact package (REGISTRY_PIN_INTERFACE_PACKAGE=false).
+  pin-interface-package: ${REGISTRY_PIN_INTERFACE_PACKAGE:true}
+
 spring:
   application:
     name: canton-dvp-desk

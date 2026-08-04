@@ -10,6 +10,7 @@ import com.daml.ledger.javaapi.data.DamlOptional;
 import com.daml.ledger.javaapi.data.DamlRecord;
 import com.daml.ledger.javaapi.data.ExerciseCommand;
 import com.daml.ledger.javaapi.data.Identifier;
+import com.daml.ledger.javaapi.data.Int64;
 import com.daml.ledger.javaapi.data.Numeric;
 import com.daml.ledger.javaapi.data.PackageVersion;
 import com.daml.ledger.javaapi.data.Party;
@@ -32,8 +33,10 @@ import com.daml.ledger.javaapi.data.codegen.json.JsonLfEncoders;
 import com.daml.ledger.javaapi.data.codegen.json.JsonLfReader;
 import com.lucilla.settlement.model.da.internal.template.Archive;
 import com.lucilla.settlement.model.holding.Holding;
+import com.lucilla.settlement.model.tokensettlement.MatchSettlement;
 import java.lang.Deprecated;
 import java.lang.IllegalArgumentException;
+import java.lang.Long;
 import java.lang.Object;
 import java.lang.Override;
 import java.lang.String;
@@ -48,13 +51,19 @@ import java.util.Set;
 public final class SealedOrder extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#canton-dvp-settlement-desk", "MarketOnClose", "SealedOrder");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("b2aa4af53dbf06e12822d2b51bfa82a52c41f27f936b81b8364b62cfe358689c", "MarketOnClose", "SealedOrder");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("147ddae1818ea7e3662c51714525ac4d6de9c853914d723962bb7ed563ad363d", "MarketOnClose", "SealedOrder");
 
-  public static final String PACKAGE_ID = "b2aa4af53dbf06e12822d2b51bfa82a52c41f27f936b81b8364b62cfe358689c";
+  public static final String PACKAGE_ID = "147ddae1818ea7e3662c51714525ac4d6de9c853914d723962bb7ed563ad363d";
 
   public static final String PACKAGE_NAME = "canton-dvp-settlement-desk";
 
   public static final PackageVersion PACKAGE_VERSION = new PackageVersion(new int[] {1, 0, 0});
+
+  public static final Choice<SealedOrder, VenueCancel, Unit> CHOICE_VenueCancel = 
+      Choice.create("VenueCancel", value$ -> value$.toValue(), value$ -> VenueCancel.valueDecoder()
+        .decode(value$), value$ -> PrimitiveValueDecoders.fromUnit.decode(value$),
+        new VenueCancel.JsonDecoder$().get(), JsonLfDecoders.unit, VenueCancel::jsonEncoder,
+        JsonLfEncoders::unit);
 
   public static final Choice<SealedOrder, PledgeToVenue, Holding.ContractId> CHOICE_PledgeToVenue = 
       Choice.create("PledgeToVenue", value$ -> value$.toValue(), value$ ->
@@ -63,30 +72,34 @@ public final class SealedOrder extends Template {
         new PledgeToVenue.JsonDecoder$().get(), JsonLfDecoders.contractId(Holding.ContractId::new),
         PledgeToVenue::jsonEncoder, JsonLfEncoders::contractId);
 
-  public static final Choice<SealedOrder, Cancel, Holding.ContractId> CHOICE_Cancel = 
-      Choice.create("Cancel", value$ -> value$.toValue(), value$ -> Cancel.valueDecoder()
-        .decode(value$), value$ ->
-        new Holding.ContractId(value$.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected value$ to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()),
-        new Cancel.JsonDecoder$().get(), JsonLfDecoders.contractId(Holding.ContractId::new),
-        Cancel::jsonEncoder, JsonLfEncoders::contractId);
-
   public static final Choice<SealedOrder, Archive, Unit> CHOICE_Archive = 
       Choice.create("Archive", value$ -> value$.toValue(), value$ -> Archive.valueDecoder()
         .decode(value$), value$ -> PrimitiveValueDecoders.fromUnit.decode(value$),
         new Archive.JsonDecoder$().get(), JsonLfDecoders.unit, Archive::jsonEncoder,
         JsonLfEncoders::unit);
 
-  public static final Choice<SealedOrder, VenueCancel, Unit> CHOICE_VenueCancel = 
-      Choice.create("VenueCancel", value$ -> value$.toValue(), value$ -> VenueCancel.valueDecoder()
-        .decode(value$), value$ -> PrimitiveValueDecoders.fromUnit.decode(value$),
-        new VenueCancel.JsonDecoder$().get(), JsonLfDecoders.unit, VenueCancel::jsonEncoder,
-        JsonLfEncoders::unit);
+  public static final Choice<SealedOrder, CoSignSettlement, MatchSettlement.ContractId> CHOICE_CoSignSettlement = 
+      Choice.create("CoSignSettlement", value$ -> value$.toValue(), value$ ->
+        CoSignSettlement.valueDecoder().decode(value$), value$ ->
+        new MatchSettlement.ContractId(value$.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected value$ to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()),
+        new CoSignSettlement.JsonDecoder$().get(),
+        JsonLfDecoders.contractId(MatchSettlement.ContractId::new), CoSignSettlement::jsonEncoder,
+        JsonLfEncoders::contractId);
+
+  public static final Choice<SealedOrder, Cancel, Optional<Holding.ContractId>> CHOICE_Cancel = 
+      Choice.create("Cancel", value$ -> value$.toValue(), value$ -> Cancel.valueDecoder()
+        .decode(value$), value$ -> PrimitiveValueDecoders.fromOptional(v$0 ->
+            new Holding.ContractId(v$0.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected value$ to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()))
+        .decode(value$), new Cancel.JsonDecoder$().get(),
+        JsonLfDecoders.optional(JsonLfDecoders.contractId(Holding.ContractId::new)),
+        Cancel::jsonEncoder, JsonLfEncoders.optional(JsonLfEncoders::contractId));
 
   public static final ContractCompanion.WithoutKey<Contract, ContractId, SealedOrder> COMPANION = 
       new ContractCompanion.WithoutKey<>(new ContractTypeCompanion.Package(SealedOrder.PACKAGE_ID, SealedOrder.PACKAGE_NAME, SealedOrder.PACKAGE_VERSION),
         "com.lucilla.settlement.model.marketonclose.SealedOrder", TEMPLATE_ID, ContractId::new,
         v -> SealedOrder.templateValueDecoder().decode(v), SealedOrder::fromJson, Contract::new,
-        List.of(CHOICE_PledgeToVenue, CHOICE_Cancel, CHOICE_Archive, CHOICE_VenueCancel));
+        List.of(CHOICE_Cancel, CHOICE_CoSignSettlement, CHOICE_VenueCancel, CHOICE_Archive,
+        CHOICE_PledgeToVenue));
 
   public final String operator;
 
@@ -106,11 +119,13 @@ public final class SealedOrder extends Template {
 
   public final Optional<BigDecimal> limitPrice;
 
-  public final Holding.ContractId holdingCid;
+  public final OrderBacking backing;
+
+  public final Long seqNo;
 
   public SealedOrder(String operator, String auditor, String trader, String instrumentId,
       String cashInstrument, String session, Side side, BigDecimal quantity,
-      Optional<BigDecimal> limitPrice, Holding.ContractId holdingCid) {
+      Optional<BigDecimal> limitPrice, OrderBacking backing, Long seqNo) {
     this.operator = operator;
     this.auditor = auditor;
     this.trader = trader;
@@ -120,12 +135,29 @@ public final class SealedOrder extends Template {
     this.side = side;
     this.quantity = quantity;
     this.limitPrice = limitPrice;
-    this.holdingCid = holdingCid;
+    this.backing = backing;
+    this.seqNo = seqNo;
   }
 
   @Override
   public Update<Created<ContractId>> create() {
     return new Update.CreateUpdate<ContractId, Created<ContractId>>(new CreateCommand(SealedOrder.TEMPLATE_ID, this.toValue()), x -> x, ContractId::new);
+  }
+
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseVenueCancel} instead
+   */
+  @Deprecated
+  public Update<Exercised<Unit>> createAndExerciseVenueCancel(VenueCancel arg) {
+    return createAnd().exerciseVenueCancel(arg);
+  }
+
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseVenueCancel} instead
+   */
+  @Deprecated
+  public Update<Exercised<Unit>> createAndExerciseVenueCancel() {
+    return createAndExerciseVenueCancel(new VenueCancel());
   }
 
   /**
@@ -146,22 +178,6 @@ public final class SealedOrder extends Template {
   }
 
   /**
-   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseCancel} instead
-   */
-  @Deprecated
-  public Update<Exercised<Holding.ContractId>> createAndExerciseCancel(Cancel arg) {
-    return createAnd().exerciseCancel(arg);
-  }
-
-  /**
-   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseCancel} instead
-   */
-  @Deprecated
-  public Update<Exercised<Holding.ContractId>> createAndExerciseCancel() {
-    return createAndExerciseCancel(new Cancel());
-  }
-
-  /**
    * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseArchive} instead
    */
   @Deprecated
@@ -178,26 +194,46 @@ public final class SealedOrder extends Template {
   }
 
   /**
-   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseVenueCancel} instead
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseCoSignSettlement} instead
    */
   @Deprecated
-  public Update<Exercised<Unit>> createAndExerciseVenueCancel(VenueCancel arg) {
-    return createAnd().exerciseVenueCancel(arg);
+  public Update<Exercised<MatchSettlement.ContractId>> createAndExerciseCoSignSettlement(
+      CoSignSettlement arg) {
+    return createAnd().exerciseCoSignSettlement(arg);
   }
 
   /**
-   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseVenueCancel} instead
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseCoSignSettlement} instead
    */
   @Deprecated
-  public Update<Exercised<Unit>> createAndExerciseVenueCancel() {
-    return createAndExerciseVenueCancel(new VenueCancel());
+  public Update<Exercised<MatchSettlement.ContractId>> createAndExerciseCoSignSettlement(
+      MatchSettlement.ContractId settlementCid, List<String> currentSigners,
+      List<ContractId> alsoSign) {
+    return createAndExerciseCoSignSettlement(new CoSignSettlement(settlementCid, currentSigners,
+        alsoSign));
+  }
+
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseCancel} instead
+   */
+  @Deprecated
+  public Update<Exercised<Optional<Holding.ContractId>>> createAndExerciseCancel(Cancel arg) {
+    return createAnd().exerciseCancel(arg);
+  }
+
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseCancel} instead
+   */
+  @Deprecated
+  public Update<Exercised<Optional<Holding.ContractId>>> createAndExerciseCancel() {
+    return createAndExerciseCancel(new Cancel());
   }
 
   public static Update<Created<ContractId>> create(String operator, String auditor, String trader,
       String instrumentId, String cashInstrument, String session, Side side, BigDecimal quantity,
-      Optional<BigDecimal> limitPrice, Holding.ContractId holdingCid) {
+      Optional<BigDecimal> limitPrice, OrderBacking backing, Long seqNo) {
     return new SealedOrder(operator, auditor, trader, instrumentId, cashInstrument, session, side,
-        quantity, limitPrice, holdingCid).create();
+        quantity, limitPrice, backing, seqNo).create();
   }
 
   @Override
@@ -215,7 +251,7 @@ public final class SealedOrder extends Template {
   }
 
   public DamlRecord toValue() {
-    ArrayList<DamlRecord.Field> fields = new ArrayList<DamlRecord.Field>(10);
+    ArrayList<DamlRecord.Field> fields = new ArrayList<DamlRecord.Field>(11);
     fields.add(new DamlRecord.Field("operator", new Party(this.operator)));
     fields.add(new DamlRecord.Field("auditor", new Party(this.auditor)));
     fields.add(new DamlRecord.Field("trader", new Party(this.trader)));
@@ -225,14 +261,15 @@ public final class SealedOrder extends Template {
     fields.add(new DamlRecord.Field("side", this.side.toValue()));
     fields.add(new DamlRecord.Field("quantity", new Numeric(this.quantity)));
     fields.add(new DamlRecord.Field("limitPrice", DamlOptional.of(this.limitPrice.map(v$0 -> new Numeric(v$0)))));
-    fields.add(new DamlRecord.Field("holdingCid", this.holdingCid.toValue()));
+    fields.add(new DamlRecord.Field("backing", this.backing.toValue()));
+    fields.add(new DamlRecord.Field("seqNo", new Int64(this.seqNo)));
     return new DamlRecord(fields);
   }
 
   private static ValueDecoder<SealedOrder> templateValueDecoder() throws IllegalArgumentException {
     return value$ -> {
       Value recordValue$ = value$;
-      List<DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(10,0, recordValue$);
+      List<DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(11,0, recordValue$);
       String operator = PrimitiveValueDecoders.fromParty.decode(fields$.get(0).getValue());
       String auditor = PrimitiveValueDecoders.fromParty.decode(fields$.get(1).getValue());
       String trader = PrimitiveValueDecoders.fromParty.decode(fields$.get(2).getValue());
@@ -243,15 +280,15 @@ public final class SealedOrder extends Template {
       BigDecimal quantity = PrimitiveValueDecoders.fromNumeric.decode(fields$.get(7).getValue());
       Optional<BigDecimal> limitPrice = PrimitiveValueDecoders.fromOptional(
             PrimitiveValueDecoders.fromNumeric).decode(fields$.get(8).getValue());
-      Holding.ContractId holdingCid =
-          new Holding.ContractId(fields$.get(9).getValue().asContractId().orElseThrow(() -> new IllegalArgumentException("Expected holdingCid to be of type com.daml.ledger.javaapi.data.ContractId")).getValue());
+      OrderBacking backing = OrderBacking.valueDecoder().decode(fields$.get(9).getValue());
+      Long seqNo = PrimitiveValueDecoders.fromInt64.decode(fields$.get(10).getValue());
       return new SealedOrder(operator, auditor, trader, instrumentId, cashInstrument, session, side,
-          quantity, limitPrice, holdingCid);
+          quantity, limitPrice, backing, seqNo);
     } ;
   }
 
   public static JsonLfDecoder<SealedOrder> jsonDecoder() {
-    return JsonLfDecoders.record(Arrays.asList("operator", "auditor", "trader", "instrumentId", "cashInstrument", "session", "side", "quantity", "limitPrice", "holdingCid"), name -> {
+    return JsonLfDecoders.record(Arrays.asList("operator", "auditor", "trader", "instrumentId", "cashInstrument", "session", "side", "quantity", "limitPrice", "backing", "seqNo"), name -> {
           switch (name) {
             case "operator": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
             case "auditor": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(1, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
@@ -262,11 +299,12 @@ public final class SealedOrder extends Template {
             case "side": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(6, new com.lucilla.settlement.model.marketonclose.Side.JsonDecoder$().get());
             case "quantity": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(7, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10));
             case "limitPrice": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(8, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10)), java.util.Optional.empty());
-            case "holdingCid": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(9, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.contractId(com.lucilla.settlement.model.holding.Holding.ContractId::new));
+            case "backing": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(9, new com.lucilla.settlement.model.marketonclose.OrderBacking.JsonDecoder$().get());
+            case "seqNo": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(10, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.int64);
             default: return null;
           }
         }
-        , (Object[] args) -> new SealedOrder(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6]), JsonLfDecoders.cast(args[7]), JsonLfDecoders.cast(args[8]), JsonLfDecoders.cast(args[9])));
+        , (Object[] args) -> new SealedOrder(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6]), JsonLfDecoders.cast(args[7]), JsonLfDecoders.cast(args[8]), JsonLfDecoders.cast(args[9]), JsonLfDecoders.cast(args[10])));
   }
 
   public static SealedOrder fromJson(String json) throws JsonLfDecoder.Error {
@@ -284,7 +322,8 @@ public final class SealedOrder extends Template {
         JsonLfEncoders.Field.of("side", apply(Side::jsonEncoder, side)),
         JsonLfEncoders.Field.of("quantity", apply(JsonLfEncoders::numeric, quantity)),
         JsonLfEncoders.Field.of("limitPrice", apply(JsonLfEncoders.optional(JsonLfEncoders::numeric), limitPrice)),
-        JsonLfEncoders.Field.of("holdingCid", apply(JsonLfEncoders::contractId, holdingCid)));
+        JsonLfEncoders.Field.of("backing", apply(OrderBacking::jsonEncoder, backing)),
+        JsonLfEncoders.Field.of("seqNo", apply(JsonLfEncoders::int64, seqNo)));
   }
 
   public static ContractFilter<Contract> contractFilter() {
@@ -310,21 +349,21 @@ public final class SealedOrder extends Template {
         Objects.equals(this.session, other.session) && Objects.equals(this.side, other.side) &&
         Objects.equals(this.quantity, other.quantity) &&
         Objects.equals(this.limitPrice, other.limitPrice) &&
-        Objects.equals(this.holdingCid, other.holdingCid);
+        Objects.equals(this.backing, other.backing) && Objects.equals(this.seqNo, other.seqNo);
   }
 
   @Override
   public int hashCode() {
     return Objects.hash(this.operator, this.auditor, this.trader, this.instrumentId,
-        this.cashInstrument, this.session, this.side, this.quantity, this.limitPrice,
-        this.holdingCid);
+        this.cashInstrument, this.session, this.side, this.quantity, this.limitPrice, this.backing,
+        this.seqNo);
   }
 
   @Override
   public String toString() {
-    return String.format("com.lucilla.settlement.model.marketonclose.SealedOrder(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+    return String.format("com.lucilla.settlement.model.marketonclose.SealedOrder(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         this.operator, this.auditor, this.trader, this.instrumentId, this.cashInstrument,
-        this.session, this.side, this.quantity, this.limitPrice, this.holdingCid);
+        this.session, this.side, this.quantity, this.limitPrice, this.backing, this.seqNo);
   }
 
   public static final class ContractId extends com.daml.ledger.javaapi.data.codegen.ContractId<SealedOrder> implements Exercises<ExerciseCommand> {
@@ -366,6 +405,14 @@ public final class SealedOrder extends Template {
   }
 
   public interface Exercises<Cmd> extends com.daml.ledger.javaapi.data.codegen.Exercises.Archivable<Cmd> {
+    default Update<Exercised<Unit>> exerciseVenueCancel(VenueCancel arg) {
+      return makeExerciseCmd(CHOICE_VenueCancel, arg);
+    }
+
+    default Update<Exercised<Unit>> exerciseVenueCancel() {
+      return exerciseVenueCancel(new VenueCancel());
+    }
+
     default Update<Exercised<Holding.ContractId>> exercisePledgeToVenue(PledgeToVenue arg) {
       return makeExerciseCmd(CHOICE_PledgeToVenue, arg);
     }
@@ -373,14 +420,6 @@ public final class SealedOrder extends Template {
     default Update<Exercised<Holding.ContractId>> exercisePledgeToVenue(BigDecimal fillQty,
         BigDecimal closingPrice) {
       return exercisePledgeToVenue(new PledgeToVenue(fillQty, closingPrice));
-    }
-
-    default Update<Exercised<Holding.ContractId>> exerciseCancel(Cancel arg) {
-      return makeExerciseCmd(CHOICE_Cancel, arg);
-    }
-
-    default Update<Exercised<Holding.ContractId>> exerciseCancel() {
-      return exerciseCancel(new Cancel());
     }
 
     default Update<Exercised<Unit>> exerciseArchive(Archive arg) {
@@ -391,12 +430,24 @@ public final class SealedOrder extends Template {
       return exerciseArchive(new Archive());
     }
 
-    default Update<Exercised<Unit>> exerciseVenueCancel(VenueCancel arg) {
-      return makeExerciseCmd(CHOICE_VenueCancel, arg);
+    default Update<Exercised<MatchSettlement.ContractId>> exerciseCoSignSettlement(
+        CoSignSettlement arg) {
+      return makeExerciseCmd(CHOICE_CoSignSettlement, arg);
     }
 
-    default Update<Exercised<Unit>> exerciseVenueCancel() {
-      return exerciseVenueCancel(new VenueCancel());
+    default Update<Exercised<MatchSettlement.ContractId>> exerciseCoSignSettlement(
+        MatchSettlement.ContractId settlementCid, List<String> currentSigners,
+        List<ContractId> alsoSign) {
+      return exerciseCoSignSettlement(new CoSignSettlement(settlementCid, currentSigners,
+          alsoSign));
+    }
+
+    default Update<Exercised<Optional<Holding.ContractId>>> exerciseCancel(Cancel arg) {
+      return makeExerciseCmd(CHOICE_Cancel, arg);
+    }
+
+    default Update<Exercised<Optional<Holding.ContractId>>> exerciseCancel() {
+      return exerciseCancel(new Cancel());
     }
   }
 

@@ -196,13 +196,15 @@
 --   at all; rank them equally and no rational index fund sends an unpriced order.
 --   SO THE LADDER THIS FILE IMPLEMENTS IS:
 --     (a) UNPRICED MOC first, in full — and if unpriced interest ALONE exceeds the
---         crossed volume, ration among the unpriced (pro-rata by size, see below) and
---         every priced order behind them gets ZERO;
+--         crossed volume, ration among the unpriced BY ARRIVAL SEQUENCE (see below)
+--         and every priced order behind them gets ZERO;
 --     (b) then priced orders strictly THROUGH the print, in full, best price first;
---     (c) then the marginal AT-THE-PRINT level, rationed.
---   Mechanically that is one line: the sort key gains a CLASS rung above the price
---   rung, so the unpriced orders form a single top level and the existing
---   price-priority waterfall walks the rest unchanged.
+--     (c) then the marginal AT-THE-PRINT level, rationed EARLIEST-SUBMITTED FIRST,
+--         so exactly ONE order is ever partially filled and everything behind it in
+--         the queue gets nothing.
+--   Mechanically that is one sort key with three rungs — CLASS, then PRICE, then
+--   ARRIVAL SEQUENCE — and a single waterfall that walks the resulting queue handing
+--   each order `min(remaining, quantity)`.
 --
 --   PRICE PRIORITY THROUGH THE PRINT, RATION ONLY THE MARGIN — rungs (b) and (c).
 --   The single rule every real closing auction agrees on. Sources, so it can be
@@ -228,18 +230,71 @@
 --   sells low-to-high), fills every level THROUGH the print in FULL, and rations
 --   only the level where the crossed volume runs out.
 --
---   HOW THE MARGINAL LEVEL IS RATIONED, AND WHY IT IS NOT TIME. Xetra, Euronext and
---   Nasdaq all ration the marginal level on TIME; NYSE does it on parity by member
---   firm. CrossDesk rations it PRO-RATA BY SIZE, deliberately, for a reason specific
---   to this ledger: a `SealedOrder` carries no on-ledger arrival timestamp, so the
---   only "time" available at the close is the ORDER OF THE ARRAY THE OPERATOR HANDS
---   TO `RunClose`. Ration on that and the venue can decide who fills at the margin
---   by permuting a list — reintroducing exactly the operator discretion the rest of
---   this design spends so much effort removing. Pro-rata by size is INVARIANT to
---   that permutation, so it is the honest rule until an attested submission
---   sequence number exists on the order itself. Pro-rata is a legitimate allocation
---   family (CME uses it across its STIR complex); rationing ACROSS price levels
---   never was.
+--   HOW THE MARGINAL LEVEL IS RATIONED: TIME — AND THE LEDGER MINTS THE CLOCK.
+--   Xetra, Euronext and Nasdaq all ration the marginal level on TIME; NYSE does it on
+--   parity by member firm. CrossDesk used to ration it PRO-RATA BY SIZE, and the
+--   reason it gave was specific and, at the time, true: a `SealedOrder` carried no
+--   on-ledger arrival order, so the only "time" available at the close was THE ORDER
+--   OF THE ARRAY THE OPERATOR HANDS `RunClose`. Ration on that and the venue picks
+--   the marginal winner by permuting a list — after it has read the whole sealed
+--   book — which is exactly the discretion the rest of this design exists to remove.
+--
+--   THAT REASON IS GONE, AND IT WAS THIS FILE'S OWN COMPLETENESS FIX THAT KILLED IT.
+--   `SubmitOrder` is CONSUMING and increments `submittedCount`, so every submission
+--   to one book SERIALISES THROUGH ONE CONTRACT. The ledger can therefore MINT an
+--   arrival number inside the submitting transaction itself: `SealedOrder.seqNo` is
+--   `submittedCount + 1`, stamped in the same atomic commit that increments the
+--   count. The operator does not supply it (it is not a choice argument), cannot
+--   rewrite it (no choice on either template edits it), and cannot duplicate it (two
+--   submissions racing contend on the same auction contract; one loses, retries, and
+--   is numbered LATER). It is an on-ledger fact the venue authored no part of.
+--   SO THE MARGIN IS RATIONED EARLIEST-FIRST, which is what the rulebooks say:
+--     * Nasdaq Rule 4754(b)(3): "order class -> price -> display status -> TIME",
+--       with rung (A) verbatim "MOC orders, WITH TIME AS THE SECONDARY PRIORITY".
+--     * Xetra T7 §11.1.1: "price/time priority is valid so that the maximum of ONE
+--       order, which is either limited to the auction price or is unlimited, can be
+--       partially executed" — one partial fill, which is precisely what a queue
+--       produces and what pro-rata never could.
+--     * Euronext Trading Manual §3.1: orders "limited EQUAL to the uncrossing price
+--       are filled on a first-come/first-served basis (time priority)".
+--   Pro-rata by size is a legitimate allocation family (CME uses it across its STIR
+--   complex) but no cash-equity closing auction uses it, and this one no longer does.
+--
+--   IT IS ALSO STRICTLY LESS DISCRETION THAN THE RULE IT REPLACES, NOT MERELY A
+--   DIFFERENT ONE. The sort key (class, price, seqNo) is TOTAL and UNIQUE — no two
+--   orders in a book can tie — so `allocateSide` is PERMUTATION-INVARIANT: hand
+--   `RunClose` the same book in any order and the fills are byte-identical. Pro-rata
+--   was permutation-invariant too, but only by refusing to use ANY ordering; this is
+--   invariant while USING one. And because a queue never divides, the quantity leg no
+--   longer rounds at all (see THE RESIDUAL RULE).
+--
+--   ⚠️ WHAT THE SEQUENCE NUMBER DOES **NOT** PROVE — stated before a judge says it.
+--     * IT IS NOT A WALL-CLOCK TIMESTAMP, and nothing here pretends it is. It is the
+--       submission order OF THIS AUCTION CONTRACT: the Nth accepted `SubmitOrder`
+--       gets N. No instant is recorded, and two different books are not comparable.
+--       "Earliest" means "earliest of the orders that reached this book".
+--     * THE VENUE RETAINS INDIRECT INFLUENCE OVER THE ORDER. A `SealedOrder` is
+--       signed by operator AND trader, so the operator's participant must CONFIRM
+--       every submission; a venue that delays its own confirmation delays that
+--       submission's commit, and therefore which of two racing traders gets the lower
+--       number. It cannot RE-NUMBER a committed order — the stamp is minted inside
+--       the trader's own transaction and no choice can edit it — but it can lean on a
+--       race. That is a strictly weaker attack than permuting the array at the close,
+--       which required no cooperation, left no trace, and could be done AFTER the
+--       venue had read the entire sealed book; and it is not invisible, because a
+--       delayed confirmation is a latency pattern in the venue's own participant
+--       rather than a private choice made at the instant of the print.
+--     * CONTENTION NOW HAS A FAIRNESS COST, AND IT IS NEW. Because submissions
+--       serialise, a trader who loses a race must re-read the auction and retry, and
+--       comes back numbered LAST. Under pro-rata that cost was exactly zero. It is
+--       the price of having a queue at all — every real venue's traders pay it, in
+--       microseconds — and it is a cost this design accepts knowingly rather than a
+--       side effect it did not notice.
+--     * A WITHDRAWN ORDER LOSES ITS PLACE. `WithdrawOrder` archives the order, so a
+--       trader who cancels and re-lodges is stamped with a NEW, later number. That is
+--       the universal real-venue treatment of cancel/replace (a modified order loses
+--       time priority) and here it is a consequence of the mechanism rather than a
+--       rule anyone had to write.
 --
 -- THE PRICE COLLAR — a hard band on the print, with an absolute floor
 --   A thin book used to be able to print anywhere: one 1-unit buy and one 1-unit
@@ -313,32 +368,57 @@
 --   print. So do we.
 --
 -- THE RESIDUAL RULE — why every receipt states what was actually delivered
---   Pro-rata in a fixed-precision `Decimal` does not sum exactly: 3 buys of 100
---   against 1 sell of 100 gives three fills of 33.3333333333 summing to
---   99.9999999999 against a pool of 100. `distribute` used to hand the ENTIRE
---   remaining pool to whoever was LAST in the list, so that trader received
---   33.3333333334 while their `SettlementReceipt` said 33.3333333333 — the ledger
---   and the confirm disagreeing, with who benefits decided by array position. On a
---   money path a receipt that does not match the delivery is not a rounding
---   nuisance; it is a broken confirm.
---   PUBLISHED RULE, applied identically to the quantity leg and the cash leg:
---     the marginal level is rationed pro-rata by size, each share taken at the
---     ledger's full precision, and the whole rounding residual — bounded by one
---     ledger unit (1e-10) per order at that level — is carried by the LARGEST order
---     at the marginal level; an exact size tie goes to the first such order in the
---     book supplied to the close (two identical orders at one price level are
---     economically indistinguishable, so the pick is immaterial).
---   The point is not the dust, it is that the FILLS now sum EXACTLY to the crossed
---   volume by construction, so `distribute` can deliver each recipient's stated
---   amount and assert the pool drains to exactly the last one. Delivery == receipt,
---   always, and a violation aborts the close instead of quietly mis-paying.
+--   TIME PRIORITY TOOK THE ROUNDING OUT OF THE QUANTITY LEG ALTOGETHER, and that is
+--   worth saying because it used to be the hard case. Pro-rata DIVIDED: 3 buys of 100
+--   against 1 sell of 100 gave three fills of 33.3333333333 summing to 99.9999999999
+--   against a pool of 100, and somebody had to absorb the difference. `distribute`
+--   used to hand the ENTIRE remaining pool to whoever was LAST in the list, so that
+--   trader received 33.3333333334 while their `SettlementReceipt` said
+--   33.3333333333 — the ledger and the confirm disagreeing, with who benefits decided
+--   by array position. On a money path a receipt that does not match the delivery is
+--   not a rounding nuisance; it is a broken confirm.
+--   `allocateSide` NO LONGER DIVIDES ANYTHING. It walks the class/price/sequence queue
+--   handing each order `min(remaining, quantity)` — addition and subtraction only,
+--   which are EXACT in `Decimal` — so the fills sum to the crossed volume on the nose
+--   by construction and exactly ONE order (the marginal one) is ever partially filled.
+--   That is Xetra's rule stated as an outcome rather than an aspiration: "the maximum
+--   of ONE order ... can be partially executed."
+--   THE CASH LEG STILL ROUNDS, BECAUSE IT MULTIPLIES. A seller's proceeds are
+--   `fillQty * closingPrice`, and that product is quantised to the ledger's 10dp, so
+--   the sum of the sellers' individually-rounded proceeds can differ by dust from the
+--   pool the buyers pledged. The published rule therefore survives, scoped to the leg
+--   that still needs it (and to the dust re-settlement below), unchanged in substance:
+--     the whole rounding residual — bounded by one ledger unit, 1e-10, per filled
+--     order — is carried by the LARGEST fill; an exact size tie goes to the FIRST
+--     such order in the book as supplied to the close (two identical fills are
+--     economically indistinguishable, so the pick decides nothing that matters).
+--   WHY THE LARGEST AND NOT THE LAST-FILLED, NOW THAT THERE IS A QUEUE. The tempting
+--   move is to hand the residual to the MARGINAL order — the one already only partly
+--   satisfied — because that is where a queue's arbitrariness naturally lands. We
+--   deliberately did not, and the reason is arithmetic rather than taste: the marginal
+--   order is BY CONSTRUCTION the smallest fill on its side, and the residual is a
+--   SIGNED adjustment (the dust re-settlement below moves the target DOWN). Handing a
+--   signed adjustment to the smallest fill is the one assignment that can drive a
+--   delivery NEGATIVE and abort the whole close; handing it to the largest cannot,
+--   because the largest fill is at least the average and the residual is bounded by
+--   1e-10 per order. On a money path the rule that cannot abort beats the rule that is
+--   tidier. It is also unchanged from what this file already published, which means no
+--   participant's expectations move.
+--   The point is not the dust, it is that the FILLS sum EXACTLY to the crossed volume
+--   by construction, so `distribute` can deliver each recipient's stated amount and
+--   assert the pool drains to exactly the last one. Delivery == receipt, always, and
+--   a violation aborts the close instead of quietly mis-paying.
 --
 -- DUST DOES NOT TAKE DOWN THE CLOSE — ON EITHER LEG
 --   `PledgeToVenue` asserts `fillQty > 0.0`, which is right for that choice — you
---   cannot pledge nothing. But a heavy-side order small enough that its pro-rata
---   share rounds below 1e-10 gets a fill of exactly 0.0, and because the close is
---   ONE atomic transaction that assert used to take down the ENTIRE auction. A
---   single dust order was a denial of service on the print. Zero fills are
+--   cannot pledge nothing. But ZERO FILLS ARE ORDINARY, and under time priority they
+--   are more ordinary than they were: every order behind the marginal one in the
+--   queue is allocated exactly 0.0, which is the entire content of having a queue.
+--   (Under the old pro-rata rule a zero fill arose more obscurely, from a ration that
+--   rounded below the ledger's smallest unit — a heavy-side order small enough that
+--   `q * matched / total` quantised to nothing.) Because the close is ONE atomic
+--   transaction that assert used to take down the ENTIRE auction, so a single dust
+--   order was a denial of service on the print. Either way, zero fills are
 --   FILTERED OUT before the pledge step and cancelled on close like any other order
 --   that did not trade: the trader keeps every unit and every cent they committed
 --   (the archive touches the ORDER, never the balance), and the auction prints.
@@ -379,7 +459,64 @@
 --   counter into per-participant sub-books and sum them at the close), not to go
 --   back to trusting the operator's array.
 --
--- HOW THE SETTLEMENT WORKS (the subtle, load-bearing part)
+--   AND THE COST PAID A DIVIDEND NOBODY BUDGETED FOR. Serialising the submissions is
+--   exactly what makes an ARRIVAL SEQUENCE definable: because every accepted order
+--   passes through one contract and bumps one counter, the ledger can stamp
+--   `SealedOrder.seqNo = submittedCount + 1` inside the trader's own transaction. The
+--   count was built to prove the book was WHOLE; it turns out to also prove the book
+--   was ORDERED, which is what lets the marginal level be rationed on time instead of
+--   pro-rata (see ALLOCATION). Note the sharding escape hatch above would take that
+--   back — per-shard counters give a partial order, not a total one — so a venue that
+--   ever shards has to publish how it interleaves the shards, and that is a real cost
+--   of the escape hatch rather than a free option.
+--
+-- ===========================================================================
+-- THERE ARE NOW TWO CLOSES. READ THIS BEFORE READING ANYTHING BELOW.
+-- ===========================================================================
+-- The auction has ONE price formation and TWO settlements, and knowing which is
+-- which is the difference between reading this file correctly and misreading it.
+--
+--   `RunClose`                — the LEGACY close. Settles `Holding.daml`, this
+--                               project's own self-issued stand-in, by pledging each
+--                               filled leg to the venue, pooling both sides and
+--                               redistributing. Pre-funded at submission, so a filled
+--                               order cannot fail to deliver. Unchanged in behaviour.
+--   `RunCloseTokenStandard`   — the CIP-56 close. Settles REAL Canton Network Token
+--                               Standard assets — onRails' cETH, BitSafe's cBTC, a
+--                               cash leg from a third registry — through the
+--                               standard's own allocate -> approve -> settle
+--                               lifecycle. The venue never takes custody of anything.
+--
+-- THE PRICE IS THE SAME PRICE. Both call `uncrossSealedBook`, which is this file's
+-- entire price-formation half lifted into one function: the completeness commitment,
+-- the volume-maximising uncross with the full tie-break ladder, the committee-attested
+-- accruing-NAV anchor check, the collar clamp and re-cross, and the class -> price ->
+-- arrival-sequence allocation. Everything documented in this header about HOW A PRICE
+-- IS FOUND applies identically to both. What differs is only what happens to the
+-- fills afterwards.
+--
+-- WHY THE SECOND CLOSE EXISTS, IN TWO SENTENCES.
+--   `Splice.Api.Token.HoldingV1.Holding` is a READ-ONLY VIEW — owner, instrument,
+--   amount, lock. It has no `Transfer` choice, so `PledgeToVenue` -> `mergeAll` ->
+--   `distribute` cannot touch an asset this codebase did not issue, and the auction
+--   could only ever trade its own placeholders.
+--   The same custodial shape is also what let the venue take a reserved leg without
+--   settling anything (trust assumption (1), below). Moving the settlement onto the
+--   standard closes BOTH — one change, two gaps — and `TokenSettlement.daml` is where
+--   it lives.
+--
+-- WHAT THE CIP-56 CLOSE COSTS, STATED HERE AND NOT ONLY IN THE OTHER FILE:
+-- DELIVERY IS NO LONGER PRE-FUNDED. A standard holding can only be locked through the
+-- registry's own factory, and every factory choice demands a concrete `TransferLeg` —
+-- an exact amount to an exact receiver — which does not exist until the price does.
+-- So a CIP-56 order DECLARES its backing (checked at the door: right owner, right
+-- registry, unlocked, covers the worst price it can legally execute at) and ALLOCATES
+-- after the print. The venue can no longer steal; a trader can now fail to deliver,
+-- and when it does the refusal is an on-ledger, attributable
+-- `AllocationRequest_Reject` rather than something the pre-funded design never had to
+-- name. That is the trade, and it is the trade the standard makes.
+--
+-- HOW THE LEGACY SETTLEMENT WORKS (the subtle, load-bearing part)
 --   To move a trader's holding you need that trader's authority, and in Daml a
 --   party's authority is only in scope inside a choice on a contract the party
 --   SIGNS. Each SealedOrder is signed by operator + trader, so a trader's leg can
@@ -400,22 +537,69 @@
 --   and a SettlementBatch records the whole close. Because every move lands in the
 --   same transaction, the batch is atomic: the entire close prints, or none of it.
 --
--- VISIBILITY (no divulgence). A trader's committed holding is signed by its issuer
---   and observed by its owner only — the operator could not otherwise reference it.
---   So `SubmitOrder` ALSO DISCLOSES the committed holding to the operator (adds it
---   as an observer). The close then reads/moves those holdings through legitimate
---   visibility, never through deprecated divulgence.
+-- HOW THE CIP-56 SETTLEMENT WORKS (the same authority problem, solved the
+--   standard's way)
+--   `Allocation_ExecuteTransfer` is controlled by the standard's
+--   `allocationControllers` = executor + sender + receiver, so the same authority
+--   problem appears — and is solved by the same fact, that a SealedOrder carries its
+--   trader's authority.
+--     1. PRINT     — `RunCloseTokenStandard` uncrosses the book, PAIRS the fills into
+--                    bilateral obligations, and writes one `MatchSettlement` per pair
+--                    (co-signed by both of its traders, through their own sealed
+--                    orders) plus one `AuctionAllocationRequest` per sender. NOTHING
+--                    MOVES in this transaction.
+--     2. ALLOCATE  — each sender's wallet reads its obligation off the standard
+--                    `AllocationRequest` interface and exercises
+--                    `AllocationFactory_Allocate` on ITS OWN REGISTRY'S factory. The
+--                    registry locks the holding. The venue is not in that transaction.
+--     3. SETTLE    — `AuctionCross_Settle` executes every leg of every pair in ONE
+--                    transaction. Each pair's sub-exercise carries that pair's own
+--                    authority, so the venue — a signatory of nothing but its own
+--                    records — can settle legs it could never move unilaterally.
+--   The batch is atomic exactly as before: the entire close settles, or none of it.
+--   What is gone is the middle — the venue is never an owner, so `mergeAll` and
+--   `distribute` have nothing to pool, and the pooled cash-leg residual rule has no
+--   counterpart because there is no pool.
+--
+-- VISIBILITY (legacy path: no divulgence). A trader's committed holding is signed by
+--   its issuer and observed by its owner only — the operator could not otherwise
+--   reference it. So `SubmitOrder` ALSO DISCLOSES the committed holding to the
+--   operator (adds it as an observer). The close then reads/moves those holdings
+--   through legitimate visibility, never through deprecated divulgence.
+--   ⚠️ THE CIP-56 PATH CANNOT DO THAT, AND SAYS SO. There is no `Disclose` choice on
+--   `HoldingV1.Holding`, so `SubmitOrder`'s door check on a DECLARED standard holding
+--   is an ordinary `fetch` — which divulges it to the transaction's informees, the
+--   venue among them, for that transaction only. That is the legitimate, one-shot use
+--   of divulgence (read once, in the same transaction, never referenced again: the
+--   order stores the verified `InstrumentId`, not the contract id). Nothing later in
+--   the lifecycle re-reads it, and the settlement itself needs no visibility of the
+--   trader's holdings at all — the registry locks them, and the venue only ever sees
+--   the `Allocation`, which the standard makes it an observer of.
 --
 -- ===========================================================================
--- WHAT THIS DESIGN DOES **NOT** YET ENFORCE — the two trust assumptions, named.
+-- WHAT THIS DESIGN DOES **NOT** YET ENFORCE — the trust assumptions, named.
 -- ===========================================================================
--- Everything above is a property the ledger holds the venue to. These two are not.
--- They are written here, in the same voice, because a design document that lists
--- only its wins is marketing, and because both have a known, specific fix that this
--- codebase already contains an implementation of somewhere else.
+-- Everything above is a property the ledger holds the venue to. These are not. They
+-- are written here, in the same voice, because a design document that lists only its
+-- wins is marketing.
 --
--- (1) THE PLEDGE IS NOT BOUND TO THE CLOSE — the operator can take a reserved leg
---     without settling anything.
+-- (1) THE PLEDGE IS NOT BOUND TO THE CLOSE — on the LEGACY path, the operator can
+--     take a reserved leg without settling anything.
+--     ✅ CLOSED ON THE CIP-56 PATH, AND CLOSED BY CONSTRUCTION RATHER THAN BY A
+--     CHECK. `RunCloseTokenStandard` settles through the standard's allocate ->
+--     approve -> settle lifecycle, so there is no reserved slice for the venue to
+--     reach for, no choice on a standard holding for it to exercise, and its only
+--     power over a trader's assets is `Allocation_ExecuteTransfer` on an allocation
+--     THE TRADER ITSELF created, naming the exact amount and the exact receiver.
+--     `PledgeToVenue` refuses a CIP-56 order outright
+--     (Test:testCip56OrderCannotBePledged).
+--     ❌ STILL OPEN ON THE LEGACY PATH, WHICH STILL EXISTS. Read the rest of this
+--     item as a statement about `RunClose` over `Holding.daml`, which is unchanged
+--     and still reachable. The reason it was not deleted is stated plainly: it is the
+--     path two committed, currently-green Java services drive, and removing it inside
+--     a settlement migration would break them for correctness that is already
+--     available by using the other close. A venue trading real registry assets should
+--     use `RunCloseTokenStandard` and never touch this.
 --     `SealedOrder.PledgeToVenue` is `controller operator`, and a SealedOrder is
 --     signed by operator AND trader — so the trader's authority to move the reserved
 --     holding is present on that contract whenever the operator chooses to reach for
@@ -428,20 +612,29 @@
 --     counts. Every other control here — the uncross, the collar, the completeness
 --     count, the conservation asserts — is downstream of an assumption that the
 --     venue only ever calls this from the close.
---     WHAT THE FIX IS, PRECISELY: the allocate → approve → settle lifecycle, which
---     is not hypothetical here — it is implemented, correctly, in
---     `TokenStandardDvp.daml` in this same package. A trader ALLOCATES its leg to a
---     specific settlement instruction; the instruction can only execute as part of
---     the batch it belongs to; an unexecuted allocation is returnable to its owner.
---     Under that shape a pledge is meaningless outside the close it names, which is
---     exactly the property missing here. Porting the auction's settlement step onto
---     it is the single most valuable change left in this file, and it is a rewrite
---     of the settlement half of `RunClose`, not a patch.
---     UNTIL THEN, STATE THE ASSUMPTION: this venue is trusted not to steal reserved
---     collateral. Canton makes that trust auditable — every unauthorised pledge is a
---     transaction the trader sees, signed by the venue, with no batch behind it —
---     but auditable is not the same as prevented, and this file does not pretend
---     otherwise.
+--     WHAT THE FIX WAS, AND IT IS NOW BUILT: the allocate -> approve -> settle
+--     lifecycle. It was prototyped in `TokenStandardDvp.daml`, and
+--     `TokenSettlement.daml` + `RunCloseTokenStandard` are the auction ported onto
+--     it. A trader ALLOCATES its leg to a specific settlement leg; the allocation can
+--     only execute as part of the pair it names; an unexecuted allocation goes home
+--     to its owner. A pledge is meaningless outside the close it names, because
+--     there is no pledge.
+--     FOR THE LEGACY PATH, THE ASSUMPTION STANDS UNCHANGED: a venue running
+--     `RunClose` is trusted not to steal reserved collateral. Canton makes that trust
+--     auditable — every unauthorised pledge is a transaction the trader sees, signed
+--     by the venue, with no batch behind it — but auditable is not the same as
+--     prevented, and this file does not pretend otherwise.
+--
+-- (1b) THE CIP-56 PATH HAS ITS OWN, DIFFERENT EXPOSURE, AND IT IS NOT THE SAME ONE
+--     DRESSED UP. Delivery is not pre-funded, so a filled trader can decline to
+--     allocate and stop the batch; `AuctionCross_Settle` demands every pair, and
+--     `AuctionCross_Abort` returns every allocation to its sender. Nobody loses
+--     assets — nothing was ever locked by the venue — but the print can fail to
+--     settle. The mitigations are the door check at `SubmitOrder` (right registry,
+--     right owner, unlocked, sufficient) and the fact that a refusal is a signed
+--     on-ledger act. What is NOT modelled is the credit half: no margin, no bond, no
+--     fine. Real venues manage settlement risk with membership rules and money, and
+--     this file does not ship a remedy it cannot enforce.
 --
 -- (2) `NavFixing` PROVES LESS THAN THIS FILE USED TO CLAIM.
 --     `ClosingAuction.fixingRef` binds a close to a K-of-N committee attestation,
@@ -493,12 +686,91 @@ import Governance (NavFixing, navAt, anchorConsistentWithNav)
 -- book check here uses — and never references the auction, so the obligation layer
 -- stays independently readable and cannot import its way back into the auction.
 import LiquidityMandate
-import DA.Optional (optionalToList, mapOptional)
-import DA.List (dedup, sortOn, groupOn)
+-- THE CIP-56 SETTLEMENT HALF. `TokenSettlement` carries everything the close needs
+-- to settle over the Canton Network Token Standard instead of over `Holding.daml`:
+-- the pairing of fills into bilateral legs, the per-sender `AllocationRequest`, the
+-- per-pair `MatchSettlement` that holds the standard's required authority, and the
+-- `AuctionCross` that executes every pair in one transaction. The dependency runs
+-- ONE WAY (MarketOnClose -> TokenSettlement) on purpose: the settlement layer knows
+-- nothing about auctions, sealed orders or price discovery, which is what lets it be
+-- read — and audited — as plain CIP-56.
+import TokenSettlement
+import DA.Optional (optionalToList, mapOptional, isNone)
+-- `groupOn` is deliberately gone: the allocation ladder used to group the side into
+-- price LEVELS and ration one of them, and time priority collapses that into a single
+-- sorted queue (see `allocateSide`).
+import DA.List (dedup, sortOn)
+
+-- The official CIP-56 interface packages (vendored DARs, see deps/). Only the TYPES
+-- are used here — `InstrumentId` to name cETH the way the whole Canton Network names
+-- it, and the `Holding` interface to read a trader's declared backing at the door.
+-- No choice on any holding is exercised anywhere in this file.
+import Splice.Api.Token.HoldingV1 qualified as TS
 
 -- Order side. Deriving Eq/Show so choices can compare and reports can print it.
 data Side = Buy | Sell
   deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- WHAT AN ORDER PUTS UP AT SUBMISSION — the one place the two settlement models
+-- diverge, and they diverge for a reason that is structural rather than stylistic.
+-- ---------------------------------------------------------------------------
+-- `OrderCommitment` is what the TRADER hands the venue. `OrderBacking` is what the
+-- LEDGER records about it afterwards. They are different types on purpose, because
+-- what survives submission is different in the two models and pretending otherwise
+-- would put a stale contract id on a sealed order.
+--
+--   LEGACY (`Holding.daml`) — `ReserveHolding` / `ReservedHolding`.
+--     The venue carves EXACTLY the amount this order can consume out of the trader's
+--     holding, discloses that slice to itself, and pins it on the order. Delivery is
+--     pre-funded: a filled order cannot fail to settle. The order keeps the reserved
+--     slice's contract id, and it stays valid because nothing else can consume it.
+--
+--   CIP-56 (`Splice.Api.Token.HoldingV1`) — `DeclareTokenHolding` / `DeclaredToken`.
+--     THE VENUE CANNOT RESERVE ANYTHING, AND THIS IS NOT AN OMISSION. A standard
+--     holding is a READ-ONLY VIEW; the only way to lock one is through the registry's
+--     own `TransferFactory`/`AllocationFactory`, and every factory choice demands a
+--     concrete `TransferLeg` — an exact amount, to an exact receiver. At submission
+--     time the auction knows neither, because the price does not exist yet. That is
+--     what the auction is FOR.
+--     So the trader DECLARES a holding, the venue CHECKS it — right owner, right
+--     instrument (admin and symbol, not just the symbol), unlocked, and large enough
+--     to cover the worst price this order can legally execute at — and then records
+--     only the `InstrumentId` it verified. The contract id is deliberately NOT kept:
+--     the holding is not locked, so it may be spent a second later, and a sealed
+--     order carrying a contract id that means nothing is worse than one carrying no
+--     contract id at all.
+--     ⚠️ SAY IT PLAINLY: THIS IS A CHECK, NOT A LOCK. It catches the malformed and
+--     the unfunded order at the door — which is what the wrong-instrument check has
+--     always been for — and it does not guarantee delivery. Delivery is guaranteed by
+--     the ALLOCATION the trader makes after the print, and a trader that never
+--     allocates fails the batch. See the header of TokenSettlement.daml for the full
+--     statement of that trade.
+data OrderCommitment
+  = ReserveHolding (ContractId Holding)
+      -- ^ legacy: reserve a slice of this holding and disclose it to the venue
+  | DeclareTokenHolding (ContractId TS.Holding)
+      -- ^ CIP-56: prove this standard holding backs the order; nothing is locked
+  deriving (Eq, Show)
+
+data OrderBacking
+  = ReservedHolding (ContractId Holding)
+      -- ^ legacy: the reserved slice, pinned. Pledged to the venue by the close.
+  | DeclaredToken TS.InstrumentId
+      -- ^ CIP-56: the instrument the trader proved it held enough of at submission.
+      -- Binds the order to a REGISTRY, not merely to a ticker: a "cETH" from some
+      -- other admin is a different `InstrumentId` and will not match the cross.
+  deriving (Eq, Show)
+
+-- | Is this a legacy, pre-funded order?
+isReservedBacking : OrderBacking -> Bool
+isReservedBacking (ReservedHolding _) = True
+isReservedBacking (DeclaredToken _)   = False
+
+-- | The instrument a CIP-56 order proved it was backed by, if it is one.
+declaredInstrument : OrderBacking -> Optional TS.InstrumentId
+declaredInstrument (ReservedHolding _) = None
+declaredInstrument (DeclaredToken i)   = Some i
 
 -- ===========================================================================
 -- THE UNCROSS — deterministic price discovery, as a PURE function.
@@ -791,8 +1063,16 @@ clampToCollar anchor price =
 -- cannot favour anybody. `Test:testAllocationUnit` calls them directly.
 -- ---------------------------------------------------------------------------
 
--- settleResidual — THE PUBLISHED RESIDUAL RULE, in exactly one place so the
--- quantity leg and the cash leg cannot drift apart.
+-- settleResidual — THE PUBLISHED RESIDUAL RULE, in exactly one place so the two
+-- callers that still need it cannot drift apart.
+--
+-- WHERE IT IS STILL USED, PRECISELY, because the answer shrank when the marginal
+-- level moved from pro-rata to time priority. `allocateSide` no longer calls this at
+-- all: a queue hands out `min(remaining, quantity)`, which is exact, so the QUANTITY
+-- leg has no residual to settle. The two remaining callers are (1) the CASH leg,
+-- where each seller's proceeds are the rounded product `fillQty * closingPrice`, and
+-- (2) the dust re-settlement, where the crossed volume is re-targeted to what the
+-- surviving buyers can actually pay for. Both still round; both use this.
 --   entries : [(tag, sizeKey, rawAmount)]  — the raw, individually-rounded amounts
 --   target  : what those amounts MUST sum to
 -- Returns [(tag, amount)] summing EXACTLY to `target`. The whole rounding residual
@@ -814,88 +1094,88 @@ settleResidual target entries =
         else (done, acc ++ [(t, r)])
   in snd (foldl step (False, []) entries)
 
--- rationLevel — ration ONE level pro-rata by size to exactly `remaining` units.
--- Every order at a level is economically identical — same class, same limit price —
--- so size is the only thing left to distinguish them. (The UNPRICED orders form one
--- level of their own, so this is also the function that rations MOC against MOC when
--- unpriced interest alone exceeds the crossed volume: Nasdaq's rung (A).) The shares
--- are formed as `(q * remaining) / total` — the multiplication FIRST, so an evenly
--- divisible ration stays exact — and `settleResidual` then makes the list sum to
--- `remaining` on the nose. Polymorphic in the middle (price) slot because it never
--- reads it: at one level every price is the same, or there is none at all.
-rationLevel : Decimal -> [(a, p, Decimal)] -> [(a, Decimal)]
-rationLevel remaining lvl =
-  let
-    lvlTotal = sum [q | (_, _, q) <- lvl]
-    raws = [ (t, q, if lvlTotal <= 0.0 then 0.0 else (q * remaining) / lvlTotal)
-           | (t, _, q) <- lvl ]
-  in settleResidual remaining raws
-
--- allocateSide — walk ONE side of the book in CLASS-then-PRICE priority and hand out
--- exactly `crossQty` units.
+-- allocateSide — walk ONE side of the book in CLASS → PRICE → TIME priority and hand
+-- out exactly `crossQty` units.
 --   side     — fixes the direction of price priority: a BUY priced HIGHER is more
 --              aggressive, a SELL priced LOWER is.
 --   crossQty — the volume the uncross says this side must deliver.
---   orders   — every ELIGIBLE order on the side, as (tag, limitPrice, quantity),
---              where `limitPrice = None` is an unpriced MOC.
+--   orders   — every ELIGIBLE order on the side, as
+--              (tag, limitPrice, quantity, seqNo), where `limitPrice = None` is an
+--              unpriced MOC and `seqNo` is the order's LEDGER-MINTED arrival number
+--              (`SealedOrder.seqNo`; see the ALLOCATION section of the header for
+--              what that number does and does not prove).
 -- Returns one (tag, fillQty) per input order, summing EXACTLY to `crossQty`.
 --
 -- THE LADDER, and it is Nasdaq Rule 4754(b)(3)'s: class → price → time.
---   (a) UNPRICED MOC — one single level at the very top, ahead of every limit order
---       regardless of how aggressively that limit is priced. Fills in full if the
---       crossed volume reaches; rationed AMONG THE UNPRICED if it does not, in which
---       case nothing priced fills at all.
---   (b) PRICED, THROUGH THE PRINT — level by level, best price first, each in full
---       until the crossed volume runs out.
---   (c) THE MARGINAL LEVEL — the one the volume runs out on, rationed. Everything
---       behind it gets zero.
--- On the LIGHT side `crossQty` equals the side's own total, so every level fills in
+--   (a) UNPRICED MOC — ahead of every limit order regardless of how aggressively
+--       that limit is priced. Fills in full if the crossed volume reaches; rationed
+--       AMONG THE UNPRICED, earliest submission first, if it does not — in which case
+--       nothing priced fills at all.
+--   (b) PRICED, THROUGH THE PRINT — best price first, each in full until the crossed
+--       volume runs out.
+--   (c) THE MARGINAL LEVEL — the one the volume runs out on, taken EARLIEST-FIRST, so
+--       exactly ONE order is partially filled and everything behind it gets zero.
+-- On the LIGHT side `crossQty` equals the side's own total, so every order fills in
 -- full and the function is a no-op — which is why both sides can go through the
 -- same code path with no special case for "which side is heavy".
 --
--- TOTAL BY CONSTRUCTION. It never allocates more than a level holds and never more
--- than is left, so it cannot over-fill even in the pathological book that the
+-- THERE IS NO "LEVEL" LEFT IN THE CODE, AND THAT IS THE SIMPLIFICATION TIME PRIORITY
+-- BUYS. Class → price → sequence is a TOTAL, UNIQUE order over the whole side (no two
+-- orders in a book share a `seqNo`), so grouping into price levels and then rationing
+-- within one of them collapses into a single ordered walk. "Level" survives only as
+-- vocabulary for explaining the rule; mechanically there is one queue.
+--
+-- TOTAL BY CONSTRUCTION. It never hands an order more than it asked for and never
+-- more than is left, so it cannot over-fill even in the pathological book that the
 -- mixed-surplus tie-break (`discoverPrice` rule 4) exists to prevent. That rule
 -- makes "through-the-print always fits" a property of the price; this function does
 -- not depend on it being one — which is exactly why a COLLAR-CLAMPED print, which
 -- was never chosen by the tie-break ladder at all, goes through the same code path
 -- with nothing special done to it. Nor does it depend on the mix of MOC and LOC: unpriced
 -- interest larger than the whole cross is a normal book (an index rebalance day is
--- exactly that), and it rations rather than over-filling.
-allocateSide : Side -> Decimal -> [(a, Optional Decimal, Decimal)] -> [(a, Decimal)]
-allocateSide side crossQty orders = walkLevels (groupOn keyOf (sortOn keyOf orders)) crossQty
+-- exactly that), and it queues rather than over-filling.
+--
+-- AND IT IS PERMUTATION-INVARIANT. The sort key is total and unique, so the order in
+-- which the operator hands the book to `RunClose` cannot change a single fill. That
+-- was the one genuine virtue of the pro-rata rule this replaces, and it is kept.
+allocateSide : Side -> Decimal -> [(a, Optional Decimal, Decimal, Int)] -> [(a, Decimal)]
+allocateSide side crossQty orders = walkQueue (sortOn keyOf orders) crossQty
   where
-    -- THE WHOLE CLASS RULE IS THIS KEY. The first rung is the ORDER CLASS — 0 for
-    -- unpriced MOC, 1 for everything limited — so every MOC sorts above every LOC no
-    -- matter what the limits are, and `groupOn` collects them into ONE level. The
-    -- second rung is the familiar price priority, and it only ever compares orders
-    -- that are already in the same class. Nasdaq 4754(b)(3): "(A) MOC orders... (B)
-    -- Displayed Orders, with price as the primary priority."
-    -- `sortOn` is STABLE, so within one level the book keeps the order the close was
-    -- handed — which only ever breaks an exact size tie in the residual.
-    keyOf (_, mLimit, _) = case mLimit of
-      None       -> (0, 0.0)              -- class 0: unpriced MOC, ahead of all limits
-      Some p     -> (1, priceRank p)      -- class 1: limits, ranked by aggressiveness
+    -- THE WHOLE LADDER IS THIS KEY, all three rungs of it.
+    --   RUNG 1, CLASS: 0 for unpriced MOC, 1 for everything limited — so every MOC
+    --     sorts above every LOC no matter what the limits are. Nasdaq 4754(b)(3):
+    --     "(A) MOC orders... (B) Displayed Orders, with price as the primary priority."
+    --   RUNG 2, PRICE: the familiar price priority, and it only ever compares orders
+    --     already in the same class.
+    --   RUNG 3, TIME: the ledger-minted arrival number. Nasdaq's rung (A) is verbatim
+    --     "MOC orders, WITH TIME AS THE SECONDARY PRIORITY", and its (B) is "price as
+    --     the primary priority... time as the secondary priority" — so time is the
+    --     tie-break INSIDE the unpriced class as well as inside each price level, and
+    --     one key expresses both.
+    -- Because `seqNo` is unique per book, the key is a strict total order and the
+    -- result does not depend on `sortOn` being stable (it is) nor on the input order.
+    keyOf (_, mLimit, _, seqNo) = case mLimit of
+      None   -> (0, 0.0, seqNo)          -- class 0: unpriced MOC, ahead of all limits
+      Some p -> (1, priceRank p, seqNo)  -- class 1: limits, ranked by aggressiveness
     priceRank p = case side of
       Buy  -> negate p    -- buys: highest limit first
       Sell -> p           -- sells: lowest limit first
 
--- walkLevels — the price-priority waterfall itself: hand `remaining` units to the
--- levels in priority order, and ration the one it runs out on. A TOP-LEVEL function
--- because Daml permits recursion only at the top level (a recursive `let`/`where`
--- is rejected outright), not because it is meant to be called directly.
-walkLevels : [[(a, p, Decimal)]] -> Decimal -> [(a, Decimal)]
-walkLevels [] _ = []
-walkLevels (lvl :: rest) remaining =
-  let lvlTotal = sum [q | (_, _, q) <- lvl]
-  in if remaining >= lvlTotal
-       -- Unpriced MOC, or priced THROUGH the print (or the last level that still
-       -- fits): every order here is GUARANTEED to participate, in full.
-       then [(t, q) | (t, _, q) <- lvl] ++ walkLevels rest (remaining - lvlTotal)
-       -- THE MARGINAL LEVEL — the only one that is ever rationed. Everything behind
-       -- it is priced worse than the print can pay and gets nothing, which
-       -- `rationLevel` produces naturally from a remaining of 0.
-       else rationLevel remaining lvl ++ walkLevels rest 0.0
+-- walkQueue — the priority waterfall itself: hand `remaining` units down an already
+-- sorted queue, giving each order `min(remaining, quantity)`. A TOP-LEVEL function
+-- because Daml permits recursion only at the top level (a recursive `let`/`where` is
+-- rejected outright), not because it is meant to be called directly.
+--
+-- EXACT, AND THAT IS THE POINT. Only `min` and subtraction appear here — no division,
+-- so no rounding — which is why the quantity leg no longer needs the residual rule at
+-- all. Orders before the margin get their full size, exactly ONE order straddles the
+-- boundary and is partially filled (Xetra T7 §11.1.1), and every order behind it gets
+-- 0.0 and is cancelled on close by `RunClose`.
+walkQueue : [(a, p, Decimal, Int)] -> Decimal -> [(a, Decimal)]
+walkQueue [] _ = []
+walkQueue ((t, _, q, _) :: rest) remaining =
+  let fill = min remaining q
+  in (t, fill) :: walkQueue rest (remaining - fill)
 
 -- ---------------------------------------------------------------------------
 -- ClosingAuction — the venue's call auction for one instrument.
@@ -1014,7 +1294,13 @@ template ClosingAuction
         --            counts at every candidate price, ranks ahead of every limit
         --            order, and can never be cancelled for being away from the cross.
         limitPrice : Optional Decimal
-        holdingCid : ContractId Holding -- pre-committed: cash (Buy) or asset (Sell)
+        -- WHAT BACKS THIS ORDER — cash (Buy) or the asset (Sell), in one of the two
+        -- settlement models. `ReserveHolding` is the legacy pre-funded path and is
+        -- unchanged in every respect. `DeclareTokenHolding` is the CIP-56 path: the
+        -- holding is CHECKED here and settled through the standard's allocation
+        -- lifecycle after the print. See `OrderCommitment` for why a CIP-56 order
+        -- cannot be reserved at submission time, and what that costs.
+        commitment : OrderCommitment
       controller trader
       do
         assertMsg "the sealed-order window is closed"          isOpen
@@ -1024,9 +1310,6 @@ template ClosingAuction
         assertMsg "a stated limit price must be positive (omit it entirely for MOC)"
           (case limitPrice of None -> True; Some p -> p > 0.0)
         assertMsg "submitter must be a registered participant"  (trader `elem` participants)
-        -- Sanity-check the pre-committed holding actually belongs to the trader.
-        h <- fetch holdingCid
-        assertMsg "committed holding must belong to the trader" (h.owner == trader)
         -- ...AND THAT IT IS THE RIGHT TOKEN. This check used to be missing, and its
         -- absence was a denial of service on every other participant, not merely a
         -- sloppy order. A SELL delivers the ASSET and a BUY delivers the CASH leg, so
@@ -1040,11 +1323,13 @@ template ClosingAuction
         -- the close run over the whole book, so the only exit is a real on-ledger
         -- cancellation. Reject it at the door instead, where it costs one trader one
         -- rejected submission.
+        -- AND IT IS THE SAME CHECK IN BOTH SETTLEMENT MODELS. A CIP-56 order is held
+        -- to it through the standard's own `HoldingView.instrumentId`, whose `.id` is
+        -- this same symbol — so "the wrong token at the door" is rejected identically
+        -- whether the token is a `Holding.daml` stand-in or onRails' real cETH.
         let expectedInstrument = case side of
               Sell -> instrumentId      -- a sell delivers the asset being auctioned
               Buy  -> cashInstrument    -- a buy delivers the book's cash leg
-        assertMsg "committed holding is the wrong instrument for this side of the book"
-          (h.instrumentId == expectedInstrument)
         -- RESERVE THE EXACT BACKING (the fix for stale-holding CONTRACT_NOT_FOUND).
         -- Carve off EXACTLY the amount this order can consume into a DEDICATED
         -- holding that only this SealedOrder references, and disclose that slice to
@@ -1080,15 +1365,61 @@ template ClosingAuction
         --        choice on this template rewrites `referencePrice`, so the number the
         --        reservation is sized against here is the number the collar is
         --        centred on at the close.
+        --
+        -- AND THE SAME NUMBER IS THE CIP-56 SUFFICIENCY CHECK. Under the token
+        -- standard nothing is carved off — see `OrderCommitment` — but `reserveAmount`
+        -- is still exactly the worst case this order can be presented with, so it is
+        -- exactly the right number to hold a declared holding to. The collar earns its
+        -- keep identically in both models: it is what makes an unpriced buy's exposure
+        -- finite, and therefore checkable at all.
         let reserveAmount = case (side, limitPrice) of
               (Sell, _)       -> quantity
               (Buy, Some lim) -> quantity * lim
               (Buy, None)     -> quantity * (referencePrice + collarBand referencePrice)
-        reserved <- reserveExact holdingCid reserveAmount operator
+        backing <- case commitment of
+          -- ---- LEGACY: pre-fund by reserving a slice, exactly as before ----------
+          ReserveHolding holdingCid -> do
+            h <- fetch holdingCid
+            assertMsg "committed holding must belong to the trader" (h.owner == trader)
+            assertMsg "committed holding is the wrong instrument for this side of the book"
+              (h.instrumentId == expectedInstrument)
+            reserved <- reserveExact holdingCid reserveAmount operator
+            pure (ReservedHolding reserved)
+          -- ---- CIP-56: CHECK a real token-standard holding; lock NOTHING ---------
+          -- Read through the OFFICIAL `HoldingV1.Holding` interface, so this works
+          -- against onRails' cETH and BitSafe's cBTC without either registry's code
+          -- being on this ledger's classpath. The holding is fetched ONCE, here, and
+          -- never referenced again — there is no contract id to go stale, because
+          -- none is kept.
+          DeclareTokenHolding tokenCid -> do
+            hv <- view <$> fetch tokenCid
+            assertMsg "declared holding must belong to the trader" (hv.owner == trader)
+            assertMsg "committed holding is the wrong instrument for this side of the book"
+              (hv.instrumentId.id == expectedInstrument)
+            -- A holding already committed elsewhere is not backing for this order.
+            assertMsg "declared holding is already locked to another settlement"
+              (isNone hv.lock)
+            -- BUYING POWER, against the same worst case a reservation would have
+            -- carved off. ⚠️ A CHECK AT A MOMENT IN TIME, NOT A LOCK: the trader can
+            -- spend this holding the next second, and delivery is guaranteed only by
+            -- the allocation it makes after the print.
+            assertMsg "declared holding is too small to back this order"
+              (hv.amount >= reserveAmount)
+            pure (DeclaredToken hv.instrumentId)
+        -- STAMP THE ARRIVAL NUMBER. This is the whole of time priority: the counter
+        -- that proves the book is COMPLETE also numbers it, and the number is minted
+        -- HERE — inside the trader's own submitting transaction, atomically with the
+        -- increment below — rather than being supplied by the operator at the close.
+        -- The Nth accepted submission is order N. `SubmitOrder` is consuming, so two
+        -- traders cannot both read the same `submittedCount` and both commit: one
+        -- wins, the other re-reads the auction and comes back as N+1. See the
+        -- ALLOCATION section of the module header for what this proves and what it
+        -- does not.
         orderCid <- create SealedOrder with
           operator; auditor; trader
           instrumentId; cashInstrument; session
-          side; quantity; limitPrice; holdingCid = reserved
+          side; quantity; limitPrice; backing
+          seqNo = submittedCount + 1
         -- Re-create the auction with the book count incremented: the ledger now
         -- records that one more order was lodged, and the close cannot pretend
         -- otherwise.
@@ -1117,8 +1448,9 @@ template ClosingAuction
     -- there is no state in which the venue can act on the sealed book that a trader
     -- cannot also act in.)
     --
-    -- Returns (new auction cid, the unlocked holding).
-    choice WithdrawOrder : (ContractId ClosingAuction, ContractId Holding)
+    -- Returns (new auction cid, the unlocked holding — `None` for a CIP-56 order,
+    -- which never had anything locked to unlock; see `SealedOrder.Cancel`).
+    choice WithdrawOrder : (ContractId ClosingAuction, Optional (ContractId Holding))
       with
         trader   : Party                   -- the order's owner (the controller)
         orderCid : ContractId SealedOrder   -- their resting order
@@ -1370,6 +1702,854 @@ template ClosingAuction
         assertMsg "close only runs on a sealed window" (not isOpen)
 
         -- ------------------------------------------------------------------
+        -- THE PRICE FORMATION HALF — shared, verbatim, with the CIP-56 close.
+        -- ------------------------------------------------------------------
+        -- Everything that makes this venue what it is happens inside
+        -- `uncrossSealedBook`: the completeness commitment, the wrong-book checks, the
+        -- volume-maximising uncross with the full Xetra/Euronext tie-break ladder, the
+        -- committee-attested accruing-NAV anchor check, the collar CLAMP and re-cross,
+        -- and the class -> price -> arrival-sequence allocation ladder. It is ONE
+        -- function precisely so that `RunClose` and `RunCloseTokenStandard` cannot
+        -- drift into printing two different prices over the same book. What differs
+        -- between the two closes is ONLY what happens to the fills afterwards.
+        outcome <- uncrossSealedBook this buyOrders sellOrders
+        let closingPrice = outcome.closingPrice
+            matched      = outcome.matched
+            buyFills     = outcome.buyFills
+            sellFills    = outcome.sellFills
+            awayCids     = outcome.awayCids
+
+        -- THIS CLOSE SETTLES `Holding.daml` STAND-INS AND NOTHING ELSE. A book whose
+        -- orders declared CIP-56 backing has no reserved slice to pledge and no
+        -- pledgeable choice on the assets it names, so it must go through
+        -- `RunCloseTokenStandard`. Refusing here, by name, beats failing three
+        -- screens later inside `PledgeToVenue` with a message about a missing holding.
+        assertMsg "this book holds CIP-56 orders: settle it with RunCloseTokenStandard"
+          (all (\(_, o) -> isReservedBacking o.backing) outcome.allOrders)
+
+
+        -- ------------------------------------------------------------------
+        -- DUST DOES NOT ABORT THE CLOSE — ON EITHER LEG.
+        -- ------------------------------------------------------------------
+        -- An order whose share rounds below the ledger's smallest representable unit
+        -- gets a fill of exactly 0.0. It cannot be pledged (`PledgeToVenue` rightly
+        -- refuses to deliver nothing) and it must not receive a receipt for a trade
+        -- that never happened — so it is FILTERED OUT here and cancelled on close
+        -- below, exactly like an order that sat away from the print. It used to abort
+        -- the entire auction, which made a single dust order a denial of service.
+        --
+        -- THE HALF THAT WAS STILL BROKEN, AND IT IS THE SAME BUG ON THE OTHER LEG. A
+        -- seller delivers `fillQty` of the ASSET, so filtering `fillQty > 0` was
+        -- enough for the sell side. A BUYER delivers `fillQty * closingPrice` of
+        -- CASH, and THAT product has its own rounding: a fill with a perfectly
+        -- positive quantity can still owe a cash amount that quantises to 0.0, at
+        -- which point `deliverExact` hits `Holding.Split 0.0` and the whole close
+        -- dies — the identical denial of service, one leg over. It is reachable
+        -- exactly where `collarFloor` exists to be reached: a sub-0.50 print, where
+        -- `q * price` can round away for a `q` that is itself representable. So a buy
+        -- leg is only settleable if BOTH of its legs are: `q > 0` AND `q * price > 0`.
+        --
+        -- AND THE SELL SIDE HAS TO FOLLOW IT DOWN, which is the part a naive filter
+        -- gets wrong. Dropping a ZERO-quantity leg is free — it contributes 0 to the
+        -- allocation sums, so conservation is untouched. Dropping a POSITIVE-quantity
+        -- buy leg is NOT: the sellers have already been allocated the full `matched`,
+        -- so the asset pool would arrive one dust unit larger than the surviving
+        -- buyers are owed and `distribute` would abort on its final tripwire — the
+        -- same outage, moved three lines down. So the crossed volume is re-derived as
+        -- what the surviving buyers can actually PAY for, and the sell side is
+        -- re-settled to that number through the SAME published residual rule the file
+        -- already uses everywhere else: the largest sell leg carries the difference.
+        -- The dust buyer trades nothing and keeps everything, exactly as the dust
+        -- SELLER already did; one seller sells one ledger unit less; the print, the
+        -- price and everyone else's fill are untouched.
+        --
+        -- In every ordinary close this whole block is the IDENTITY: with a print of
+        -- any normal size `q * price > 0` for every `q > 0`, so `matchedNet == matched`
+        -- and `settleResidual` against a target it already sums to changes nothing.
+        let buyLegs    = filter (\(_, _, q) -> q > 0.0 && q * closingPrice > 0.0) buyFills
+        -- THE PAYABLE CROSS. Never larger than `matched`, and smaller only by the
+        -- quantity of buy fills that cannot pay for themselves.
+        let matchedNet = sum [q | (_, _, q) <- buyLegs]
+        -- If NOTHING crosses that can pay for itself, there is no settleable print.
+        -- Same class of outcome as "the book does not cross": nothing settles, and
+        -- with `ReopenBidding` the venue can put the window back and try again.
+        assertMsg "no fill at this print is large enough to pay for itself"
+          (matchedNet > 0.0)
+        -- Re-settle the sell side to the payable volume. `settleResidual` hands the
+        -- whole difference to the entry with the largest size key — the largest sell
+        -- fill — which is the published rule, unchanged, applied to a target that has
+        -- moved by dust.
+        let sellAdj  = settleResidual matchedNet
+              [ ((cid, o), q, q) | (cid, o, q) <- sellFills, q > 0.0 ]
+        let sellLegs = [ (cid, o, q) | ((cid, o), q) <- sellAdj, q > 0.0 ]
+        -- TRIPWIRE. The adjustment above only ever SHRINKS one leg, so this holds by
+        -- construction; it could only fail in a degenerate book where the dust
+        -- removed exceeds the largest sell fill outright, and there the close must
+        -- abort rather than deliver a pool that cannot drain.
+        assertMsg "the payable sell allocation does not sum to the payable crossed volume"
+          (sum [q | (_, _, q) <- sellLegs] == matchedNet)
+        -- CANCEL-ON-CLOSE SET: every fill that did not survive to a settleable leg,
+        -- on either side. Computed by DIFFERENCE against the surviving legs so the
+        -- two lists cannot drift — an order is cancelled iff it is not settled.
+        let settledCids  = [cid | (cid, _, _) <- buyLegs] ++ [cid | (cid, _, _) <- sellLegs]
+        let roundedToNil = [ cid | (cid, _, _) <- buyFills ++ sellFills
+                           , cid `notElem` settledCids ]
+
+        -- ------------------------------------------------------------------
+        -- ONE ISSUER PER LEG — fail EARLY and by NAME, not inside `mergeAll`.
+        -- ------------------------------------------------------------------
+        -- `SubmitOrder` now pins each order's committed holding to the right
+        -- INSTRUMENT ID, which closes the ordinary version of this hole. What an
+        -- instrument id cannot pin is the OBLIGOR: two issuers can both mint a token
+        -- calling itself "USDC", and pooling them hits `Holding.Merge`'s "can only
+        -- merge the same issuer" deep inside `mergeAll`, taking the close down with a
+        -- message that names neither the order nor the auction. Check it here, once,
+        -- before anything moves, so the failure is legible.
+        -- STATED HONESTLY, BECAUSE IT IS NOT A FULL FIX: this turns an inscrutable
+        -- abort into a named one, it does not prevent it. Preventing it needs the
+        -- auction to NAME the issuers it accepts, checked at `SubmitOrder` — two more
+        -- fields on `ClosingAuction`, whose field list is the wire format the Java
+        -- backends construct positionally through Daml codegen. That is a mechanical
+        -- change to this template plus `LedgerCommands.createAuction`, and it is the
+        -- right end state; it is deliberately not done inside an audit fix.
+        sellHoldings <- forA sellLegs (\(_, o, _) -> fetch (reservedCidOf o))
+        buyHoldings  <- forA buyLegs  (\(_, o, _) -> fetch (reservedCidOf o))
+        assertMsg "the asset legs of this book are not all issued by the same issuer"
+          (length (dedup [h.issuer | h <- sellHoldings]) <= 1)
+        assertMsg "the cash legs of this book are not all issued by the same issuer"
+          (length (dedup [h.issuer | h <- buyHoldings]) <= 1)
+
+        -- 1. PLEDGE each allocated leg to the venue (the move happens inside each
+        --    order's own choice, so that trader's authority is present);
+        -- 2. POOL by merging.
+        assetContribs <- forA sellLegs (\(cid, _, q) ->
+          exercise cid PledgeToVenue with fillQty = q; closingPrice)
+        cashContribs  <- forA buyLegs  (\(cid, _, q) ->
+          exercise cid PledgeToVenue with fillQty = q; closingPrice)
+        assetPool <- mergeAll assetContribs
+        cashPool  <- mergeAll cashContribs
+
+        -- THE CASH LEG'S OWN RESIDUAL. The cash pool is exactly what the buyers
+        -- pledged: each owes `fillQty * closingPrice` and not a unit more. The
+        -- sellers' proceeds are the same product from the other side — but each
+        -- product is rounded on its own, so the two sums can differ by dust even
+        -- though the QUANTITIES matched to the unit. The published residual rule
+        -- settles it the same way it settles the quantity leg: the largest seller
+        -- fill carries it. The number computed here is the number DELIVERED and the
+        -- number printed on that seller's SettlementReceipt — they cannot diverge,
+        -- because there is only one of them.
+        let cashPoolTotal = sum [q * closingPrice | (_, _, q) <- buyLegs]
+        let sellCash = settleResidual cashPoolTotal
+              [ ((cid, o, q), q, q * closingPrice) | (cid, o, q) <- sellLegs ]
+
+        -- 3. DELIVER at the uniform price: buyers get their filled ASSET, sellers
+        --    get their filled proceeds. `distribute` now delivers each recipient the
+        --    STATED amount and asserts the pool drains to exactly the last one — it
+        --    used to hand the last recipient in list order whatever was left, which
+        --    is how a receipt could disagree with the ledger.
+        distribute assetPool [(o.trader, q)    | (_, o, q)     <- buyLegs]
+        distribute cashPool  [(o.trader, cash) | ((_, o, _), cash) <- sellCash]
+
+        -- 4. CANCEL ON CLOSE — the orders that sat away from the print never traded,
+        --    and neither did the ones whose ration rounded to nothing, so both are
+        --    cleared off the book here, in the same transaction as the cross. This is
+        --    the standard MOC treatment (a closing order that does not cross does not
+        --    rest into the next session), and it matters mechanically now that the
+        --    auction itself is consumed by this choice: an order left alive would
+        --    have no auction left to be withdrawn through. Nobody loses anything —
+        --    the archive touches the ORDER, never the balance, so the reserved
+        --    holding stays the trader's, free to spend.
+        _ <- forA (awayCids ++ roundedToNil) (\cid -> exercise cid VenueCancel)
+
+        -- AUDIT — one venue-signed receipt per FILLED order (the exchange confirm),
+        -- then the immutable batch record of the whole close. Every amount below is
+        -- the amount that actually moved a few lines above.
+        now <- getTime
+        buyRecs <- forA buyLegs (\(_, o, q) -> do
+          r <- create SettlementReceipt with
+            seller = operator; buyer = o.trader   -- the venue is the buyer's CCP
+            venue = Some operator; auditor
+            assetInstrument = instrumentId; assetAmount = q
+            cashInstrument; cashAmount = q * closingPrice
+            unitPrice = closingPrice; settledAt = now
+          pure FillRecord with
+            seller = operator; buyer = o.trader; quantity = q; price = closingPrice; receipt = r)
+        sellRecs <- forA sellCash (\((_, o, q), cash) -> do
+          r <- create SettlementReceipt with
+            seller = o.trader; buyer = operator   -- the venue is the seller's CCP
+            venue = Some operator; auditor
+            assetInstrument = instrumentId; assetAmount = q
+            cashInstrument; cashAmount = cash
+            unitPrice = closingPrice; settledAt = now
+          pure FillRecord with
+            seller = o.trader; buyer = operator; quantity = q; price = closingPrice; receipt = r)
+
+        -- THE BATCH IS NOT A TAPE. `fills` carries seller, buyer, size and price for
+        -- every cross, so it is the executed book with identities attached — and it
+        -- is observed by the AUDITOR ONLY. `traders` below is a record of whose
+        -- orders the close ran over; it no longer puts anybody on the observer line
+        -- (see the header of `Settlement.SettlementBatch`, which is where this was
+        -- fixed and why). Each trader learns its own execution from the
+        -- `SettlementReceipt` written just above, which names exactly the two parties
+        -- to that fill plus the auditor. Nobody learns anybody else's.
+        create SettlementBatch with
+          operator; auditor; instrumentId; closingPrice
+          fills = buyRecs ++ sellRecs
+          traders = participants
+          settledAt = now
+
+    -- =====================================================================
+    -- RUN CLOSE, ON THE CANTON NETWORK TOKEN STANDARD.
+    -- =====================================================================
+    -- THE SAME AUCTION. A DIFFERENT SETTLEMENT. Every property this venue is judged
+    -- on is computed by the SAME function `RunClose` calls — `uncrossSealedBook` —
+    -- so the price, the collar clamp, the completeness commitment, the accruing-NAV
+    -- anchor check and the class -> price -> arrival-sequence ladder are not
+    -- reimplemented here, they are literally the same code. What changes is
+    -- everything after the fills exist.
+    --
+    -- WHY IT HAD TO CHANGE, IN ONE SENTENCE: `HoldingV1.Holding` is a READ-ONLY VIEW
+    -- with no `Transfer`, so `PledgeToVenue` -> `mergeAll` -> `distribute` cannot
+    -- touch a real registry's asset — and the same custodial shape is what let the
+    -- operator take a reserved leg without settling anything. One change closes both.
+    --
+    -- WHAT THIS CHOICE PRODUCES, AND WHAT IT DELIBERATELY DOES NOT.
+    --   IT PRODUCES  — an `AuctionCross` (the venue's record of the print), one
+    --                  `MatchSettlement` per crossed pair ALREADY CO-SIGNED by both
+    --                  of its traders, and one `AuctionAllocationRequest` per sender
+    --                  carrying only that sender's own legs.
+    --   IT MOVES     — nothing. Not one unit of anything changes hands in this
+    --                  transaction. The venue has no custody at any point of the
+    --                  lifecycle, which is exactly the property that was missing.
+    -- Settlement happens later, in `AuctionCross_Settle`, once each sender has
+    -- allocated through ITS OWN REGISTRY'S factory. That is the standard's shape and
+    -- the reason this auction can now cross an asset it did not issue.
+    --
+    -- THE TWO REGISTRY PARTIES ARE CHOICE ARGUMENTS, NOT TEMPLATE FIELDS, AND THAT IS
+    -- A DELIBERATE COST-CONTROL RATHER THAN A DESIGN OPINION. `ClosingAuction`'s field
+    -- list is the wire format the Java backends construct POSITIONALLY through Daml
+    -- codegen; adding two fields breaks that constructor in two committed services.
+    -- Passing them here keeps the auction template's shape untouched. What is lost by
+    -- doing so is stated honestly: the venue names the registries at close time rather
+    -- than at book-creation time, so the ledger cannot prove in advance which registry
+    -- a book intends to settle in. What CLOSES that gap is the check immediately
+    -- below — every order's DECLARED backing must equal the leg instrument the venue
+    -- is about to build, ADMIN INCLUDED — so a venue that names the wrong registry
+    -- here cannot print at all. The binding is enforced; it is simply enforced by the
+    -- traders' declarations rather than by a field.
+    choice RunCloseTokenStandard : AuctionCloseResult
+      with
+        buyOrders      : [ContractId SealedOrder]  -- EVERY live sealed BUY in this book
+        sellOrders     : [ContractId SealedOrder]  -- EVERY live sealed SELL in this book
+        assetAdmin     : Party
+          -- ^ the registry administering the auctioned instrument — onRails for cETH,
+          -- BitSafe for cBTC. With `instrumentId` this forms the CIP-56
+          -- `InstrumentId {admin, id}` the whole Canton Network identifies it by.
+        cashAdmin      : Party   -- ^ the registry administering the cash leg
+        settlementId   : Text
+          -- ^ the venue's reference for this close. Becomes the standard's
+          -- `SettlementInfo.settlementRef`, and is what binds an allocation to THIS
+          -- print and no other.
+        allocateBefore : Time    -- ^ senders have until here to allocate
+        settleBefore   : Time    -- ^ the venue has until here to execute
+      controller operator
+      do
+        assertMsg "close only runs on a sealed window" (not isOpen)
+        now <- getTime
+        assertMsg "senders must be given time to allocate: allocateBefore has passed"
+          (now < allocateBefore)
+        assertMsg "allocateBefore must not be after settleBefore"
+          (allocateBefore <= settleBefore)
+
+        -- ------------------------------------------------------------------
+        -- THE PRICE. Identical to `RunClose`, because it is the same function.
+        -- ------------------------------------------------------------------
+        outcome <- uncrossSealedBook this buyOrders sellOrders
+
+        let assetInstrument  = TS.InstrumentId with admin = assetAdmin; id = instrumentId
+            cashInstrumentTS = TS.InstrumentId with admin = cashAdmin;  id = cashInstrument
+
+        -- ------------------------------------------------------------------
+        -- EVERY ORDER MUST BE A CIP-56 ORDER, BACKED BY THE RIGHT REGISTRY.
+        -- ------------------------------------------------------------------
+        -- This is the check that makes the two registry arguments above trustworthy.
+        -- `SubmitOrder` recorded, for each order, the full `InstrumentId` — ADMIN AND
+        -- SYMBOL — of the holding the trader proved it held. A book settles here only
+        -- if every one of those declarations equals the instrument this close is about
+        -- to build legs in. So the venue cannot point a book at a registry its traders
+        -- never agreed to, and a "cETH" minted by somebody other than onRails is a
+        -- different `InstrumentId` and is refused by name.
+        _ <- forA outcome.allOrders (\(_, o) -> do
+          let expected = case o.side of
+                Sell -> assetInstrument    -- a sell delivers the asset
+                Buy  -> cashInstrumentTS   -- a buy delivers the cash leg
+          case declaredInstrument o.backing of
+            None -> abort "this book holds pre-funded legacy orders: settle it with RunClose"
+            Some declared -> assertMsg
+              "an order is backed by a different registry than this close settles in"
+              (declared == expected))
+
+        -- ------------------------------------------------------------------
+        -- PAIR THE FILLS. The uncross says how much each order trades; CIP-56
+        -- settlement is bilateral, so it must also be said WITH WHOM.
+        -- ------------------------------------------------------------------
+        -- `pairFills` walks both sides in the order the allocation ladder already
+        -- produced them (class -> price -> arrival sequence), so the pairing is a
+        -- function of the book and not of anything the venue chose. Under a uniform
+        -- price the pairing is economically neutral by construction — every fill
+        -- prints at the same number — which is exactly why it is safe to decide it
+        -- mechanically.
+        --
+        -- DUST, ON THE SAME PRINCIPLE `RunClose` USES AND WITH LESS MACHINERY. A pair
+        -- so small that its cash leg quantises to 0.0 cannot be expressed as a
+        -- `TransferLeg` (the standard requires a positive amount), so it is dropped —
+        -- and because settlement here is BILATERAL there is no pool that then fails to
+        -- drain, no residual to re-settle and no `settleResidual` call. Both traders in
+        -- a dropped pair simply trade that much less; everyone else is untouched. The
+        -- pooled cash-leg residual rule the legacy close needs has no counterpart here
+        -- because there is no pool.
+        let rawPairs = pairFills
+              [ ((cid, o.trader), q) | (cid, o, q) <- outcome.buyFills,  q > 0.0 ]
+              [ ((cid, o.trader), q) | (cid, o, q) <- outcome.sellFills, q > 0.0 ]
+        let matches      = buildMatches outcome.closingPrice 1 rawPairs
+        let matchRecords = [ m | (_, _, m) <- matches ]
+        -- Same class of outcome as "the book does not cross": nothing settles, the
+        -- auction can be reopened, and every trader keeps everything — which under
+        -- this model is trivially true, because nothing was ever locked.
+        assertMsg "no matched pair at this print can settle on both legs"
+          (not (null matches))
+
+        -- ------------------------------------------------------------------
+        -- WRITE DOWN WHO OWES WHAT. Nothing moves; this is the ASK.
+        -- ------------------------------------------------------------------
+        crossCid <- create AuctionCross with
+          operator; auditor
+          settlementId
+          assetInstrument
+          cashInstrument = cashInstrumentTS
+          closingPrice = outcome.closingPrice
+          matchCount = length matches
+          crossedQty = sum [ m.quantity | m <- matchRecords ]
+          participants
+          createdAt = now
+          allocateBefore
+          settleBefore
+
+        -- One settlement per pair, co-signed by its two traders through their own
+        -- sealed orders (see `SealedOrder.CoSignSettlement` for why that is where the
+        -- authority lives, and for what it does and does not grant the venue).
+        -- A trader that crossed with ITSELF signs once and is done; the pair is a
+        -- legal, economically empty round trip and is not treated as an error.
+        matchCids <- forA matches (\(buyCid, sellCid, m) -> do
+          unsigned <- create MatchSettlement with
+            operator; auditor
+            signers = []
+            settlementId
+            assetInstrument
+            cashInstrument = cashInstrumentTS
+            closingPrice = outcome.closingPrice
+            match = m
+            createdAt = now
+            allocateBefore
+            settleBefore
+          exercise sellCid CoSignSettlement with
+            settlementCid = unsigned
+            currentSigners = []
+            -- The buyer co-signs from INSIDE the seller's hop, so the two authorities
+            -- meet. A trader that crossed with itself is already fully signed after
+            -- one hop and passes nothing on.
+            alsoSign = if m.buyer == m.seller then [] else [buyCid])
+
+        -- One standard `AllocationRequest` per SENDER, carrying ONLY that sender's own
+        -- legs. This is the dark pool surviving into the settlement phase: a filled
+        -- trader's wallet is told what IT owes and learns nothing about anyone else's
+        -- fill. The interface explicitly permits a partial leg list "depending on the
+        -- confidentiality requirements of the app", and a sealed auction's
+        -- confidentiality requirement is the entire product.
+        requestCids <- forA (crossSenders matchRecords) (\p ->
+          create AuctionAllocationRequest with
+            operator; trader = p
+            settlementId
+            legs = senderLegs assetInstrument cashInstrumentTS matchRecords p
+            createdAt = now
+            allocateBefore
+            settleBefore)
+
+        -- CANCEL ON CLOSE — EVERY order, not just the ones away from the print.
+        -- The print has resolved all of them: a filled order's obligation now lives on
+        -- its `MatchSettlement` and its sender's `AuctionAllocationRequest`, and an
+        -- unfilled one never traded. Leaving any alive would strand it, because the
+        -- auction contract is consumed by this choice and withdrawal runs through the
+        -- auction. Nobody loses anything: under CIP-56 the archive touches the ORDER
+        -- and there was never a balance to touch — every trader's holdings have been
+        -- theirs, unlocked, for the whole life of the book.
+        _ <- forA (buyOrders ++ sellOrders) (\cid -> exercise cid VenueCancel)
+
+        pure AuctionCloseResult with
+          cross = crossCid
+          matches = matchCids
+          requests = requestCids
+
+-- ---------------------------------------------------------------------------
+-- SealedOrder — a single PRIVATE order resting in the auction.
+-- ---------------------------------------------------------------------------
+-- THE DARK-POOL PRIMITIVE. Signed by operator + trader, observed by NOBODY else
+-- (not other participants, not the auditor). While it rests, only the venue and
+-- the trader who placed it know it exists — its side, size, and limit are hidden
+-- from the rest of the market. This is what a transparent chain cannot provide
+-- and what makes an honest sealed auction possible.
+template SealedOrder
+  with
+    operator       : Party
+    auditor        : Party
+    trader         : Party            -- the order owner
+    instrumentId   : Text
+    cashInstrument : Text
+    session        : Text             -- "Open" | "Close": the cross this order rests in
+    side           : Side
+    quantity       : Decimal
+    -- THE ORDER TYPE. `Some p` = LIMIT-ON-CLOSE at p. `None` = UNPRICED
+    -- MARKET-ON-CLOSE: eligible at every price, ranked ahead of every limit order,
+    -- and — for a BUY — backed by a reservation sized at the top of the price collar,
+    -- which is the highest price the close can legally print.
+    limitPrice     : Optional Decimal
+    -- WHAT BACKS THIS ORDER, in whichever of the two settlement models this book
+    -- runs. `ReservedHolding` is the legacy pre-funded slice, disclosed to the
+    -- operator at submission and pledged by `RunClose`. `DeclaredToken` is the CIP-56
+    -- case: the `InstrumentId` — REGISTRY AND SYMBOL — that `SubmitOrder` verified the
+    -- trader held enough of, with nothing locked and no contract id retained. Read
+    -- `OrderBacking` before assuming a CIP-56 order is funded; it is checked, not
+    -- reserved, and the reason is that the standard cannot lock an amount that does
+    -- not exist until the price does.
+    backing        : OrderBacking
+    -- THE ARRIVAL NUMBER — the ledger's own clock, and the reason the marginal level
+    -- can be rationed on TIME instead of pro-rata by size.
+    -- ------------------------------------------------------------------------
+    -- WHAT IT IS: the position of this order in the submission sequence of ONE
+    -- auction book. `ClosingAuction.SubmitOrder` stamps `submittedCount + 1` here in
+    -- the SAME atomic transaction that increments that counter, so the Nth accepted
+    -- order carries N.
+    -- WHY IT CANNOT BE FORGED OR RESHUFFLED: the operator never supplies it (it is
+    -- not a choice argument); no choice on this template or on `ClosingAuction`
+    -- rewrites it; and it cannot collide, because `SubmitOrder` is CONSUMING — two
+    -- traders racing contend on one auction contract, one commits, the other re-reads
+    -- and retries with the next number. It is minted inside the trader's own
+    -- transaction, not handed over by the venue at the close.
+    -- WHAT IT IS NOT — read the ALLOCATION section of the module header before
+    -- claiming more than this: it is NOT a wall-clock timestamp and it does not make
+    -- two different books comparable; and a venue can still lean on WHICH of two
+    -- racing submissions commits first by delaying its own participant's
+    -- confirmation, because the operator co-signs every sealed order. It cannot
+    -- re-number one that has committed.
+    seqNo          : Int
+  where
+    -- Operator + trader only. Deliberately NO further observer — the venue
+    -- discloses fills (SettlementReceipt), never the resting book.
+    signatory operator, trader
+
+    -- PLEDGE TO VENUE — exercised on this order during RunClose to deliver its
+    -- pro-rated leg to the operator (the momentary CCP). The relevant trader's
+    -- authority is present because the trader signs THIS order, so the leg moves;
+    -- change (the unfilled residual, or over-committed cash) returns to the trader
+    -- via `deliverExact`. Consuming: a pledged order is filled and archived.
+    --
+    -- ⚠️ THE TRUST ASSUMPTION THIS CHOICE CARRIES — READ IT BEFORE BELIEVING THE
+    -- REST OF THE FILE. It says "exercised during RunClose", and NOTHING ENFORCES
+    -- THAT. The choice is `controller operator`; the trader's authority sits on this
+    -- contract because the trader signs it; there is no reference to an auction, a
+    -- batch, or a discovered price anywhere in the body. So the operator can
+    -- exercise this STANDALONE, at any `closingPrice` it names, and take the
+    -- trader's whole reserved holding while delivering nothing back — no asset, no
+    -- receipt, no batch. Every economic control in this design (the uncross, the
+    -- collar, the completeness count, the conservation asserts, the receipts) lives
+    -- in `RunClose`, one level ABOVE the choice that actually moves the money.
+    -- ✅ AND IT IS FIXED — ON THE OTHER CLOSE. The correct shape is allocate →
+    -- approve → settle, and the auction is now ported onto it: `TokenSettlement.daml`
+    -- plus `ClosingAuction.RunCloseTokenStandard`. A CIP-56 order carries NO reserved
+    -- slice for the venue to reach for, and the branch immediately below refuses this
+    -- choice outright on one. Under that model a leg can only move as part of an
+    -- allocation the TRADER created, naming the exact amount and the exact receiver,
+    -- and an unexecuted allocation goes home. `Test:testCip56OrderCannotBePledged` is
+    -- exactly this attack, run against a token-standard book, and refused.
+    -- ❌ ON THIS PATH IT IS STILL OPEN, because this path still exists — `RunClose`
+    -- over `Holding.daml` is what two committed Java services drive, and deleting it
+    -- inside a settlement migration would break them for correctness that is already
+    -- available by using the other close. So the assumption stands, scoped: a venue
+    -- running the LEGACY close is trusted not to steal reserved collateral.
+    -- What Canton gives in the meantime is VISIBILITY, not prevention: an
+    -- unauthorised pledge is a signed transaction the trader can see, with no batch
+    -- behind it. Say that, rather than implying the ledger stops it. A venue trading
+    -- real registry assets should not be on this path at all.
+    choice PledgeToVenue : ContractId Holding
+      with
+        fillQty      : Decimal   -- the pro-rated units this order fills
+        closingPrice : Decimal   -- the uniform close (from the auction)
+      controller operator
+      do
+        -- THIS ASSERT IS CORRECT AND IT STAYS: you cannot pledge nothing, and a
+        -- non-positive delivery has no meaning. What changed is WHOSE JOB it is to
+        -- keep it true. It used to be enforcement — a heavy-side order whose ration
+        -- rounded below 1e-10 hit this assert and, because the close is ONE atomic
+        -- transaction, took the WHOLE auction down with it: one dust order was a
+        -- denial of service on the print. `RunClose` now filters zero fills out
+        -- before it gets here and cancels those orders on close instead, so this is
+        -- an invariant of the choice rather than a liveness hazard for the venue.
+        assertMsg "fill quantity must be positive"        (fillQty > 0.0)
+        assertMsg "fill cannot exceed the order quantity" (fillQty <= quantity)
+        -- PRICE ELIGIBILITY, through the same `eligibleAt` the uncross and the close
+        -- use. For an LOC this is the old assert unchanged. FOR AN UNPRICED MOC IT IS
+        -- ALWAYS TRUE, and it must be: an order that accepted the print sight unseen
+        -- cannot then be refused settlement for being off-price. This is the last of
+        -- the three price gates an MOC has to pass through, and all three now read
+        -- from one definition, so none of them can quietly disagree with the others.
+        -- A CIP-56 ORDER CANNOT BE PLEDGED AT ALL, AND THAT IS THE POINT. There is no
+        -- reserved slice to hand over — a standard holding cannot be locked before the
+        -- price exists — and there is no choice on `HoldingV1.Holding` that this venue
+        -- could exercise if there were. A token-standard book settles through
+        -- `RunCloseTokenStandard`, where the venue's only power is to execute the exact
+        -- transfers the senders already allocated. This branch is the ledger refusing
+        -- to let the old, custodial path anywhere near a real registry's asset.
+        holdingCid <- case backing of
+          ReservedHolding cid -> pure cid
+          DeclaredToken _ ->
+            abort "this is a CIP-56 order: it settles by allocation, not by pledge"
+        case side of
+          Sell -> do
+            assertMsg "a limited sell must be priced <= the closing price (an MOC is always eligible)"
+              (eligibleAt Sell closingPrice limitPrice)
+            -- deliver the matched ASSET to the venue; unsold residual stays put.
+            deliverExact holdingCid fillQty operator
+          Buy -> do
+            assertMsg "a limited buy must be priced >= the closing price (an MOC is always eligible)"
+              (eligibleAt Buy closingPrice limitPrice)
+            -- deliver exactly the CASH owed to the venue; change back to the buyer.
+            deliverExact holdingCid (fillQty * closingPrice) operator
+
+    -- CANCEL / WITHDRAW — the trader pulls their OWN resting order before the
+    -- close. Consuming: the order is archived and no longer crosses. The reserved
+    -- backing is UNLOCKED — transferring the reserved slice back to the trader
+    -- re-creates it PRIVATE (disclosedTo reset to []), so the balance is freely
+    -- theirs again to spend or re-commit and the venue no longer observes it.
+    -- Returns the unlocked holding.
+    --
+    -- CONTROLLED BY trader AND operator — not the trader alone, which is a change
+    -- forced by the complete-order commitment. The book count lives on the
+    -- ClosingAuction, so an order that vanished without the auction knowing would
+    -- leave the count over-stating the live book and no close could ever run. The
+    -- two authorities meet in exactly one place: `ClosingAuction.WithdrawOrder`,
+    -- where the trader is the controller and the operator's authority comes from
+    -- signing the auction. So the trader keeps the right to withdraw — it is still
+    -- the trader who initiates, and the venue cannot cancel for them — but the
+    -- withdrawal and the count now move together or not at all. Go through
+    -- `WithdrawOrder`; this choice is the mechanism, not the entry point.
+    --
+    -- RETURNS `Optional`, BECAUSE A CIP-56 ORDER HAS NOTHING TO GIVE BACK. Under the
+    -- token standard nothing was ever taken: the declared holding stayed the trader's,
+    -- unlocked and spendable, for the whole life of the order. So cancelling one is a
+    -- pure book event and there is no unlock to return. `Some` is the legacy path,
+    -- unchanged; `None` says — honestly — that the ledger moved no balance because it
+    -- never held one.
+    choice Cancel : Optional (ContractId Holding)
+      controller trader, operator
+      do case backing of
+           ReservedHolding cid -> do
+             unlocked <- exercise cid Transfer with newOwner = trader
+             pure (Some unlocked)
+           DeclaredToken _ -> pure None
+
+    -- VENUE CANCEL / CLEAR BOOK — the operator clears a resting order from the
+    -- book (a "clear the book" for an instrument, or the cancel-on-close of an
+    -- order that sat away from the print). The operator signs this order, so it has
+    -- the authority to archive it. The trader's reserved holding is left intact and
+    -- remains the trader's — clearing the book cancels the ORDER, not the balance.
+    --
+    -- USE `ClosingAuction.ClearOrder`, which wraps this and books the cancellation
+    -- into `cancelledCount`. Exercising this choice directly is possible (the venue
+    -- is a signatory and we cannot take that away) but it is self-defeating rather
+    -- than exploitable: the count would then over-state the live book, `RunClose`
+    -- would demand more orders than exist, and the venue's own close would be
+    -- unable to run. It buys an operator nothing — there is no path from here to
+    -- printing a cross over a book with orders quietly missing from it.
+    choice VenueCancel : ()
+      controller operator
+      do pure ()
+
+    -- CO-SIGN A MATCHED PAIR — HOW A TRADER'S AUTHORITY REACHES A CIP-56 SETTLEMENT.
+    -- ------------------------------------------------------------------------
+    -- The standard requires it. `Allocation_ExecuteTransfer` is controlled by
+    -- `allocationControllers` = executor + sender + receiver, so the contract the
+    -- venue exercises to settle a leg must carry the two traders' authority — in
+    -- Daml, they must SIGN it. But the close runs inside a choice on `ClosingAuction`,
+    -- which only the operator signs, so at the moment the print is computed the
+    -- traders' authority is simply not in scope.
+    --
+    -- IT IS IN SCOPE HERE. A `SealedOrder` is signed by operator AND trader, so
+    -- exercising any choice on it puts that trader's authority into the sub-
+    -- transaction. Chaining one hop per side of the pair therefore produces a
+    -- `MatchSettlement` signed by the operator and both traders, inside the same
+    -- transaction that printed the cross. No round trip, no proposal/accept ceremony,
+    -- no trader action between the print and the allocation.
+    --
+    -- ⚠️ AND THE CHAIN MUST NEST, WHICH IS THE SUBTLE PART AND THE ONE THAT BITES.
+    -- DAML AUTHORITY DOES NOT ACCUMULATE ACROSS SIBLINGS. Written side by side, the
+    -- second hop would run with only the ambient authority of the close — the
+    -- operator's — and could not name the first signer as a co-controller; the
+    -- exercise is rejected for want of an authorisation that expired one node ago.
+    -- So the second hop is exercised from INSIDE the first hop's body, where the first
+    -- trader's authority is live, declaring `operator :: <signers so far>` as its
+    -- controllers. The authorisation context of the inner node is then
+    -- `signatories(that order) ∪ controllers` — the UNION of both traders and the
+    -- venue, which is exactly what the create needs. `alsoSign` carries the rest of
+    -- the chain down; it generalises to any number of parties, and a pair only ever
+    -- needs one more.
+    --
+    -- ⚠️ WHAT THIS DOES **NOT** HAND THE VENUE, because a choice that mints trader
+    -- signatures deserves the scrutiny. The signature is scoped to ONE contract whose
+    -- ONLY power is `MatchSettlement_Settle`, and that choice can do exactly one
+    -- thing: execute allocations whose `AllocationSpecification` matches its own two
+    -- legs EXACTLY — same settlement reference, same leg id, same sender, receiver,
+    -- amount and instrument. A venue that fabricates pairs and harvests signatures for
+    -- them gains nothing, because no sender ever allocated against a specification it
+    -- was not shown, and without a matching allocation there is nothing to execute.
+    -- Contrast `PledgeToVenue`, directly above, which moved a trader's entire reserved
+    -- holding on the operator's word and at a price the operator chose.
+    --
+    -- The pair is re-FETCHED and cross-checked rather than taken from the argument, so
+    -- the venue cannot swap a different pair in under a signature list that looks
+    -- right. NONCONSUMING: the order is still needed for the second co-signature and
+    -- for the cancel-on-close sweep at the end of the same transaction.
+    nonconsuming choice CoSignSettlement : ContractId MatchSettlement
+      with
+        settlementCid  : ContractId MatchSettlement
+          -- ^ the pair to co-sign
+        currentSigners : [Party]
+          -- ^ who has signed it so far. A choice ARGUMENT because a controller
+          -- expression may only read the arguments — and it is exactly what carries
+          -- the earlier side's authority into this exercise.
+        alsoSign       : [ContractId SealedOrder]
+          -- ^ the REST of the chain, co-signed from inside this body so that each
+          -- hop's authority is added to the previous one's rather than replacing it.
+          -- Empty on the last hop. A pair passes one order here; the shape does not
+          -- care how many.
+      controller operator :: currentSigners
+      do
+        s <- fetch settlementCid
+        assertMsg "the co-signer list does not match the pair being signed"
+          (s.signers == currentSigners)
+        assertMsg "that pair belongs to a different venue" (s.operator == operator)
+        assertMsg "that pair settles a different instrument"
+          (s.assetInstrument.id == instrumentId)
+        assertMsg "that pair settles a different cash leg"
+          (s.cashInstrument.id == cashInstrument)
+        assertMsg "this order's trader is not a party to that pair"
+          (trader == s.match.buyer || trader == s.match.seller)
+        assertMsg "this trader has already co-signed that pair"
+          (trader `notElem` s.signers)
+        archive settlementCid
+        signed <- create s with signers = trader :: s.signers
+        -- Recurse INTO this body, not beside it. See the note above; this single line
+        -- is the difference between an authority union and an authorisation error.
+        case alsoSign of
+          [] -> pure signed
+          (nextOrder :: rest) -> exercise nextOrder CoSignSettlement with
+            settlementCid = signed
+            currentSigners = trader :: s.signers
+            alsoSign = rest
+
+-- ---------------------------------------------------------------------------
+-- ImbalanceDisclosure — the NET imbalance of the sealed book, shown to ONE party.
+-- ---------------------------------------------------------------------------
+-- LIQUIDITY WITHOUT LEAKAGE, AND NOW WITHOUT A FREE LUNCH. Emitted by
+-- `ClosingAuction.PublishImbalance` — which will not emit one at all unless the
+-- recipient holds a live `LiquidityMandate` for this book (see LiquidityMandate.daml).
+-- The `liquidityProvider` field below therefore names a party that SIGNED an
+-- obligation to absorb up to a stated size within a stated band, not a party the
+-- venue picked; and several such parties can be holding mandates, and receiving
+-- these disclosures, at the same time. It carries the AGGREGATE order imbalance for
+-- one instrument's book and NOTHING else:
+--   * netSide     — "Buy" | "Sell" | "Flat": the side the book is HEAVY on.
+--   * netQuantity — the magnitude of that imbalance (>= 0), at the reference price.
+--
+-- WHO CAN SEE IT — signatory operator, observer = the ONE designated liquidity
+-- provider. No auditor, no other trader, no competitor. On a transparent chain the
+-- pending book (and therefore the imbalance) is visible to everyone the instant an
+-- order is placed — impossible to reveal to exactly one committed provider. Here
+-- Canton's per-contract visibility makes selective disclosure a first-class effect:
+-- the venue attracts offsetting liquidity from its DLP WITHOUT leaking the book to
+-- the market. The DLP reads "net long/short N units" and offsets by lodging an
+-- ordinary (equally sealed) SealedOrder on the opposite side to clear the cross.
+template ImbalanceDisclosure
+  with
+    operator          : Party    -- the venue; the sole signatory
+    liquidityProvider : Party    -- the DLP; the sole observer (need-to-know)
+    instrumentId      : Text     -- the instrument this imbalance is for
+    cashInstrument    : Text     -- the cash leg of the book
+    session           : Text     -- "Open" | "Close": which cross's book
+    netSide           : Text     -- "Buy" | "Sell" | "Flat": the heavy side
+    netQuantity       : Decimal  -- magnitude of the net imbalance (>= 0)
+    referencePrice    : Decimal  -- the uniform price the cross will print at
+    computedAt        : Time     -- when this snapshot of the book was taken
+  where
+    signatory operator
+    -- ONLY the designated liquidity provider observes it. This is the selective
+    -- disclosure: the aggregate reaches the one party that commits to offset it,
+    -- and no one else on the network.
+    observer liquidityProvider
+    ensure netQuantity >= 0.0
+      && (netSide == "Buy" || netSide == "Sell" || netSide == "Flat")
+
+-- ---------------------------------------------------------------------------
+-- reserveExact — carve off EXACTLY `amt` units of `holdingCid` (a holding the
+-- trader owns) into a dedicated holding, disclosed to `operator`, and return it.
+-- This is what makes a sealed order's backing STABLE: the order references only
+-- its own reserved slice, so nothing else (a later order, a split/merge, a
+-- re-submission) can consume or re-create it and make the pinned cid go stale.
+-- The unreserved change stays with the trader (private). Must be called where the
+-- holding OWNER's authority is in scope (Split/Disclose are owner-controlled) —
+-- SubmitOrder is a choice controlled by the trader, so it is.
+-- ---------------------------------------------------------------------------
+reserveExact : ContractId Holding -> Decimal -> Party -> Update (ContractId Holding)
+reserveExact holdingCid amt operator = do
+  h <- fetch holdingCid
+  assertMsg "committed holding is too small to back this order" (h.amount >= amt)
+  reserved <-
+    if h.amount == amt
+      then pure holdingCid                 -- exact: reserve the whole holding
+      else do
+        -- Split asserts 0 < amt < amount, so the reserved slice is exact and the
+        -- remainder returns to the trader in the same transaction.
+        (r, _change) <- exercise holdingCid Split with splitAmount = amt
+        pure r
+  -- Disclose the reserved slice to the operator so the close can read/move it.
+  exercise reserved Disclose with newObserver = operator
+
+-- ---------------------------------------------------------------------------
+-- mergeAll — merge a non-empty list of holdings (same issuer/owner/instrument)
+-- into a single holding. Used to pool the venue's pledged asset (and cash) legs.
+-- ---------------------------------------------------------------------------
+mergeAll : [ContractId Holding] -> Update (ContractId Holding)
+mergeAll []        = error "mergeAll: no holdings to pool"  -- unreachable: matched > 0
+mergeAll [c]       = pure c
+mergeAll (c :: cs) = do
+  rest <- mergeAll cs
+  exercise c Merge with otherCid = rest
+
+-- ---------------------------------------------------------------------------
+-- distribute — pay out a pooled holding to a list of (recipient, amount). Each
+-- recipient's slice is an issuer-signed re-issue (Transfer).
+-- ---------------------------------------------------------------------------
+-- THE DEFECT THIS FIXES, because it was a real one. This function used to hand the
+-- ENTIRE remaining pool to whoever happened to be LAST in the list, ignoring their
+-- computed amount. Pro-rata fills do not sum exactly in a fixed-precision Decimal,
+-- so the last recipient silently absorbed the rounding residual — and their
+-- `SettlementReceipt`, written from the COMPUTED number, then over- or under-stated
+-- what they were actually paid. The ledger and the confirm disagreed, and who
+-- benefited was decided by array position.
+--
+-- Now: every recipient, INCLUDING the last, is delivered the amount they were
+-- promised, and the pool is ASSERTED to equal the last one's amount. The callers
+-- make that assertion hold by construction — `settleResidual` forces the allocated
+-- amounts to sum exactly to the pool on both the quantity leg and the cash leg — so
+-- this assert is a tripwire, not a routine check. If it ever fires, the whole close
+-- rolls back rather than mis-paying somebody by a dust amount and papering over it
+-- with a receipt that says otherwise.
+--
+-- Zero-amount recipients are skipped (a `Holding` cannot exist with a zero balance,
+-- and there is nothing to deliver); dropping them cannot change the sum. An EMPTY
+-- payout list against a live pool would strand the pool with the venue, so it
+-- aborts — unreachable, because `matched > 0.0` guarantees at least one positive
+-- leg on each side.
+distribute : ContractId Holding -> [(Party, Decimal)] -> Update ()
+distribute poolCid recipients = distributeExact poolCid (filter (\(_, q) -> q > 0.0) recipients)
+
+-- distributeExact — the recursive half of `distribute`, at the top level because
+-- Daml permits recursion only there. Every recipient is delivered the amount they
+-- were promised; the LAST one's amount is asserted to be the entire remaining pool.
+distributeExact : ContractId Holding -> [(Party, Decimal)] -> Update ()
+distributeExact _ [] = abort "settlement pool has no recipient: the close cannot deliver it"
+distributeExact poolCid [(p, q)] = do
+  -- LAST SLICE. By conservation the pool IS this recipient's amount; prove it
+  -- before handing it over, so the delivery and the receipt cannot diverge.
+  pool <- fetch poolCid
+  assertMsg "settlement pool does not equal the final recipient's receipt amount"
+    (pool.amount == q)
+  _ <- exercise poolCid Transfer with newOwner = p
+  pure ()
+distributeExact poolCid ((p, q) :: rest) = do
+  (delivered, change) <- exercise poolCid Split with splitAmount = q
+  _ <- exercise delivered Transfer with newOwner = p
+  distributeExact change rest
+
+-- ===========================================================================
+-- uncrossSealedBook — THE PRICE FORMATION HALF OF THE CLOSE, AS ONE FUNCTION.
+-- ===========================================================================
+-- Lifted verbatim out of `RunClose` when the CIP-56 settlement path was added, and
+-- lifted for exactly one reason: THERE MUST NOT BE TWO COPIES OF THIS. Two closes
+-- now settle the same kind of book — `RunClose` over `Holding.daml` stand-ins,
+-- `RunCloseTokenStandard` over real registry assets — and if each carried its own
+-- uncross they could, one careless patch later, print two different prices over the
+-- same orders. Everything the venue is judged on lives here:
+--
+--   * COMPLETE-ORDER COMMITMENT — the supplied lists must number exactly the live
+--     book (`submittedCount - cancelledCount`) and contain no duplicates, so an
+--     omitted order has to be a real, on-ledger, trader-visible cancellation.
+--   * BOOK IDENTITY — every order is checked to belong to THIS venue, instrument,
+--     cash leg and session before it is allowed to price anything.
+--   * THE UNCROSS — `discoverPrice`, the volume-maximising cross with the Xetra
+--     T7 11.1.1 ladder and Euronext's nearest-the-reference final tie-break, run over
+--     a book stripped to (side, size, limit) so it cannot see who placed anything.
+--   * THE COMMITTEE-ATTESTED ANCHOR — if `fixingRef` is bound, the anchor must be
+--     consistent with the NAV ACCRUED to this close's own ledger time.
+--   * THE COLLAR — clamp the print into the band and RE-CROSS the book at the
+--     clamped price, then assert the settled volumes are the ones the print was
+--     scored on.
+--   * THE ALLOCATION LADDER — unpriced MOC first, then price through the print, then
+--     the marginal level rationed by ledger-minted arrival sequence, with the
+--     conservation tripwires on both sides.
+--
+-- It returns the FILLS and nothing about how to deliver them. Delivery is where the
+-- two closes diverge, and it is the only place they do.
+--
+-- Note it is an `Update`, not a pure function: it fetches the orders and (when
+-- bound) the governance fixing. It is called from a choice on `ClosingAuction`, so
+-- the operator's authority and visibility are in scope exactly as they were when
+-- this code sat inline.
+-- ---------------------------------------------------------------------------
+
+-- | What the uncross decided, handed to whichever settlement half is running.
+data CrossOutcome = CrossOutcome
+  with
+    closingPrice : Decimal
+      -- ^ the uniform print, AFTER the collar clamp
+    matched      : Decimal
+      -- ^ the volume that crosses at that price
+    buyFills     : [(ContractId SealedOrder, SealedOrder, Decimal)]
+      -- ^ every ELIGIBLE buy with its allocated quantity, in ladder order
+    sellFills    : [(ContractId SealedOrder, SealedOrder, Decimal)]
+      -- ^ every ELIGIBLE sell with its allocated quantity, in ladder order
+    awayCids     : [ContractId SealedOrder]
+      -- ^ orders away from the print: cancelled on close, having traded nothing
+    allOrders    : [(ContractId SealedOrder, SealedOrder)]
+      -- ^ the WHOLE book, as validated. Used by each close to check that the book's
+      -- backing model is the one it can actually settle.
+
+uncrossSealedBook
+  :  ClosingAuction
+  -> [ContractId SealedOrder]
+  -> [ContractId SealedOrder]
+  -> Update CrossOutcome
+uncrossSealedBook auction buyOrders sellOrders = do
+        -- The auction's own fields, bound once so the block below reads exactly as it
+        -- did when it was inline in `RunClose`.
+        let operator       = auction.operator
+            instrumentId   = auction.instrumentId
+            cashInstrument = auction.cashInstrument
+            session        = auction.session
+            referencePrice = auction.referencePrice
+            fixingRef      = auction.fixingRef
+            submittedCount = auction.submittedCount
+            cancelledCount = auction.cancelledCount
+        -- ------------------------------------------------------------------
         -- COMPLETE-ORDER COMMITMENT — the book, the whole book, nothing but it.
         -- ------------------------------------------------------------------
         -- The counters were written by the SUBMISSIONS and the CANCELLATIONS, not by
@@ -1566,19 +2746,22 @@ template ClosingAuction
         -- ------------------------------------------------------------------
         -- ALLOCATION — price priority through the print, ration only the margin.
         -- ------------------------------------------------------------------
-        -- THE RULE, and the citations are in the module header: every level priced
-        -- STRICTLY THROUGH the print fills IN FULL, and only the level the crossed
-        -- volume runs out on is rationed. The LIGHT side's own total IS `matched`, so
-        -- it fills in full through the identical code path — no "which side is heavy"
+        -- THE RULE, and the citations are in the module header: everything priced
+        -- STRICTLY THROUGH the print fills IN FULL, and only the marginal
+        -- at-the-print level is rationed — EARLIEST SUBMISSION FIRST, so exactly one
+        -- order is partially filled. The LIGHT side's own total IS `matched`, so it
+        -- fills in full through the identical code path — no "which side is heavy"
         -- branch survives. What this replaces is the old pro-rata-across-all-levels
         -- ration, under which a better limit bought eligibility and no precedence and
         -- the only way to get filled was to oversize.
-        -- The allocator is handed (limit, size) and an opaque tag. It cannot see who
-        -- placed an order, so it cannot favour anyone.
+        -- The allocator is handed (limit, size, arrival number) and an opaque tag. It
+        -- cannot see who placed an order, so it cannot favour anyone — and because
+        -- the arrival number makes its sort key a strict total order, it cannot be
+        -- steered by the ORDER of the lists the operator supplied either.
         let buyAlloc  = allocateSide Buy  matched
-              [ ((cid, o), o.limitPrice, o.quantity) | (cid, o) <- eligibleBuys ]
+              [ ((cid, o), o.limitPrice, o.quantity, o.seqNo) | (cid, o) <- eligibleBuys ]
         let sellAlloc = allocateSide Sell matched
-              [ ((cid, o), o.limitPrice, o.quantity) | (cid, o) <- eligibleSells ]
+              [ ((cid, o), o.limitPrice, o.quantity, o.seqNo) | (cid, o) <- eligibleSells ]
         let buyFills  = [ (cid, o, q) | ((cid, o), q) <- buyAlloc  ]
         let sellFills = [ (cid, o, q) | ((cid, o), q) <- sellAlloc ]
 
@@ -1591,424 +2774,48 @@ template ClosingAuction
           (sum [q | (_, _, q) <- buyFills]  == matched)
         assertMsg "sell allocation does not sum to the crossed volume"
           (sum [q | (_, _, q) <- sellFills] == matched)
+        pure CrossOutcome with
+          closingPrice
+          matched
+          buyFills
+          sellFills
+          awayCids = map fst awayFromCross
+          allOrders = buys ++ sells
 
-        -- ------------------------------------------------------------------
-        -- DUST DOES NOT ABORT THE CLOSE — ON EITHER LEG.
-        -- ------------------------------------------------------------------
-        -- An order whose share rounds below the ledger's smallest representable unit
-        -- gets a fill of exactly 0.0. It cannot be pledged (`PledgeToVenue` rightly
-        -- refuses to deliver nothing) and it must not receive a receipt for a trade
-        -- that never happened — so it is FILTERED OUT here and cancelled on close
-        -- below, exactly like an order that sat away from the print. It used to abort
-        -- the entire auction, which made a single dust order a denial of service.
-        --
-        -- THE HALF THAT WAS STILL BROKEN, AND IT IS THE SAME BUG ON THE OTHER LEG. A
-        -- seller delivers `fillQty` of the ASSET, so filtering `fillQty > 0` was
-        -- enough for the sell side. A BUYER delivers `fillQty * closingPrice` of
-        -- CASH, and THAT product has its own rounding: a fill with a perfectly
-        -- positive quantity can still owe a cash amount that quantises to 0.0, at
-        -- which point `deliverExact` hits `Holding.Split 0.0` and the whole close
-        -- dies — the identical denial of service, one leg over. It is reachable
-        -- exactly where `collarFloor` exists to be reached: a sub-0.50 print, where
-        -- `q * price` can round away for a `q` that is itself representable. So a buy
-        -- leg is only settleable if BOTH of its legs are: `q > 0` AND `q * price > 0`.
-        --
-        -- AND THE SELL SIDE HAS TO FOLLOW IT DOWN, which is the part a naive filter
-        -- gets wrong. Dropping a ZERO-quantity leg is free — it contributes 0 to the
-        -- allocation sums, so conservation is untouched. Dropping a POSITIVE-quantity
-        -- buy leg is NOT: the sellers have already been allocated the full `matched`,
-        -- so the asset pool would arrive one dust unit larger than the surviving
-        -- buyers are owed and `distribute` would abort on its final tripwire — the
-        -- same outage, moved three lines down. So the crossed volume is re-derived as
-        -- what the surviving buyers can actually PAY for, and the sell side is
-        -- re-settled to that number through the SAME published residual rule the file
-        -- already uses everywhere else: the largest sell leg carries the difference.
-        -- The dust buyer trades nothing and keeps everything, exactly as the dust
-        -- SELLER already did; one seller sells one ledger unit less; the print, the
-        -- price and everyone else's fill are untouched.
-        --
-        -- In every ordinary close this whole block is the IDENTITY: with a print of
-        -- any normal size `q * price > 0` for every `q > 0`, so `matchedNet == matched`
-        -- and `settleResidual` against a target it already sums to changes nothing.
-        let buyLegs    = filter (\(_, _, q) -> q > 0.0 && q * closingPrice > 0.0) buyFills
-        -- THE PAYABLE CROSS. Never larger than `matched`, and smaller only by the
-        -- quantity of buy fills that cannot pay for themselves.
-        let matchedNet = sum [q | (_, _, q) <- buyLegs]
-        -- If NOTHING crosses that can pay for itself, there is no settleable print.
-        -- Same class of outcome as "the book does not cross": nothing settles, and
-        -- with `ReopenBidding` the venue can put the window back and try again.
-        assertMsg "no fill at this print is large enough to pay for itself"
-          (matchedNet > 0.0)
-        -- Re-settle the sell side to the payable volume. `settleResidual` hands the
-        -- whole difference to the entry with the largest size key — the largest sell
-        -- fill — which is the published rule, unchanged, applied to a target that has
-        -- moved by dust.
-        let sellAdj  = settleResidual matchedNet
-              [ ((cid, o), q, q) | (cid, o, q) <- sellFills, q > 0.0 ]
-        let sellLegs = [ (cid, o, q) | ((cid, o), q) <- sellAdj, q > 0.0 ]
-        -- TRIPWIRE. The adjustment above only ever SHRINKS one leg, so this holds by
-        -- construction; it could only fail in a degenerate book where the dust
-        -- removed exceeds the largest sell fill outright, and there the close must
-        -- abort rather than deliver a pool that cannot drain.
-        assertMsg "the payable sell allocation does not sum to the payable crossed volume"
-          (sum [q | (_, _, q) <- sellLegs] == matchedNet)
-        -- CANCEL-ON-CLOSE SET: every fill that did not survive to a settleable leg,
-        -- on either side. Computed by DIFFERENCE against the surviving legs so the
-        -- two lists cannot drift — an order is cancelled iff it is not settled.
-        let settledCids  = [cid | (cid, _, _) <- buyLegs] ++ [cid | (cid, _, _) <- sellLegs]
-        let roundedToNil = [ cid | (cid, _, _) <- buyFills ++ sellFills
-                           , cid `notElem` settledCids ]
-
-        -- ------------------------------------------------------------------
-        -- ONE ISSUER PER LEG — fail EARLY and by NAME, not inside `mergeAll`.
-        -- ------------------------------------------------------------------
-        -- `SubmitOrder` now pins each order's committed holding to the right
-        -- INSTRUMENT ID, which closes the ordinary version of this hole. What an
-        -- instrument id cannot pin is the OBLIGOR: two issuers can both mint a token
-        -- calling itself "USDC", and pooling them hits `Holding.Merge`'s "can only
-        -- merge the same issuer" deep inside `mergeAll`, taking the close down with a
-        -- message that names neither the order nor the auction. Check it here, once,
-        -- before anything moves, so the failure is legible.
-        -- STATED HONESTLY, BECAUSE IT IS NOT A FULL FIX: this turns an inscrutable
-        -- abort into a named one, it does not prevent it. Preventing it needs the
-        -- auction to NAME the issuers it accepts, checked at `SubmitOrder` — two more
-        -- fields on `ClosingAuction`, whose field list is the wire format the Java
-        -- backends construct positionally through Daml codegen. That is a mechanical
-        -- change to this template plus `LedgerCommands.createAuction`, and it is the
-        -- right end state; it is deliberately not done inside an audit fix.
-        sellHoldings <- forA sellLegs (\(_, o, _) -> fetch o.holdingCid)
-        buyHoldings  <- forA buyLegs  (\(_, o, _) -> fetch o.holdingCid)
-        assertMsg "the asset legs of this book are not all issued by the same issuer"
-          (length (dedup [h.issuer | h <- sellHoldings]) <= 1)
-        assertMsg "the cash legs of this book are not all issued by the same issuer"
-          (length (dedup [h.issuer | h <- buyHoldings]) <= 1)
-
-        -- 1. PLEDGE each allocated leg to the venue (the move happens inside each
-        --    order's own choice, so that trader's authority is present);
-        -- 2. POOL by merging.
-        assetContribs <- forA sellLegs (\(cid, _, q) ->
-          exercise cid PledgeToVenue with fillQty = q; closingPrice)
-        cashContribs  <- forA buyLegs  (\(cid, _, q) ->
-          exercise cid PledgeToVenue with fillQty = q; closingPrice)
-        assetPool <- mergeAll assetContribs
-        cashPool  <- mergeAll cashContribs
-
-        -- THE CASH LEG'S OWN RESIDUAL. The cash pool is exactly what the buyers
-        -- pledged: each owes `fillQty * closingPrice` and not a unit more. The
-        -- sellers' proceeds are the same product from the other side — but each
-        -- product is rounded on its own, so the two sums can differ by dust even
-        -- though the QUANTITIES matched to the unit. The published residual rule
-        -- settles it the same way it settles the quantity leg: the largest seller
-        -- fill carries it. The number computed here is the number DELIVERED and the
-        -- number printed on that seller's SettlementReceipt — they cannot diverge,
-        -- because there is only one of them.
-        let cashPoolTotal = sum [q * closingPrice | (_, _, q) <- buyLegs]
-        let sellCash = settleResidual cashPoolTotal
-              [ ((cid, o, q), q, q * closingPrice) | (cid, o, q) <- sellLegs ]
-
-        -- 3. DELIVER at the uniform price: buyers get their filled ASSET, sellers
-        --    get their filled proceeds. `distribute` now delivers each recipient the
-        --    STATED amount and asserts the pool drains to exactly the last one — it
-        --    used to hand the last recipient in list order whatever was left, which
-        --    is how a receipt could disagree with the ledger.
-        distribute assetPool [(o.trader, q)    | (_, o, q)     <- buyLegs]
-        distribute cashPool  [(o.trader, cash) | ((_, o, _), cash) <- sellCash]
-
-        -- 4. CANCEL ON CLOSE — the orders that sat away from the print never traded,
-        --    and neither did the ones whose ration rounded to nothing, so both are
-        --    cleared off the book here, in the same transaction as the cross. This is
-        --    the standard MOC treatment (a closing order that does not cross does not
-        --    rest into the next session), and it matters mechanically now that the
-        --    auction itself is consumed by this choice: an order left alive would
-        --    have no auction left to be withdrawn through. Nobody loses anything —
-        --    the archive touches the ORDER, never the balance, so the reserved
-        --    holding stays the trader's, free to spend.
-        _ <- forA (map fst awayFromCross ++ roundedToNil) (\cid -> exercise cid VenueCancel)
-
-        -- AUDIT — one venue-signed receipt per FILLED order (the exchange confirm),
-        -- then the immutable batch record of the whole close. Every amount below is
-        -- the amount that actually moved a few lines above.
-        now <- getTime
-        buyRecs <- forA buyLegs (\(_, o, q) -> do
-          r <- create SettlementReceipt with
-            seller = operator; buyer = o.trader   -- the venue is the buyer's CCP
-            venue = Some operator; auditor
-            assetInstrument = instrumentId; assetAmount = q
-            cashInstrument; cashAmount = q * closingPrice
-            unitPrice = closingPrice; settledAt = now
-          pure FillRecord with
-            seller = operator; buyer = o.trader; quantity = q; price = closingPrice; receipt = r)
-        sellRecs <- forA sellCash (\((_, o, q), cash) -> do
-          r <- create SettlementReceipt with
-            seller = o.trader; buyer = operator   -- the venue is the seller's CCP
-            venue = Some operator; auditor
-            assetInstrument = instrumentId; assetAmount = q
-            cashInstrument; cashAmount = cash
-            unitPrice = closingPrice; settledAt = now
-          pure FillRecord with
-            seller = o.trader; buyer = operator; quantity = q; price = closingPrice; receipt = r)
-
-        -- THE BATCH IS NOT A TAPE. `fills` carries seller, buyer, size and price for
-        -- every cross, so it is the executed book with identities attached — and it
-        -- is observed by the AUDITOR ONLY. `traders` below is a record of whose
-        -- orders the close ran over; it no longer puts anybody on the observer line
-        -- (see the header of `Settlement.SettlementBatch`, which is where this was
-        -- fixed and why). Each trader learns its own execution from the
-        -- `SettlementReceipt` written just above, which names exactly the two parties
-        -- to that fill plus the auditor. Nobody learns anybody else's.
-        create SettlementBatch with
-          operator; auditor; instrumentId; closingPrice
-          fills = buyRecs ++ sellRecs
-          traders = participants
-          settledAt = now
-
--- ---------------------------------------------------------------------------
--- SealedOrder — a single PRIVATE order resting in the auction.
--- ---------------------------------------------------------------------------
--- THE DARK-POOL PRIMITIVE. Signed by operator + trader, observed by NOBODY else
--- (not other participants, not the auditor). While it rests, only the venue and
--- the trader who placed it know it exists — its side, size, and limit are hidden
--- from the rest of the market. This is what a transparent chain cannot provide
--- and what makes an honest sealed auction possible.
-template SealedOrder
-  with
-    operator       : Party
-    auditor        : Party
-    trader         : Party            -- the order owner
-    instrumentId   : Text
-    cashInstrument : Text
-    session        : Text             -- "Open" | "Close": the cross this order rests in
-    side           : Side
-    quantity       : Decimal
-    -- THE ORDER TYPE. `Some p` = LIMIT-ON-CLOSE at p. `None` = UNPRICED
-    -- MARKET-ON-CLOSE: eligible at every price, ranked ahead of every limit order,
-    -- and — for a BUY — backed by a reservation sized at the top of the price collar,
-    -- which is the highest price the close can legally print.
-    limitPrice     : Optional Decimal
-    holdingCid     : ContractId Holding -- pre-committed cash (Buy) or asset (Sell),
-                                        -- disclosed to the operator at submission
-  where
-    -- Operator + trader only. Deliberately NO further observer — the venue
-    -- discloses fills (SettlementReceipt), never the resting book.
-    signatory operator, trader
-
-    -- PLEDGE TO VENUE — exercised on this order during RunClose to deliver its
-    -- pro-rated leg to the operator (the momentary CCP). The relevant trader's
-    -- authority is present because the trader signs THIS order, so the leg moves;
-    -- change (the unfilled residual, or over-committed cash) returns to the trader
-    -- via `deliverExact`. Consuming: a pledged order is filled and archived.
-    --
-    -- ⚠️ THE TRUST ASSUMPTION THIS CHOICE CARRIES — READ IT BEFORE BELIEVING THE
-    -- REST OF THE FILE. It says "exercised during RunClose", and NOTHING ENFORCES
-    -- THAT. The choice is `controller operator`; the trader's authority sits on this
-    -- contract because the trader signs it; there is no reference to an auction, a
-    -- batch, or a discovered price anywhere in the body. So the operator can
-    -- exercise this STANDALONE, at any `closingPrice` it names, and take the
-    -- trader's whole reserved holding while delivering nothing back — no asset, no
-    -- receipt, no batch. Every economic control in this design (the uncross, the
-    -- collar, the completeness count, the conservation asserts, the receipts) lives
-    -- in `RunClose`, one level ABOVE the choice that actually moves the money.
-    -- The correct shape is allocate → approve → settle, and this package already
-    -- implements it properly in `TokenStandardDvp.daml`: a leg allocated to a
-    -- settlement instruction cannot move except as part of that instruction, and an
-    -- unexecuted allocation goes home. Porting the auction's settlement step onto
-    -- that lifecycle is a rewrite of the second half of `RunClose`, not a patch, and
-    -- it is the most valuable change left in this module.
-    -- What Canton does give in the meantime is VISIBILITY, not prevention: an
-    -- unauthorised pledge is a signed transaction the trader can see, with no batch
-    -- behind it. Say that, rather than implying the ledger stops it.
-    choice PledgeToVenue : ContractId Holding
-      with
-        fillQty      : Decimal   -- the pro-rated units this order fills
-        closingPrice : Decimal   -- the uniform close (from the auction)
-      controller operator
-      do
-        -- THIS ASSERT IS CORRECT AND IT STAYS: you cannot pledge nothing, and a
-        -- non-positive delivery has no meaning. What changed is WHOSE JOB it is to
-        -- keep it true. It used to be enforcement — a heavy-side order whose ration
-        -- rounded below 1e-10 hit this assert and, because the close is ONE atomic
-        -- transaction, took the WHOLE auction down with it: one dust order was a
-        -- denial of service on the print. `RunClose` now filters zero fills out
-        -- before it gets here and cancels those orders on close instead, so this is
-        -- an invariant of the choice rather than a liveness hazard for the venue.
-        assertMsg "fill quantity must be positive"        (fillQty > 0.0)
-        assertMsg "fill cannot exceed the order quantity" (fillQty <= quantity)
-        -- PRICE ELIGIBILITY, through the same `eligibleAt` the uncross and the close
-        -- use. For an LOC this is the old assert unchanged. FOR AN UNPRICED MOC IT IS
-        -- ALWAYS TRUE, and it must be: an order that accepted the print sight unseen
-        -- cannot then be refused settlement for being off-price. This is the last of
-        -- the three price gates an MOC has to pass through, and all three now read
-        -- from one definition, so none of them can quietly disagree with the others.
-        case side of
-          Sell -> do
-            assertMsg "a limited sell must be priced <= the closing price (an MOC is always eligible)"
-              (eligibleAt Sell closingPrice limitPrice)
-            -- deliver the matched ASSET to the venue; unsold residual stays put.
-            deliverExact holdingCid fillQty operator
-          Buy -> do
-            assertMsg "a limited buy must be priced >= the closing price (an MOC is always eligible)"
-              (eligibleAt Buy closingPrice limitPrice)
-            -- deliver exactly the CASH owed to the venue; change back to the buyer.
-            deliverExact holdingCid (fillQty * closingPrice) operator
-
-    -- CANCEL / WITHDRAW — the trader pulls their OWN resting order before the
-    -- close. Consuming: the order is archived and no longer crosses. The reserved
-    -- backing is UNLOCKED — transferring the reserved slice back to the trader
-    -- re-creates it PRIVATE (disclosedTo reset to []), so the balance is freely
-    -- theirs again to spend or re-commit and the venue no longer observes it.
-    -- Returns the unlocked holding.
-    --
-    -- CONTROLLED BY trader AND operator — not the trader alone, which is a change
-    -- forced by the complete-order commitment. The book count lives on the
-    -- ClosingAuction, so an order that vanished without the auction knowing would
-    -- leave the count over-stating the live book and no close could ever run. The
-    -- two authorities meet in exactly one place: `ClosingAuction.WithdrawOrder`,
-    -- where the trader is the controller and the operator's authority comes from
-    -- signing the auction. So the trader keeps the right to withdraw — it is still
-    -- the trader who initiates, and the venue cannot cancel for them — but the
-    -- withdrawal and the count now move together or not at all. Go through
-    -- `WithdrawOrder`; this choice is the mechanism, not the entry point.
-    choice Cancel : ContractId Holding
-      controller trader, operator
-      do exercise holdingCid Transfer with newOwner = trader
-
-    -- VENUE CANCEL / CLEAR BOOK — the operator clears a resting order from the
-    -- book (a "clear the book" for an instrument, or the cancel-on-close of an
-    -- order that sat away from the print). The operator signs this order, so it has
-    -- the authority to archive it. The trader's reserved holding is left intact and
-    -- remains the trader's — clearing the book cancels the ORDER, not the balance.
-    --
-    -- USE `ClosingAuction.ClearOrder`, which wraps this and books the cancellation
-    -- into `cancelledCount`. Exercising this choice directly is possible (the venue
-    -- is a signatory and we cannot take that away) but it is self-defeating rather
-    -- than exploitable: the count would then over-state the live book, `RunClose`
-    -- would demand more orders than exist, and the venue's own close would be
-    -- unable to run. It buys an operator nothing — there is no path from here to
-    -- printing a cross over a book with orders quietly missing from it.
-    choice VenueCancel : ()
-      controller operator
-      do pure ()
-
--- ---------------------------------------------------------------------------
--- ImbalanceDisclosure — the NET imbalance of the sealed book, shown to ONE party.
--- ---------------------------------------------------------------------------
--- LIQUIDITY WITHOUT LEAKAGE, AND NOW WITHOUT A FREE LUNCH. Emitted by
--- `ClosingAuction.PublishImbalance` — which will not emit one at all unless the
--- recipient holds a live `LiquidityMandate` for this book (see LiquidityMandate.daml).
--- The `liquidityProvider` field below therefore names a party that SIGNED an
--- obligation to absorb up to a stated size within a stated band, not a party the
--- venue picked; and several such parties can be holding mandates, and receiving
--- these disclosures, at the same time. It carries the AGGREGATE order imbalance for
--- one instrument's book and NOTHING else:
---   * netSide     — "Buy" | "Sell" | "Flat": the side the book is HEAVY on.
---   * netQuantity — the magnitude of that imbalance (>= 0), at the reference price.
+-- | Turn the raw output of `pairFills` into numbered, priced `AuctionMatch`es,
+-- dropping any pair that cannot be expressed as two positive `TransferLeg`s.
 --
--- WHO CAN SEE IT — signatory operator, observer = the ONE designated liquidity
--- provider. No auditor, no other trader, no competitor. On a transparent chain the
--- pending book (and therefore the imbalance) is visible to everyone the instant an
--- order is placed — impossible to reveal to exactly one committed provider. Here
--- Canton's per-contract visibility makes selective disclosure a first-class effect:
--- the venue attracts offsetting liquidity from its DLP WITHOUT leaking the book to
--- the market. The DLP reads "net long/short N units" and offsets by lodging an
--- ordinary (equally sealed) SealedOrder on the opposite side to clear the cross.
-template ImbalanceDisclosure
-  with
-    operator          : Party    -- the venue; the sole signatory
-    liquidityProvider : Party    -- the DLP; the sole observer (need-to-know)
-    instrumentId      : Text     -- the instrument this imbalance is for
-    cashInstrument    : Text     -- the cash leg of the book
-    session           : Text     -- "Open" | "Close": which cross's book
-    netSide           : Text     -- "Buy" | "Sell" | "Flat": the heavy side
-    netQuantity       : Decimal  -- magnitude of the net imbalance (>= 0)
-    referencePrice    : Decimal  -- the uniform price the cross will print at
-    computedAt        : Time     -- when this snapshot of the book was taken
-  where
-    signatory operator
-    -- ONLY the designated liquidity provider observes it. This is the selective
-    -- disclosure: the aggregate reaches the one party that commits to offset it,
-    -- and no one else on the network.
-    observer liquidityProvider
-    ensure netQuantity >= 0.0
-      && (netSide == "Buy" || netSide == "Sell" || netSide == "Flat")
-
--- ---------------------------------------------------------------------------
--- reserveExact — carve off EXACTLY `amt` units of `holdingCid` (a holding the
--- trader owns) into a dedicated holding, disclosed to `operator`, and return it.
--- This is what makes a sealed order's backing STABLE: the order references only
--- its own reserved slice, so nothing else (a later order, a split/merge, a
--- re-submission) can consume or re-create it and make the pinned cid go stale.
--- The unreserved change stays with the trader (private). Must be called where the
--- holding OWNER's authority is in scope (Split/Disclose are owner-controlled) —
--- SubmitOrder is a choice controlled by the trader, so it is.
--- ---------------------------------------------------------------------------
-reserveExact : ContractId Holding -> Decimal -> Party -> Update (ContractId Holding)
-reserveExact holdingCid amt operator = do
-  h <- fetch holdingCid
-  assertMsg "committed holding is too small to back this order" (h.amount >= amt)
-  reserved <-
-    if h.amount == amt
-      then pure holdingCid                 -- exact: reserve the whole holding
-      else do
-        -- Split asserts 0 < amt < amount, so the reserved slice is exact and the
-        -- remainder returns to the trader in the same transaction.
-        (r, _change) <- exercise holdingCid Split with splitAmount = amt
-        pure r
-  -- Disclose the reserved slice to the operator so the close can read/move it.
-  exercise reserved Disclose with newObserver = operator
-
--- ---------------------------------------------------------------------------
--- mergeAll — merge a non-empty list of holdings (same issuer/owner/instrument)
--- into a single holding. Used to pool the venue's pledged asset (and cash) legs.
--- ---------------------------------------------------------------------------
-mergeAll : [ContractId Holding] -> Update (ContractId Holding)
-mergeAll []        = error "mergeAll: no holdings to pool"  -- unreachable: matched > 0
-mergeAll [c]       = pure c
-mergeAll (c :: cs) = do
-  rest <- mergeAll cs
-  exercise c Merge with otherCid = rest
-
--- ---------------------------------------------------------------------------
--- distribute — pay out a pooled holding to a list of (recipient, amount). Each
--- recipient's slice is an issuer-signed re-issue (Transfer).
--- ---------------------------------------------------------------------------
--- THE DEFECT THIS FIXES, because it was a real one. This function used to hand the
--- ENTIRE remaining pool to whoever happened to be LAST in the list, ignoring their
--- computed amount. Pro-rata fills do not sum exactly in a fixed-precision Decimal,
--- so the last recipient silently absorbed the rounding residual — and their
--- `SettlementReceipt`, written from the COMPUTED number, then over- or under-stated
--- what they were actually paid. The ledger and the confirm disagreed, and who
--- benefited was decided by array position.
+-- THE DUST FILTER LIVES HERE AND NOWHERE ELSE. A pair whose quantity is positive but
+-- whose cash leg `q * price` quantises to 0.0 at the ledger's 10dp cannot be
+-- allocated (the standard, and every registry implementing it, requires a positive
+-- amount), so it is skipped. Because bilateral settlement has no pool, skipping a
+-- pair costs exactly that pair and nothing else — no conservation assert to re-derive,
+-- no residual to re-settle, no other trader's fill moved by a hair.
 --
--- Now: every recipient, INCLUDING the last, is delivered the amount they were
--- promised, and the pool is ASSERTED to equal the last one's amount. The callers
--- make that assertion hold by construction — `settleResidual` forces the allocated
--- amounts to sum exactly to the pool on both the quantity leg and the cash leg — so
--- this assert is a tripwire, not a routine check. If it ever fires, the whole close
--- rolls back rather than mis-paying somebody by a dust amount and papering over it
--- with a receipt that says otherwise.
---
--- Zero-amount recipients are skipped (a `Holding` cannot exist with a zero balance,
--- and there is nothing to deliver); dropping them cannot change the sum. An EMPTY
--- payout list against a live pool would strand the pool with the venue, so it
--- aborts — unreachable, because `matched > 0.0` guarantees at least one positive
--- leg on each side.
-distribute : ContractId Holding -> [(Party, Decimal)] -> Update ()
-distribute poolCid recipients = distributeExact poolCid (filter (\(_, q) -> q > 0.0) recipients)
+-- `legIndex` is only advanced for pairs that SURVIVE, so leg ids are contiguous from
+-- 1 and a dropped pair leaves no gap for anyone to read meaning into.
+buildMatches
+  :  Decimal
+  -> Int
+  -> [((ContractId SealedOrder, Party), (ContractId SealedOrder, Party), Decimal)]
+  -> [(ContractId SealedOrder, ContractId SealedOrder, AuctionMatch)]
+buildMatches _ _ [] = []
+buildMatches price n (((buyCid, buyer), (sellCid, seller), q) :: rest)
+  | q > 0.0 && q * price > 0.0 =
+      ( buyCid
+      , sellCid
+      , AuctionMatch with
+          buyer; seller
+          quantity = q
+          cashAmount = q * price
+          legIndex = n
+      ) :: buildMatches price (n + 1) rest
+  | otherwise = buildMatches price n rest
 
--- distributeExact — the recursive half of `distribute`, at the top level because
--- Daml permits recursion only there. Every recipient is delivered the amount they
--- were promised; the LAST one's amount is asserted to be the entire remaining pool.
-distributeExact : ContractId Holding -> [(Party, Decimal)] -> Update ()
-distributeExact _ [] = abort "settlement pool has no recipient: the close cannot deliver it"
-distributeExact poolCid [(p, q)] = do
-  -- LAST SLICE. By conservation the pool IS this recipient's amount; prove it
-  -- before handing it over, so the delivery and the receipt cannot diverge.
-  pool <- fetch poolCid
-  assertMsg "settlement pool does not equal the final recipient's receipt amount"
-    (pool.amount == q)
-  _ <- exercise poolCid Transfer with newOwner = p
-  pure ()
-distributeExact poolCid ((p, q) :: rest) = do
-  (delivered, change) <- exercise poolCid Split with splitAmount = q
-  _ <- exercise delivered Transfer with newOwner = p
-  distributeExact change rest
+-- | The reserved `Holding.daml` slice a LEGACY order pledges at the close. Aborts by
+-- name on a CIP-56 order, which has no such slice — but `RunClose` refuses those
+-- up front, so this is a tripwire rather than a reachable path.
+reservedCidOf : SealedOrder -> ContractId Holding
+reservedCidOf o = case o.backing of
+  ReservedHolding cid -> cid
+  DeclaredToken _     -> error "reservedCidOf: a CIP-56 order has no reserved holding"

@@ -329,6 +329,71 @@ export interface NavResponse {
   complete: boolean;
 }
 
+// ---- CIP-56 token standard: assets issued by SOMEBODY ELSE'S registry ------
+//
+// A transfer from a foreign registry (BitSafe's CBTC faucet, say) does not arrive as
+// a balance. It arrives as a PENDING TransferInstruction addressed to the receiver,
+// and it is not a holding — and appears in no balance anywhere — until the receiver
+// exercises the standard's `TransferInstruction_Accept`. That accept is the whole
+// point of this panel: it is what turns a promise from another issuer into an asset
+// this party actually owns.
+//
+// The backend finds these by querying the ACS BY INTERFACE
+// (`Splice.Api.Token.TransferInstructionV1:TransferInstruction`), never by template —
+// the contract is on the foreign registry's own template, in a package this project
+// has never seen.
+
+export interface PendingTransfer {
+  instructionCid: string;
+  /** inbound = this party is the RECEIVER (can accept); outbound = the SENDER (can withdraw). */
+  direction: 'inbound' | 'outbound' | 'observed';
+  /** The choice this party controls: the standard fixes who may do what. */
+  action: 'accept' | 'withdraw';
+  canAct: boolean;
+  sender: string;
+  receiver: string;
+  instrumentId: string;
+  /** The registry that administers the instrument — WHOSE asset this is. */
+  instrumentAdmin: string;
+  amount: number;
+  /** "PendingReceiverAcceptance" means it is waiting on the receiver, i.e. on you. */
+  status: string;
+  requestedAt: string;
+  executeBefore: string;
+  /** True when THIS desk administers the instrument (a self-issued stand-in). */
+  ourRegistry: boolean;
+  /**
+   * The configured off-ledger registry for a FOREIGN instrument, or null. Null is
+   * the thing to fix if an accept is refused for want of a choice context.
+   */
+  registryUrl: string | null;
+  expired: boolean;
+}
+
+export interface PendingTransfersResponse {
+  party: string;
+  direction: string;
+  pending: PendingTransfer[];
+  note?: string;
+}
+
+/**
+ * The result of a standard choice. `created` lists what appeared on the ledger — for
+ * an accept, that is the received holding, ON THE FOREIGN REGISTRY'S TEMPLATE, which
+ * is the proof that the asset is not self-issued.
+ *
+ * `choiceContext.source` is deliberately reported: "accepted with an empty context"
+ * and "accepted with BitSafe's context" are different claims and only one of them is
+ * repeatable for a registry that requires one.
+ */
+export interface InstructionOutcome {
+  choice: string;
+  instructionCid: string;
+  updateId: string;
+  created: string[];
+  choiceContext: { source: string; values: number; disclosedContracts: number };
+}
+
 // A receipt as the acting party sees it, with WHO can see it. Queried as the acting
 // party, so the ledger's need-to-know rules decide what comes back (an outsider gets []).
 export interface LedgerReceipt {
@@ -729,4 +794,38 @@ export const api = {
   // Receipts VISIBLE to a party (need-to-know — the ledger filters, an outsider gets []).
   receiptsFor: (party: string) =>
     req<LedgerReceipt[]>(`/receipts?party=${encodeURIComponent(party)}`),
+
+  // ---- CIP-56 token standard: claim assets from another registry -----------
+  //
+  // `party` may be a label the desk knows OR a full `name::namespace` party id — the
+  // backend accepts a fully-qualified id verbatim, which matters here precisely
+  // because a foreign transfer is addressed to a party id somebody else typed.
+
+  /** Live TransferInstructions this party is a stakeholder of, whoever issued them. */
+  pendingTransfers: (party: string, direction: 'inbound' | 'outbound' | 'all' = 'inbound') =>
+    req<PendingTransfersResponse>(
+      `/token-standard/pending?party=${encodeURIComponent(party)}` +
+        `&direction=${encodeURIComponent(direction)}`,
+    ),
+
+  /** Claim an inbound transfer — the receiver exercises TransferInstruction_Accept. */
+  acceptTransfer: (party: string, instructionCid: string) =>
+    req<InstructionOutcome>('/token-standard/accept', {
+      method: 'POST',
+      body: JSON.stringify({ party, instructionCid }),
+    }),
+
+  /** Decline an inbound transfer — the funds return to the sender. */
+  rejectTransfer: (party: string, instructionCid: string) =>
+    req<InstructionOutcome>('/token-standard/reject', {
+      method: 'POST',
+      body: JSON.stringify({ party, instructionCid }),
+    }),
+
+  /** Pull back an outbound transfer the receiver has not accepted (sender only). */
+  withdrawTransfer: (party: string, instructionCid: string) =>
+    req<InstructionOutcome>('/token-standard/withdraw', {
+      method: 'POST',
+      body: JSON.stringify({ party, instructionCid }),
+    }),
 };

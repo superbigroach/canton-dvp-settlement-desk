@@ -47,9 +47,9 @@ import java.util.Set;
 public final class Holding extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#canton-dvp-settlement-desk", "Holding", "Holding");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("b2aa4af53dbf06e12822d2b51bfa82a52c41f27f936b81b8364b62cfe358689c", "Holding", "Holding");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("147ddae1818ea7e3662c51714525ac4d6de9c853914d723962bb7ed563ad363d", "Holding", "Holding");
 
-  public static final String PACKAGE_ID = "b2aa4af53dbf06e12822d2b51bfa82a52c41f27f936b81b8364b62cfe358689c";
+  public static final String PACKAGE_ID = "147ddae1818ea7e3662c51714525ac4d6de9c853914d723962bb7ed563ad363d";
 
   public static final String PACKAGE_NAME = "canton-dvp-settlement-desk";
 
