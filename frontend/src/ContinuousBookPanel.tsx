@@ -450,6 +450,17 @@ export default function ContinuousBookPanel({
           {/* ---- the public tape ---- */}
           <div className="tape">
             <h3>Tape <span className="sub">public · anonymous</span></h3>
+            {/* Post-trade transparency. Sealing is a PRE-trade property: hiding the book
+                exists to produce one honest published price, so publishing it is the
+                output, not a leak. What stays hidden forever is identity, and every
+                order that never traded. */}
+            <p className="note">
+              Every fill prints here for the <strong>whole session</strong> — price, size,
+              time, and <strong>no identities</strong>. Hiding the book is a
+              <em> pre-trade</em> property: it exists so the print is honest, not so the
+              print stays secret. What is never revealed is <strong>who</strong> traded,
+              and every order that never traded at all.
+            </p>
             {tape.length === 0 && <p className="muted">nothing has printed yet</p>}
             {tape.length > 0 && (
               <table>
@@ -481,6 +492,17 @@ export default function ContinuousBookPanel({
               <h3>
                 Confirms <span className="sub">{viewAs}</span>
               </h3>
+              {/* The counterpart to the public tape above, and the contrast is the
+                  point: the tape says a trade happened and names nobody; a confirm is
+                  addressed to ONE trader and never names the other side. */}
+              <p className="note">
+                Private to <strong>{viewAs}</strong> — a confirm is signed by the venue and
+                observed by the one trader it belongs to (and the auditor). No other party
+                can see these, and <strong>the counterparty is never named</strong>: the
+                venue stood between the two sides, so you learn your price, your size and
+                whether you were <em>Maker</em> or <em>Taker</em> — and nothing about who
+                filled you.
+              </p>
               <table>
                 <thead>
                   <tr>
