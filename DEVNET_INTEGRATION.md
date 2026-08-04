@@ -252,8 +252,9 @@ module. **None of it is on the shared node.**
 | Package on `hackcanton-01` | `72ec9833…` — the **pre-feedback** DAR |
 | Hosted demo (`crossdesk-devnet-app.web.app`) | reads that package; the close it runs prints at the supplied reference |
 | Recorded demo video | same build, same caveat |
-| The rebuild | committed on `feat/price-discovery-and-cip56`, **not pushed** — `origin/master` is still the pre-feedback submission |
-| Verification of the rebuild | **Daml Script scenarios** (53 at commit `73aca95`, all green), plus `./gradlew clean build` on both backends and a clean `tsc`. **No live-participant run.** |
+| The rebuild | **pushed** — `origin/master` and `feat/price-discovery-and-cip56` are both at `5dfd724` |
+| The new package | `147ddae1818ea7e3662c51714525ac4d6de9c853914d723962bb7ed563ad363d` — built, DAR in hand, **pending the operator's upload** |
+| Verification of the rebuild | **Daml Script scenarios** (92 at commit `5dfd724`, all green), plus `./gradlew clean build` on both backends and a clean `tsc`. **No live-participant run of the auction.** |
 
 **Why it isn't deployed, precisely.** Uploading a DAR to a participant is
 admin-only — the same constraint documented in §2 that put the original DAR upload,

@@ -117,7 +117,7 @@ multi-party/federated ML via sub-transaction privacy · AI-gated contract choice
 | GTM Materials | Strategy, channels, positioning, acquisition hypotheses | `docs/deliverables/CrossDesk_GTM.pdf`, `docs/BUSINESS_BRIEF.md`, `docs/PILOT_PLAN.md` |
 | ICP / Audience | Target user + specific pain point | `docs/deliverables/CrossDesk_ICP.pdf`, `SUBMISSION.md` §1 |
 | Value / Problem | What's solved, why it matters, why now | `SUBMISSION.md` §1, `docs/MARKET_AND_PRICING.md` (every number sourced, unverified items tagged) |
-| Metrics / Validation | Interviews, tests, validation notes, success criteria | `daml test` — 53 scripts; `docs/REAL_AUCTION_MECHANICS.md` (venue rules vs. this code, with a gap table); `docs/IMBALANCE_PUBLICATION_EVIDENCE.md` (the empirical case for and against the design) |
+| Metrics / Validation | Interviews, tests, validation notes, success criteria | `daml test` — 92 scripts; `docs/REAL_AUCTION_MECHANICS.md` (venue rules vs. this code, with a gap table); `docs/IMBALANCE_PUBLICATION_EVIDENCE.md` (the empirical case for and against the design) |
 | Pitch Materials | Problem → solution → why us | `docs/deliverables/CrossDesk_Pitch_v2.pdf`, `SUBMISSION.md` §0 (the finalist feedback and what was done about it) |
 
 **Season 2 Grand Final note.** The judges' feedback named four things to sharpen —

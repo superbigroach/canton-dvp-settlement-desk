@@ -12,7 +12,9 @@ prints one price the orders themselves determine, and settles every leg or none.
   HackCanton devnet node (`hackcanton-01`), **settling real on-chain transactions**
   (first atomic DvP: *alice-crossdesk → bob-crossdesk · 10 cETH @ 3,200 USDC*, 2026-07-19).
   ⚠️ It runs the **pre-feedback** package `72ec9833…` — see §0.4.
-- **Assets used:** **cETH** (onRails) and **CBTC** (BitSafe) as first-class instruments
+- **Assets used:** **cETH** (onRails) and **CBTC** (BitSafe) as first-class instruments —
+  and as of **2026-08-04 we hold 4.16 of BitSafe's real CBTC** on the devnet node, claimed
+  through the CIP-56 registry flow, not self-issued (§0.4)
 - **Built entirely during the hackathon** — first commit 2026-07-11 ("… — HackCanton Season 2")
 
 ---
@@ -98,6 +100,30 @@ standard wallet can render the locked position with no knowledge of this app.
 - **Code:** `daml/TokenStandardDvp.daml`, `daml.yaml` → `data-dependencies`.
 - **Proof:** `daml/TokenStandardTest.daml` — the happy path plus three refusals (missing
   leg, foreign allocation, unauthorised execution) and the plain transfer path.
+- ✅ **The stand-ins are no longer only stand-ins — we hold real BitSafe CBTC on devnet.**
+  On **2026-08-04** we claimed **4.16 CBTC** through the CIP-56 registry flow and it is
+  live on `hackcanton-01` right now:
+
+  | Party | CBTC |
+  |---|---|
+  | `alice-crossdesk` | 0.84 |
+  | `bob-crossdesk` | 0.53 |
+  | `bank-crossdesk` | 0.91 |
+  | `issuer-crossdesk` | 0.88 |
+  | `auditor-crossdesk` | 0.01 |
+  | wallet party | 0.99 |
+  | **total** | **4.16** |
+
+  These are **BitSafe's contracts, on BitSafe's templates, owned by our parties** — verified
+  by `HoldingV1` interface query, not by our own issuance. The reason the desk can consume
+  them is that BitSafe's tokens and our CIP-56 code resolve the *same* Token Standard
+  interface package `55ba4deb0ad4662c4168b39859738a0e91388d252286480c7331b3f71a517281`,
+  which this repo vendors unmodified. The unlock was the registry **choice-context**
+  endpoint (`api.utilities.digitalasset-dev.com`) — without it `TransferInstruction_Accept`
+  fails with `Missing context entry for: utility.digitalasset.com/transfer-rule`, because
+  the registrar's `TransferRule` is not visible to the receiver. Full runbook, including
+  every error hit and solved: **[`docs/TOKEN_STANDARD_RUNBOOK.md`](docs/TOKEN_STANDARD_RUNBOOK.md)**.
+  The same flow should carry over to onRails cETH with a different registrar.
 - 🔴 **What is NOT CIP-56: the auction itself.** `MarketOnClose`, `Holding`,
   `Settlement`, `Basket`, `Governance`, `LiquidityMandate` are all still the legacy
   self-issued layer. The two sets of cETH do not interoperate. Implementing CIP-56 does
@@ -121,13 +147,16 @@ standard wallet can render the locked position with no knowledge of this app.
 
 🔴 Say this before a judge finds it:
 
-- The rebuild is committed on branch **`feat/price-discovery-and-cip56`** and is **not
-  yet pushed**; `origin/master` is still the pre-feedback submission.
-- **Nothing above has been run end-to-end against a live participant.** It is proven by
-  **Daml Script scenarios** (53 at commit `73aca95`) plus compiling backends and a
+- The rebuild is **pushed** — `origin/master` and branch
+  **`feat/price-discovery-and-cip56`** are both at commit `5dfd724`. What you clone is
+  what is described here.
+- **The auction has not been run end-to-end against a live participant.** It is proven by
+  **Daml Script scenarios** (92 at commit `5dfd724`, all green) plus compiling backends and a
   clean `tsc` — not by a
   cross printing on a shared node. Uploading a DAR to `hackcanton-01` is an admin-only
-  action on the node operator's side.
+  action on the node operator's side; the request is in with NODERS and the package
+  (`147ddae1…`) is built and waiting. The *settlement* path did have its live run —
+  the atomic DvP of 2026-07-19, receipt `006ef8c599…`.
 - The **hosted demo and the recorded demo video therefore show the *pre-feedback*
   build**, in which the close printed at the committee NAV. That is not what the code
   does now, and §0.1 is the correct description.
@@ -226,18 +255,21 @@ declared party, the data does not exist for you.
   Creating LX1 **moves real cETH + CBTC holdings** into custody and mints shares;
   redeeming burns shares and returns them. So a cETH/CBTC balance change is the *core
   state transition* of the fund.
-- Devnet CBTC obtained from the BitSafe faucet; the same flows run on real devnet tokens
-  once received by the acting party.
+- Devnet CBTC obtained from the BitSafe faucet and **claimed for real through the CIP-56
+  registry flow on 2026-08-04 — 4.16 CBTC across our six parties, live on the node now**
+  (§0.4, and `docs/TOKEN_STANDARD_RUNBOOK.md`). They are BitSafe's contracts on BitSafe's
+  templates, not self-issued.
 
 ## 5 · Setup — run it locally
 
 **Daml logic + tests (proves the whole model):**
 ```bash
 daml version              # must be 3.4.11 — daml.yaml pins it (the line devnet runs)
-daml build && daml test   # 53 scripts at commit 73aca95, all pass
+daml build && daml test   # 92 scripts at commit 5dfd724, all pass
 ```
-(47 scenarios in `daml/Test.daml`, 6 in `daml/TokenStandardTest.daml`, at the last
-commit on this branch — the suite is still growing, so run the command for the live
+(63 scenarios in `daml/Test.daml`, 23 in `daml/ContinuousBookTest.daml`, 6 in
+`daml/TokenStandardTest.daml`, at the last commit on this branch — the suite is still
+growing, so run the command for the live
 number. The build also links the six vendored `splice-api-token-*` DARs from `deps/`
 — verify with `daml damlc inspect-dar .daml/dist/canton-dvp-settlement-desk-1.0.0.dar`.)
 
@@ -251,7 +283,7 @@ number. The build also links the six vendored `splice-api-token-*` DARs from `de
 
 ## 6 · What works today (verified)
 
-- ✅ **`daml test` — 53/53 green at commit `73aca95`** (the suite is still growing —
+- ✅ **`daml test` — 92/92 green at commit `5dfd724`** (the suite is still growing —
   run it for the live number), including `testPriceDiscoveryUnit`,
   `testPriceDiscoveryBeatsReference`, `testCompleteBookRequired`, `testMixedSurplusTieBreak`,
   `testCollarClampsDown`, `testMocLocLadderEndToEnd`, `testMandateSeatIsContestable`,
