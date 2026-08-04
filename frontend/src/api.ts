@@ -513,7 +513,16 @@ export interface LiveMark {
 // ---- THE CONTINUOUS SESSION (daml/ContinuousBook.daml) --------------------
 
 export type BookSideName = 'Bid' | 'Ask';
-export type TimeInForce = 'GTC' | 'IOC';
+/**
+ * GTC rests; IOC fills what it can now and cancels the rest; FOK fills the WHOLE
+ * order now or none of it.
+ *
+ * GTC and IOC are values of the ledger's own enum. FOK is enforced by the desk
+ * before any leg moves — the on-ledger enum has two values and adding a third is a
+ * package change — so an underfilled FOK never trades, but that rule lives in the
+ * venue's order handler rather than in the choice body every validator re-executes.
+ */
+export type TimeInForce = 'GTC' | 'IOC' | 'FOK';
 
 export interface BookSessionRequest {
   instrumentId: string;

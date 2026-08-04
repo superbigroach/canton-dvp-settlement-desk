@@ -829,7 +829,13 @@ public final class LedgerCommands {
         return switch (raw.trim().toUpperCase()) {
             case "GTC" -> TimeInForce.GTC;
             case "IOC" -> TimeInForce.IOC;
-            default -> throw new IllegalArgumentException("timeInForce must be GTC or IOC, got: " + raw);
+            // FOK rides on the ledger's IOC: both refuse to rest, and the difference —
+            // whether a PARTIAL fill is acceptable — is checked by the desk before any
+            // leg moves (see ContinuousBookController). The enum on the ledger has two
+            // values, so this maps to the one whose resting behaviour is identical.
+            case "FOK" -> TimeInForce.IOC;
+            default -> throw new IllegalArgumentException(
+                    "timeInForce must be GTC, IOC or FOK, got: " + raw);
         };
     }
 

@@ -11,6 +11,7 @@ import {
   type MocState,
   type OrderType,
   type Party,
+  type FixingResponse,
   type Session,
 } from './api';
 import CommitteePanel from './CommitteePanel';
@@ -87,6 +88,9 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>('');
   const [toast, setToast] = useState<string>('');
+  // Official fixes on the ledger, so a yielding instrument can show the rate that was
+  // actually attested rather than a number typed into this file.
+  const [accruingFixes, setAccruingFixes] = useState<FixingResponse[]>([]);
 
   const tradableAssets = useMemo(
     () => instruments.filter((i) => i.kind !== 'Cash'),
@@ -103,6 +107,23 @@ export default function App() {
   const refPriceOf = useCallback(
     (id: string) => instrumentOf(id)?.referencePrice ?? null,
     [instrumentOf],
+  );
+
+  // A money-market instrument is valued by ACCRUAL, not by an auction: it has a NAV
+  // and a rate, not a close. Detected from the instrument kind, so a new yielding
+  // instrument gets the right treatment without another special case here.
+  const selectedIsYielding = useMemo(() => {
+    const k = instruments.find((i) => i.id === asset)?.kind ?? '';
+    return /money|mmf|fund|treasury/i.test(k);
+  }, [instruments, asset]);
+  const yielding = selectedIsYielding;
+  // The newest ACCRUING fix for it — the rate and day count the committee signed.
+  const yieldFix = useMemo(
+    () =>
+      accruingFixes
+        .filter((f) => f.instrumentId === asset && Number(f.ratePerAnnum) !== 0)
+        .slice(-1)[0] ?? null,
+    [accruingFixes, asset],
   );
 
   const flash = (msg: string) => {
@@ -179,6 +200,8 @@ export default function App() {
         const [ps, ins] = await Promise.all([api.parties(), api.instruments()]);
         setParties(ps);
         setInstruments(ins);
+        // Not fatal if it fails: an empty roster just means no fix has been struck.
+        api.fixings().then(setAccruingFixes).catch(() => setAccruingFixes([]));
         const first = ps.find((p) => p.label === 'Alice') ?? ps[0];
         setActing(first?.label ?? '');
         const firstAsset = ins.find((i) => i.kind !== 'Cash');
@@ -480,18 +503,43 @@ export default function App() {
           <p className="quote-desc">{selectedInstrument?.description ?? 'Select an instrument'}</p>
         </div>
         <div className="quote-right">
-          <span className="quote-label">{sessionLabel(session)}</span>
+          {/* WHAT THIS NUMBER IS DEPENDS ON THE INSTRUMENT.
+              A traded asset has an official CLOSE, discovered by the auction from the
+              sealed book. A money-market instrument has no auction and no close - it
+              does not trade its way to a value, it EARNS one - so quoting "Official
+              Close 1.00" against it is meaningless. It has a NAV, and the number a
+              reader actually needs is the rate it accrues at and the convention that
+              rate is quoted on. */}
+          <span className="quote-label">
+            {yielding ? 'NAV · accruing' : sessionLabel(session)}
+          </span>
           <span className="quote-price">
             {closePrice != null ? (
               <>
-                <span className="mono nav">{fmt2(closePrice)}</span>
+                <span className="mono nav">
+                  {yielding ? closePrice.toFixed(6) : fmt2(closePrice)}
+                </span>
                 <span className="quote-ccy">{CASH}</span>
               </>
             ) : (
               <span className="mono nav muted">—</span>
             )}
           </span>
-          <span className="quote-note">Published anchor · the cross is discovered from the book</span>
+          <span className="quote-note">
+            {yielding ? (
+              yieldFix ? (
+                <>
+                  {(Number(yieldFix.ratePerAnnum) * 100).toFixed(2)}% / yr ·{' '}
+                  {yieldFix.dayCount} · attested by {yieldFix.attestors.length} of the
+                  committee — the ledger accrues it continuously
+                </>
+              ) : (
+                <>no accruing fix struck yet — the committee attests base, rate and day count</>
+              )
+            ) : (
+              <>Published anchor · the cross is discovered from the book</>
+            )}
+          </span>
         </div>
       </section>
 

@@ -276,6 +276,38 @@ public class ContinuousBookController {
 
         // CROSS IT, if anything on the other side is reachable.
         List<String> ladder = ladderFor(venue, book.instrumentId(), cash, orderCid);
+
+        // FILL-OR-KILL — fill the WHOLE order now, or none of it.
+        //
+        // IOC takes whatever is reachable and cancels the remainder; FOK refuses the
+        // partial. So the test is whether the reachable ladder covers the full size
+        // BEFORE any leg moves: if it does not, the order is cancelled and nothing
+        // trades.
+        //
+        // ⚠️ WHERE THIS IS ENFORCED, SAID PLAINLY. Price-time priority, self-match
+        // prevention, the band and atomicity are all in the choice body, which every
+        // validator re-executes. This one is enforced HERE, by the venue's order
+        // handler, because `TimeInForce` is an on-ledger enum of GTC | IOC and adding a
+        // third value is a package change. The semantics a trader sees are correct —
+        // an underfilled FOK never trades — but a venue that skipped this check would
+        // not be caught by the ledger the way a mis-ordered ladder is. Moving it into
+        // `MatchOrder` is the honest end state.
+        if ("FOK".equalsIgnoreCase(req.timeInForce())) {
+            BigDecimal reachable = ledger.restingOrdersVisibleTo(venue).stream()
+                    .filter(o -> ladder.contains(o.contractId()))
+                    .map(LedgerService.RestingOrderView::quantity)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            if (reachable.compareTo(req.quantity()) < 0) {
+                ledger.submit(trader,
+                        LedgerCommands.cancelBookOrder(bookCid, trader, orderCid));
+                log.info("BOOK ORDER killed (FOK) order={} wanted={} reachable={}",
+                        orderCid, req.quantity(), reachable);
+                throw new IllegalStateException(
+                        "fill-or-kill: only " + reachable + " of " + req.quantity()
+                                + " was reachable, so the order was killed and nothing traded");
+            }
+        }
+
         if (ladder.isEmpty()) {
             // Nothing to trade with. A limit order rests; an unpriced order cannot, and
             // the ledger already refused to let it rest, so say so plainly rather than

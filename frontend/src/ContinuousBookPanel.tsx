@@ -363,8 +363,9 @@ export default function ContinuousBookPanel({
                     : undefined
                 }
               >
-                <option value="GTC">GTC (rests)</option>
-                <option value="IOC">IOC (fill now, kill remainder)</option>
+                <option value="GTC">GTC — rest until cancelled</option>
+                <option value="IOC">IOC — fill now, kill the remainder</option>
+                <option value="FOK">FOK — fill all of it now, or none</option>
               </select>
             </label>
             {/* Sized to match Refresh in the row above — the ticket's controls are all
