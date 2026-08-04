@@ -65,6 +65,19 @@ problem rather than just the instances:
 - **Accruing NAV.** The committee attests base / rate / day-count / as-of, and the
   ledger derives the value continuously, so a fixing does not go stale the moment
   it is struck.
+- **A continuous session.** `docs/HOW_IT_WORKS.md` used to list "there is no
+  continuous session here" as a known limitation. There is one now:
+  `daml/ContinuousBook.daml` is a **price–time-priority limit order book** where
+  interest rests between auctions, matched by price then time and settled at the
+  **maker's** posted price in a single atomic sweep. It matters structurally — a
+  closing auction inherits its price from the resting ladder rather than inventing
+  one, which is why a venue with only an auction has to fall back on its own
+  reference. Same privacy property as the sealed book, and sharper: a
+  `RestingOrder` has **no observers at all**, so a trader sees only its own orders
+  and *even the auditor* sees none of them while they rest — while every fill
+  prints to a **public, anonymous** tape. Dark pre-trade, lit post-trade.
+  **23 scenarios** in `daml/ContinuousBookTest.daml`, and it is wired end-to-end:
+  `POST /api/book/order` → the *Continuous Session* panel in the desk.
 
 Full narrative: **[`docs/HOW_IT_WORKS.md`](docs/HOW_IT_WORKS.md)**. Venue rules with
 primary sources: **[`docs/REAL_AUCTION_MECHANICS.md`](docs/REAL_AUCTION_MECHANICS.md)**.
@@ -771,6 +784,11 @@ actually changed.
 | `POST /api/committee` · `/{cid}/propose` · `/{cid}/propose-accruing` | K-of-N committee; accruing or snapshot fixing |
 | `POST /api/fixing/{cid}/confirm` · `/finalize` · `GET /api/fixings` · `GET /api/fixing/{cid}/nav` | attestation accumulation + the accrued NAV at an instant |
 | `POST /api/basket` · `/create` · `/redeem` · `GET /api/basket/nav` · `GET /api/baskets` | the in-kind fund primary market |
+| `POST /api/book/session` · `POST /api/book/close` · `/open` | open, halt and resume a **continuous session** (a halt still permits cancellation) |
+| `POST /api/book/order` | `PlaceOrder` **then** `MatchOrder` — an aggressive order crosses on submission; a passive one rests. Blank `limitPrice` = an unpriced market order (forced IOC: it may never rest) |
+| `GET  /api/book/state?as=` | the ladder **as that party may see it** — the venue sees all of it, a trader only its own, the **auditor none of it** |
+| `POST /api/book/order/{cid}/cancel` | pull an order; its reserved backing returns |
+| `GET  /api/book/tape` · `GET /api/book/confirms?as=` | the public anonymous tape, and your own Maker/Taker confirms |
 | `GET  /api/receipts` · `GET /api/parties` · `GET /api/health` | audit view, roster, liveness |
 
 ### How it's wired

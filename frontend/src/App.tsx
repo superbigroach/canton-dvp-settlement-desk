@@ -14,6 +14,7 @@ import {
   type Session,
 } from './api';
 import CommitteePanel from './CommitteePanel';
+import ContinuousBookPanel from './ContinuousBookPanel';
 import FundPanel from './FundPanel';
 import PendingTransfersPanel from './PendingTransfersPanel';
 
@@ -967,6 +968,23 @@ export default function App() {
             This is where a real third-party asset (BitSafe CBTC) is claimed — the
             direct answer to "your tokens are self-issued stand-ins". */}
         <PendingTransfersPanel
+          acting={acting}
+          onChanged={() => {
+            void loadHoldings(acting);
+            void loadReceipts(acting);
+          }}
+          flash={flash}
+        />
+
+        {/* -------- The CONTINUOUS session · the ladder the close inherits --------
+            A closing auction does not manufacture a price out of nothing; it
+            inherits one from resting limit interest. This is where that interest
+            rests, matched by price then time, settling at the MAKER's price. It is
+            also the clearest demonstration of the privacy property: the book is
+            dark pre-trade (even to the auditor), the tape is public post-trade. */}
+        <ContinuousBookPanel
+          parties={parties}
+          instruments={instruments}
           acting={acting}
           onChanged={() => {
             void loadHoldings(acting);

@@ -25,6 +25,10 @@ import com.lucilla.settlement.model.liquiditymandate.MandateTerms;
 import com.lucilla.settlement.model.marketonclose.ClosingAuction;
 import com.lucilla.settlement.model.marketonclose.ImbalanceDisclosure;
 import com.lucilla.settlement.model.marketonclose.SealedOrder;
+import com.lucilla.settlement.model.continuousbook.ContinuousBook;
+import com.lucilla.settlement.model.continuousbook.RestingOrder;
+import com.lucilla.settlement.model.continuousbook.TapePrint;
+import com.lucilla.settlement.model.continuousbook.TradeConfirm;
 import com.lucilla.settlement.model.settlement.FillRecord;
 import com.lucilla.settlement.model.settlement.SettlementBatch;
 import com.lucilla.settlement.model.settlement.SettlementReceipt;
@@ -884,6 +888,146 @@ public class LedgerService {
 
     private static String rootMessage(Throwable t) {
         return LedgerErrors.rootMessage(t);
+    }
+
+    // =====================================================================
+    // THE CONTINUOUS SESSION — party-aware reads
+    // =====================================================================
+    // Same discipline as the auction: the ACS is queried AS the acting party, so
+    // Daml's own visibility does the filtering and the web layer never decides who
+    // may see what.
+
+    /** Active {@link ContinuousBook} sessions visible to {@code party}. */
+    public List<BookView> continuousBooksVisibleTo(String party) {
+        return withRetry("continuous books for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<ContinuousBook.Contract> filter = ContractFilter.of(ContinuousBook.COMPANION);
+            List<BookView> out = new ArrayList<>();
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false,
+                            client.getStateClient().getLedgerEnd().blockingGet())
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (ContinuousBook.Contract c : active.activeContracts) {
+                            ContinuousBook b = c.data;
+                            out.add(new BookView(c.id.contractId, b.operator, b.instrumentId,
+                                    b.cashInstrument, b.referencePrice, b.bandFraction,
+                                    b.nextSeq, b.liveCount, b.isOpen, b.participants));
+                        }
+                    });
+            return out;
+        });
+    }
+
+    /**
+     * Active {@link RestingOrder}s visible to {@code party} — THE DARK-POOL PROPERTY.
+     *
+     * <p>A RestingOrder is signed by operator + trader and observed by <b>nobody</b>.
+     * So the venue sees the whole book (it signs every order), a trader sees only its
+     * own, and the auditor — who sees the session and the tape — sees <b>none</b> of
+     * it while it rests. That asymmetry is enforced by the ledger, not by this method.
+     */
+    public List<RestingOrderView> restingOrdersVisibleTo(String party) {
+        return withRetry("resting orders for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<RestingOrder.Contract> filter = ContractFilter.of(RestingOrder.COMPANION);
+            List<RestingOrderView> out = new ArrayList<>();
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false,
+                            client.getStateClient().getLedgerEnd().blockingGet())
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (RestingOrder.Contract c : active.activeContracts) {
+                            RestingOrder o = c.data;
+                            out.add(new RestingOrderView(c.id.contractId, o.operator, o.trader,
+                                    labelOf(o.trader), o.instrumentId, o.cashInstrument,
+                                    o.side.toString().equalsIgnoreCase("BID") ? "Bid" : "Ask",
+                                    o.quantity,
+                                    // An absent limit is a MARKET order, carried onwards as
+                                    // null — never coerced to 0 or to the reference, both of
+                                    // which would read as a real (and wrong) price.
+                                    o.limitPrice.orElse(null),
+                                    o.timeInForce.toString(), o.seqNo));
+                        }
+                    });
+            return out;
+        });
+    }
+
+    /** The public tape — every print, visible to the whole session, naming nobody. */
+    public List<TapeView> tapePrintsVisibleTo(String party) {
+        return withRetry("tape for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<TapePrint.Contract> filter = ContractFilter.of(TapePrint.COMPANION);
+            List<TapeView> out = new ArrayList<>();
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false,
+                            client.getStateClient().getLedgerEnd().blockingGet())
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (TapePrint.Contract c : active.activeContracts) {
+                            TapePrint t = c.data;
+                            out.add(new TapeView(c.id.contractId, t.instrumentId, t.cashInstrument,
+                                    t.price, t.quantity, t.printedAt, t.matchSeq));
+                        }
+                    });
+            return out;
+        });
+    }
+
+    /**
+     * The venue's bilateral confirms to {@code party}. A confirm never names the
+     * other trader — the venue stood between them as momentary counterparty.
+     */
+    public List<ConfirmView> tradeConfirmsVisibleTo(String party) {
+        return withRetry("confirms for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<TradeConfirm.Contract> filter = ContractFilter.of(TradeConfirm.COMPANION);
+            List<ConfirmView> out = new ArrayList<>();
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false,
+                            client.getStateClient().getLedgerEnd().blockingGet())
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (TradeConfirm.Contract c : active.activeContracts) {
+                            TradeConfirm t = c.data;
+                            out.add(new ConfirmView(c.id.contractId, labelOf(t.trader),
+                                    t.instrumentId, t.cashInstrument,
+                                    t.side.toString().equalsIgnoreCase("BID") ? "Bid" : "Ask",
+                                    t.quantity, t.price, t.cashAmount, t.liquidity, t.tradedAt));
+                        }
+                    });
+            return out;
+        });
+    }
+
+    /** Flat view of a continuous session. */
+    public record BookView(
+            String contractId, String operator, String instrumentId, String cashInstrument,
+            java.math.BigDecimal referencePrice, java.math.BigDecimal bandFraction,
+            Long nextSeq, Long liveCount, boolean isOpen, List<String> participants) {
+    }
+
+    /** Flat view of one resting order. {@code limitPrice} null = an unpriced market order. */
+    public record RestingOrderView(
+            String contractId, String operator, String trader, String traderLabel,
+            String instrumentId, String cashInstrument, String side,
+            java.math.BigDecimal quantity, java.math.BigDecimal limitPrice,
+            String timeInForce, Long seqNo) {
+    }
+
+    /** Flat view of one public tape print — price, size, time, and no identities. */
+    public record TapeView(
+            String contractId, String instrumentId, String cashInstrument,
+            java.math.BigDecimal price, java.math.BigDecimal quantity,
+            java.time.Instant printedAt, Long matchSeq) {
+    }
+
+    /** Flat view of one bilateral confirm. {@code liquidity} is Maker or Taker. */
+    public record ConfirmView(
+            String contractId, String traderLabel, String instrumentId, String cashInstrument,
+            String side, java.math.BigDecimal quantity, java.math.BigDecimal price,
+            java.math.BigDecimal cashAmount, String liquidity, java.time.Instant tradedAt) {
     }
 
     /** Flat, JSON-friendly view of a known party. */

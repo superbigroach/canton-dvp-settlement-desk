@@ -25,6 +25,12 @@ import com.lucilla.settlement.model.basket.RedemptionAgreement;
 import com.lucilla.settlement.model.basket.BasketReceipt;
 import com.lucilla.settlement.model.tokenstandarddvp.TokenStandardHolding;
 import com.lucilla.settlement.model.tokenstandarddvp.TokenStandardRegistry;
+import com.lucilla.settlement.model.continuousbook.BookSide;
+import com.lucilla.settlement.model.continuousbook.ContinuousBook;
+import com.lucilla.settlement.model.continuousbook.RestingOrder;
+import com.lucilla.settlement.model.continuousbook.TapePrint;
+import com.lucilla.settlement.model.continuousbook.TimeInForce;
+import com.lucilla.settlement.model.continuousbook.TradeConfirm;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -705,5 +711,134 @@ public final class LedgerCommands {
             case "sell" -> Side.SELL;
             default -> throw new IllegalArgumentException("side must be Buy or Sell, got: " + raw);
         };
+    }
+
+    // =====================================================================
+    // THE CONTINUOUS SESSION (daml/ContinuousBook.daml)
+    // =====================================================================
+    // The auction's counterpart: limit interest that RESTS and is matched by
+    // price then time. Everything below is a thin binding — the priority
+    // rules, the band, self-match prevention and the atomicity all live in the
+    // choice bodies, which every validator re-executes. Nothing here decides
+    // anything; the ONE piece of judgement on this side is the contra ladder
+    // the venue proposes, and `MatchOrder` asserts that ladder is correct
+    // rather than trusting it (see ContinuousBookService.ladderFor).
+
+    /** Default band half-width for a new session: +/-10% of the anchor. */
+    public static final BigDecimal DEFAULT_BAND_FRACTION = new BigDecimal("0.10");
+
+    public static Update<?> createContinuousBook(
+            String operator, String auditor, List<String> participants,
+            String instrumentId, String cashInstrument,
+            BigDecimal referencePrice, BigDecimal bandFraction) {
+        return new ContinuousBook(operator, auditor, participants, instrumentId, cashInstrument,
+                referencePrice, bandFraction, 0L, 0L, true)
+                .create();
+    }
+
+    /**
+     * Lodge an order. CONSUMING on the book — {@code nextSeq} is the time-priority
+     * stamp and a counter two transactions can both read as 7 is not a queue, so
+     * placement serialises. The caller must thread the successor book cid forward.
+     */
+    public static Update<?> placeOrder(
+            String bookCid, String trader, BookSide side, BigDecimal quantity,
+            Optional<BigDecimal> limitPrice, TimeInForce timeInForce, String holdingCid) {
+        return new ContinuousBook.ContractId(bookCid)
+                .exercisePlaceOrder(trader, side, quantity, limitPrice, timeInForce,
+                        new Holding.ContractId(holdingCid));
+    }
+
+    /**
+     * Cross the aggressor against a contra ladder, BEST FIRST. The order of
+     * {@code contraCids} is not a hint — the choice body asserts it.
+     */
+    public static Update<?> matchOrder(String bookCid, String aggressorCid, List<String> contraCids) {
+        return new ContinuousBook.ContractId(bookCid)
+                .exerciseMatchOrder(new RestingOrder.ContractId(aggressorCid),
+                        contraCids.stream().map(RestingOrder.ContractId::new).toList());
+    }
+
+    public static Update<?> cancelBookOrder(String bookCid, String trader, String orderCid) {
+        return new ContinuousBook.ContractId(bookCid)
+                .exerciseCancelOrder(trader, new RestingOrder.ContractId(orderCid));
+    }
+
+    public static Update<?> closeBookSession(String bookCid) {
+        return new ContinuousBook.ContractId(bookCid).exerciseCloseSession();
+    }
+
+    public static Update<?> openBookSession(String bookCid) {
+        return new ContinuousBook.ContractId(bookCid).exerciseOpenSession();
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier continuousBookTemplateId() {
+        return ContinuousBook.TEMPLATE_ID;
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier restingOrderTemplateId() {
+        return RestingOrder.TEMPLATE_ID;
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier tapePrintTemplateId() {
+        return TapePrint.TEMPLATE_ID;
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier tradeConfirmTemplateId() {
+        return TradeConfirm.TEMPLATE_ID;
+    }
+
+    /** Bid/Ask for the continuous book. Accepts the auction's Buy/Sell vocabulary too. */
+    public static BookSide bookSide(String raw) {
+        if (raw == null) {
+            throw new IllegalArgumentException("side is required (Bid or Ask)");
+        }
+        return switch (raw.trim().toLowerCase()) {
+            case "bid", "buy" -> BookSide.BID;
+            case "ask", "sell", "offer" -> BookSide.ASK;
+            default -> throw new IllegalArgumentException("side must be Bid or Ask, got: " + raw);
+        };
+    }
+
+    /**
+     * GTC (rests) or IOC (fills now, remainder killed). Blank defaults to GTC for a
+     * limit order — but an UNPRICED order is forced to IOC, because a resting market
+     * order is a free option written to whoever next crosses it and the ledger refuses
+     * it outright ("an unpriced (market) order must be immediate-or-cancel").
+     */
+    public static TimeInForce timeInForce(String raw, Optional<BigDecimal> limitPrice) {
+        if (limitPrice.isEmpty()) {
+            return TimeInForce.IOC;
+        }
+        if (raw == null || raw.isBlank()) {
+            return TimeInForce.GTC;
+        }
+        return switch (raw.trim().toUpperCase()) {
+            case "GTC" -> TimeInForce.GTC;
+            case "IOC" -> TimeInForce.IOC;
+            default -> throw new IllegalArgumentException("timeInForce must be GTC or IOC, got: " + raw);
+        };
+    }
+
+    /** Band low/high, MIRRORED from ContinuousBook.daml's bandLowOf/bandHighOf. */
+    public static BigDecimal bandLow(BigDecimal reference, BigDecimal bandFraction) {
+        return reference.multiply(BigDecimal.ONE.subtract(bandFraction));
+    }
+
+    public static BigDecimal bandHigh(BigDecimal reference, BigDecimal bandFraction) {
+        return reference.multiply(BigDecimal.ONE.add(bandFraction));
+    }
+
+    /**
+     * What a BID must reserve in cash. A limit bid can never execute above its own
+     * limit; an unpriced bid has no limit of its own, so the only bound on what it can
+     * be asked to pay is the top of the venue's band — exactly the reasoning in
+     * {@link #buyReservation} for the auction, against a different bound.
+     */
+    public static BigDecimal bidReservation(
+            Optional<BigDecimal> limitPrice, BigDecimal reference,
+            BigDecimal bandFraction, BigDecimal quantity) {
+        BigDecimal worst = limitPrice.orElseGet(() -> bandHigh(reference, bandFraction));
+        return worst.multiply(quantity);
     }
 }

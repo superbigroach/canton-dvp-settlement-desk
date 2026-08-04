@@ -457,6 +457,110 @@ function asText(value: unknown): string {
  * single place that guarantees the three forbidden renderings can never reach the
  * screen, including for values that are not Errors at all.
  */
+// ---- THE CONTINUOUS SESSION (daml/ContinuousBook.daml) --------------------
+
+export type BookSideName = 'Bid' | 'Ask';
+export type TimeInForce = 'GTC' | 'IOC';
+
+export interface BookSessionRequest {
+  instrumentId: string;
+  cashInstrument?: string;
+  /** Defaults to the instrument's published mark. */
+  referencePrice?: number | null;
+  /** Half-width of the price band as a fraction. Defaults to 0.10 (±10%). */
+  bandFraction?: number | null;
+}
+
+export interface BookOrderRequest {
+  trader: string;
+  side: BookSideName;
+  quantity: number;
+  instrumentId: string;
+  cashInstrument?: string;
+  /**
+   * ABSENT = an unpriced MARKET order: it takes whatever the book shows and its
+   * remainder is killed. It may never rest — the ledger refuses it outright,
+   * because a resting market order is a free option to whoever next crosses it.
+   */
+  limitPrice?: number | null;
+  timeInForce?: TimeInForce | null;
+}
+
+/** One fill, at the MAKER's posted price. The contra is never named. */
+export interface BookFill {
+  price: number;
+  quantity: number;
+  cashAmount: number;
+  buyer: string;
+  seller: string;
+  aggressor: string;
+  maker: string;
+}
+
+export interface BookOrderResponse {
+  /** null when the order filled completely. */
+  orderCid: string | null;
+  /** The SUCCESSOR book — every choice on the book is consuming. */
+  bookCid: string;
+  openedNewBook: boolean;
+  referencePrice: number;
+  fills: BookFill[];
+  filledQuantity: number;
+  restingQuantity: number;
+}
+
+export interface BookOrderView {
+  contractId: string;
+  trader: string;
+  side: BookSideName;
+  quantity: number;
+  /** null would mean an unpriced order, which cannot rest — so always a number here. */
+  limitPrice: number | null;
+  timeInForce: TimeInForce;
+  seqNo: number;
+}
+
+export interface BookState {
+  bookCid: string;
+  instrumentId: string;
+  cashInstrument: string;
+  referencePrice: number;
+  bandLow: number;
+  bandHigh: number;
+  isOpen: boolean;
+  liveCount: number;
+  nextSeq: number;
+  bids: BookOrderView[];
+  asks: BookOrderView[];
+  bestBid: number | null;
+  bestAsk: number | null;
+}
+
+/** A public print. Note there is no trader field — that is the design, not an omission. */
+export interface BookTape {
+  contractId: string;
+  instrumentId: string;
+  cashInstrument: string;
+  price: number;
+  quantity: number;
+  printedAt: string;
+  matchSeq: number;
+}
+
+export interface BookConfirm {
+  contractId: string;
+  trader: string;
+  instrumentId: string;
+  cashInstrument: string;
+  side: BookSideName;
+  quantity: number;
+  price: number;
+  cashAmount: number;
+  /** 'Maker' | 'Taker' — the field every fee schedule in the industry is built on. */
+  liquidity: string;
+  tradedAt: string;
+}
+
 export function errorMessage(e: unknown): string {
   if (e instanceof ApiError) return e.message;
   if (e instanceof Error) return asText(e.message) || e.name || 'the request failed';
@@ -828,4 +932,63 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ party, instructionCid }),
     }),
+
+  // ---- THE CONTINUOUS SESSION ------------------------------------------
+  // The auction's counterpart: limit interest that RESTS and is matched by
+  // price then time. The ladder is filtered server-side BY THE ACTING PARTY,
+  // exactly like the sealed book — and here even the auditor sees nothing,
+  // because a RestingOrder has no observers at all.
+
+  /** Open a session for an instrument, or return the one already open. */
+  openBookSession: (body: BookSessionRequest) =>
+    req<BookState>('/book/session', { method: 'POST', body: JSON.stringify(body) }),
+
+  /** Place an order — and cross it immediately if it is aggressive. */
+  placeBookOrder: (body: BookOrderRequest) =>
+    req<BookOrderResponse>('/book/order', { method: 'POST', body: JSON.stringify(body) }),
+
+  /** The ladder as ONE party may see it. */
+  bookState: (instrumentId: string, as = 'Venue', cashInstrument = 'USDC') =>
+    req<BookState>(
+      `/book/state?instrumentId=${encodeURIComponent(instrumentId)}` +
+        `&cashInstrument=${encodeURIComponent(cashInstrument)}` +
+        `&as=${encodeURIComponent(as)}`,
+    ),
+
+  /** The public tape: price, size, time — and no identities. */
+  bookTape: (instrumentId: string, as = 'Venue') =>
+    req<BookTape[]>(
+      `/book/tape?instrumentId=${encodeURIComponent(instrumentId)}` +
+        `&as=${encodeURIComponent(as)}`,
+    ),
+
+  /** Your bilateral confirms (Maker / Taker). */
+  bookConfirms: (as: string, instrumentId = '') =>
+    req<BookConfirm[]>(
+      `/book/confirms?as=${encodeURIComponent(as)}` +
+        (instrumentId ? `&instrumentId=${encodeURIComponent(instrumentId)}` : ''),
+    ),
+
+  /** Pull an order off the book; its reserved backing returns to the trader. */
+  cancelBookOrder: (orderCid: string, trader: string) =>
+    req<BookState>(`/book/order/${encodeURIComponent(orderCid)}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ trader }),
+    }),
+
+  /** Halt the session. Cancellation stays open, as in a real halt. */
+  closeBookSession: (instrumentId: string, cashInstrument = 'USDC') =>
+    req<BookState>(
+      `/book/close?instrumentId=${encodeURIComponent(instrumentId)}` +
+        `&cashInstrument=${encodeURIComponent(cashInstrument)}`,
+      { method: 'POST' },
+    ),
+
+  /** Resume a halted session. */
+  reopenBookSession: (instrumentId: string, cashInstrument = 'USDC') =>
+    req<BookState>(
+      `/book/open?instrumentId=${encodeURIComponent(instrumentId)}` +
+        `&cashInstrument=${encodeURIComponent(cashInstrument)}`,
+      { method: 'POST' },
+    ),
 };

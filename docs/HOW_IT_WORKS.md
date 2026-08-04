@@ -239,12 +239,12 @@ this node is Canton 3.x and rejects LF 1.x. The 3.x asset layer *is* the Token S
 | Gap | Status |
 |---|---|
 | ~~No unpriced MOC order type~~ | ✅ **BUILT.** `limitPrice` is `Optional`; `None` = unpriced MOC. Eligible at every candidate price and allocated **ahead of** every limit order (Nasdaq 4754(b)(3)(A) class → price → time). An unpriced buy reserves `quantity × (anchor + collar band)` — the collar is what bounds an otherwise unbounded obligation, and is why the order type became possible |
-| **No continuous session** | A real closing cross inherits the whole resting day book — that is the limit ladder MOC flow walks into. There is no continuous session here, so the ladder must come from LOC orders submitted directly into the auction |
-| **No time priority** | Deliberate — see §4 |
+| ~~No continuous session~~ | ✅ **BUILT.** `daml/ContinuousBook.daml` is a price–time-priority limit order book: interest rests between auctions, is matched by price then time, and settles at the **maker's** posted price in one atomic sweep. A real closing cross inherits the resting day book rather than manufacturing a price, which is precisely why this gap mattered. Dark pre-trade (a `RestingOrder` has no observers — not even the auditor), lit post-trade (a public, anonymous tape). 23 scenarios in `ContinuousBookTest.daml`; wired to `POST /api/book/order` and the desk's *Continuous Session* panel |
+| **No time priority _in the auction_** | Deliberate — see §4. A call auction prints once, so arrival order carries no information; the **continuous** book above does enforce time priority, because there it does |
 | **No auction phases** | No call phase, no freeze/no-cancel window. Close is manually triggered |
 | **No tick size, no lot size** | Not modelled |
 | **Auction path isn't CIP-56** | See §9 |
-| **Never run end-to-end** | Everything is verified by **33 passing Daml scripts and compiling backends**, not by a cross printing on a live ledger |
+| **The auction has never run end-to-end on a shared node** | Verified by **92 passing Daml scripts** plus compiling backends and a clean `tsc` — not by a cross printing on a multi-participant ledger. The settlement path *was* proven live (atomic DvP, 2026-07-19). The continuous book has been driven end-to-end against a local Canton sandbox: ladder, multi-level sweep at maker prices, self-match refusal, band refusal, cancel-returns-backing |
 
 Deliberately **not** built: volatility interruptions and extensions. Xetra's documented end state is
 *"terminated manually per FWB rules"* — a human — which would destroy the atomic-finality thesis.

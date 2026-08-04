@@ -580,4 +580,84 @@ public final class Dtos {
             String settlementBatchCid,
             String sealedAuctionCid) {
     }
+
+    // =====================================================================
+    // THE CONTINUOUS SESSION (daml/ContinuousBook.daml)
+    // =====================================================================
+
+    public record BookOrderRequest(
+            @NotBlank String trader,
+            @NotBlank String side,            // Bid | Ask (Buy | Sell also accepted)
+            @NotNull @Positive BigDecimal quantity,
+            @NotBlank String instrumentId,
+            String cashInstrument,            // defaults to "USDC" when blank
+            // ABSENT = an unpriced MARKET order. It takes whatever the book shows and
+            // its remainder is killed; it may never rest. A stated limit RESTS at that
+            // price and never trades worse than it.
+            BigDecimal limitPrice,
+            // GTC | IOC. Blank defaults to GTC for a limit order; an unpriced order is
+            // forced to IOC by the ledger regardless of what is sent here.
+            String timeInForce) {
+    }
+
+    /**
+     * What one placement did. A placement may fill immediately (the venue matches it
+     * against the resting ladder in the same request), so this carries the executions.
+     */
+    public record BookOrderResponse(
+            String orderCid,               // null when the order filled completely
+            String bookCid,                // the SUCCESSOR book — every choice is consuming
+            boolean openedNewBook,
+            BigDecimal referencePrice,
+            List<BookFillView> fills,
+            BigDecimal filledQuantity,
+            BigDecimal restingQuantity) {
+    }
+
+    /** One fill, at the MAKER's posted price. */
+    public record BookFillView(
+            BigDecimal price, BigDecimal quantity, BigDecimal cashAmount,
+            String buyer, String seller, String aggressor, String maker) {
+    }
+
+    /**
+     * The book as ONE party may see it. Acting as the venue returns the whole ladder;
+     * acting as a trader returns only that trader's own orders — the ledger decides,
+     * not this endpoint.
+     */
+    public record BookStateResponse(
+            String bookCid, String instrumentId, String cashInstrument,
+            BigDecimal referencePrice, BigDecimal bandLow, BigDecimal bandHigh,
+            boolean isOpen, Long liveCount, Long nextSeq,
+            List<BookOrderView> bids,
+            List<BookOrderView> asks,
+            BigDecimal bestBid, BigDecimal bestAsk) {
+    }
+
+    public record BookOrderView(
+            String contractId, String trader, String side, BigDecimal quantity,
+            BigDecimal limitPrice, String timeInForce, Long seqNo) {
+    }
+
+    public record BookTapeView(
+            String contractId, String instrumentId, String cashInstrument,
+            BigDecimal price, BigDecimal quantity, String printedAt, Long matchSeq) {
+    }
+
+    public record BookConfirmView(
+            String contractId, String trader, String instrumentId, String cashInstrument,
+            String side, BigDecimal quantity, BigDecimal price, BigDecimal cashAmount,
+            String liquidity, String tradedAt) {
+    }
+
+    public record BookSessionRequest(
+            @NotBlank String instrumentId,
+            String cashInstrument,
+            BigDecimal referencePrice,   // defaults to the instrument's published mark
+            BigDecimal bandFraction) {   // defaults to 0.10
+    }
+
+    public record BookCancelRequest(
+            @NotBlank String trader) {
+    }
 }
