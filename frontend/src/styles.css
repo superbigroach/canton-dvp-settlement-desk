@@ -496,6 +496,14 @@ button.primary.lp:hover:not(:disabled) {
    Decentralised Operator swapped up to the top-right where Position was.
    Uses CSS `order` so no markup moves (grid items reflow by order).
    ========================================================================= */
+/* PENDING TRANSFERS SPANS BOTH COLUMNS, AT THE TOP.
+   Its content is horizontal — a party field, a filter, a balances strip and a wide
+   table of inbound instructions. Squeezed into one grid column it wrapped into a
+   tall ribbon that wasted most of the row beside it. It is also the first thing to
+   do in the demo (claim the asset), so the top is where it belongs. */
+.grid > .pending-transfers { order: 0; grid-column: 1 / -1; }
+.pending-transfers .row { flex-wrap: wrap; align-items: flex-end; }
+
 .grid > .trade        { order: 1; }  /* top-left */
 .grid > .committee    { order: 2; }  /* top-right */
 .grid > .cross        { order: 3; }  /* directly under Trade (left column) */

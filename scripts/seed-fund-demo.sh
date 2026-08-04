@@ -185,6 +185,22 @@ JSON
 )")"
 fi
 
+# -----------------------------------------------------------------------------
+say "6b · give the APs something to deliver"
+# -----------------------------------------------------------------------------
+# IN-KIND CREATION MEANS DELIVERING THE UNDERLYINGS, so an authorised participant
+# that holds no money-market units cannot create a single share — the create fails
+# on the leg it cannot deliver. Test:initialize seeds cETH/CBTC/USDC but knows
+# nothing about an instrument invented after it ran, so the MMF leg has to be
+# issued here or "create the fund" is a button that only ever errors.
+#
+# 100 units per share means 10 shares needs 1,000 units. 100,000 is deliberately
+# generous: a demo that runs out of an underlying mid-pitch is worse than one that
+# over-issues.
+for AP in Alice Bob; do
+  report "MMF -> $AP" "$(post /holdings "{\"issuer\":\"Issuer\",\"instrumentId\":\"MMF:USYC-REF\",\"owner\":\"$AP\",\"amount\":100000}")"
+done
+
 say "7 · NAV per share, from the attested marks"
 curl -sS "$BASE/basket/nav?basketId=LX1&party=Auditor" 2>/dev/null | python3 -c "
 import sys,json

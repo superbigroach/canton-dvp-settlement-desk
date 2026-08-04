@@ -158,7 +158,7 @@ export default function PendingTransfersPanel({ acting, onChanged, flash }: Prop
   const foreign = rows.filter((r) => !r.ourRegistry);
 
   return (
-    <section className="card">
+    <section className="card pending-transfers">
       <h2>Pending transfers · CIP-56</h2>
       <p className="muted">
         A transfer from another registry arrives as a pending <code>TransferInstruction</code>,
