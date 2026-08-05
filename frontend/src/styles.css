@@ -501,10 +501,10 @@ button.primary.lp:hover:not(:disabled) {
    jumps to the top of the page instead of appearing where it was written. That is
    what happened to the Continuous Session and the pending-transfers card. */
 .grid > .trade              { order: 1; }  /* top-left */
-.grid > .committee          { order: 4; }  /* right, under the order book */
+.grid > .committee          { order: 5; }  /* swapped with the Fund builder */
 .grid > .continuous-book    { order: 2; }  /* top-right - the tall order-book card */
 .grid > .cross              { order: 3; }  /* left, directly under Trade */
-.grid > .fund               { order: 5; }  /* left */
+.grid > .fund               { order: 4; }  /* swapped up — the basket is the story */
 .grid > .position           { order: 6; }  /* right, beside the Fund builder */
 .grid > .lp-imbalance       { order: 7; }
 .grid > .pending-transfers  { order: 9; }
@@ -797,3 +797,220 @@ select.cross-instrument:disabled { opacity: 0.55; }
 /* Which way the venue's pool is exposed. */
 .skew.long  strong { color: var(--buy); }
 .skew.short strong { color: var(--sell); }
+
+
+/* ---------------- Leverage — a derivatives ticket ----------------
+   Ordered the way the decision is: direction, then what you risk, then how hard
+   you lean. The liquidation price sits with the inputs rather than the results,
+   because it is the number that decides whether the trade was reckless and it is
+   useless once the position exists. */
+
+.perp .who { font-family: var(--ui); font-size: 12px; color: var(--muted); }
+.perp .perp-top { margin-bottom: 4px; }
+.perp label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); min-width: 0; }
+.perp label.grow { flex: 1 1 240px; }
+.perp input, .perp select {
+  font-family: var(--mono); font-size: 13px; padding: 7px 9px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 92px;
+}
+.perp input.bad { border-color: var(--sell); }
+.perp input:disabled, .perp select:disabled { opacity: 0.55; }
+.perp .row.wrap { flex-wrap: wrap; }
+.perp .row.gap { gap: 12px; }
+.perp .lbl-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.perp .avail { font-size: 11px; color: var(--faint); }
+.perp .avail strong { color: var(--muted); }
+
+/* the tape strip a derivatives screen leads with */
+.perp-stats {
+  display: flex; flex-wrap: wrap; gap: 22px;
+  padding: 11px 13px; margin: 12px 0;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.perp-stats .stat { display: flex; flex-direction: column; gap: 3px; }
+.perp-stats .k { font-family: var(--ui); font-size: 10.5px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--faint); }
+.perp-stats .v { font-size: 14px; color: var(--text); }
+.perp-stats .v.up { color: var(--buy); }
+.perp-stats .v.down { color: var(--sell); }
+
+.ticket-box {
+  padding: 14px; margin: 4px 0 8px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  display: flex; flex-direction: column; gap: 14px;
+}
+
+/* DIRECTION FIRST, and unmistakable. A dropdown makes the most consequential
+   choice on the ticket look like a preference. */
+.side-toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.side-btn {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 9px 6px; border-radius: var(--radius-sm); cursor: pointer;
+  font-family: var(--ui); font-size: 14px; font-weight: 600;
+  background: transparent; color: var(--muted); border: 1px solid var(--border);
+}
+.side-btn span { font-size: 10.5px; font-weight: 400; color: var(--faint); }
+.side-btn.long.on  { background: rgba(62,155,114,0.16); border-color: var(--buy); color: var(--buy); }
+.side-btn.short.on { background: rgba(198,91,91,0.16); border-color: var(--sell); color: var(--sell); }
+.side-btn.long.on span, .side-btn.short.on span { color: inherit; opacity: 0.75; }
+
+.perp .pcts { display: flex; gap: 6px; margin-top: 2px; }
+.perp .pct {
+  flex: 1; padding: 4px 0; font-family: var(--mono); font-size: 11px;
+  background: transparent; color: var(--faint);
+  border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+}
+.perp .pct:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+
+.lev-box { display: flex; flex-direction: column; gap: 8px; }
+.lev-box > .lbl-row { font-size: 12px; color: var(--muted); }
+.lev-val { color: var(--accent); font-size: 15px; }
+.lev-box input[type="range"] { width: 100%; accent-color: var(--accent); background: none; border: none; padding: 0; }
+.lev-box .presets { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.lev-box .preset {
+  padding: 3px 11px; font-family: var(--mono); font-size: 11.5px;
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+}
+.lev-box .preset.on { color: var(--accent); border-color: var(--accent); background: rgba(76,130,247,0.12); }
+.lev-box .hint { margin: 0 0 0 4px; font-size: 10.5px; color: var(--faint); }
+
+.preview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px 18px; }
+.preview-grid > div { display: flex; flex-direction: column; gap: 2px; }
+.preview-grid .k { font-family: var(--ui); font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); }
+.preview-grid .v { font-size: 13.5px; color: var(--text); }
+/* The two numbers that decide whether this was reckless. */
+.preview-grid .danger .k { color: var(--sell); opacity: 0.85; }
+.preview-grid .danger .v { color: var(--sell); }
+
+.perp .place {
+  padding: 11px; border-radius: var(--radius-sm); cursor: pointer;
+  font-family: var(--ui); font-size: 14px; font-weight: 600; letter-spacing: 0.02em;
+  border: 1px solid transparent; color: #0A0B0F;
+}
+.perp .place.long  { background: var(--buy); }
+.perp .place.short { background: var(--sell); }
+.perp .place:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.perp h3 { margin: 16px 0 8px; font-size: 12px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.perp h3 .sub { font-family: var(--ui); font-size: 11px; text-transform: none; letter-spacing: 0; color: var(--faint); }
+.perp table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12.5px; }
+.perp th {
+  text-align: left; font-family: var(--ui); font-size: 10.5px; font-weight: 600;
+  letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint);
+  padding: 5px 7px; border-bottom: 1px solid var(--border);
+}
+.perp td { padding: 5px 7px; border-bottom: 1px solid var(--border); color: var(--text); }
+.perp td.muted { color: var(--faint); }
+.perp td.maker { color: var(--buy); }
+.perp td.taker { color: var(--sell); }
+.perp td.acts { white-space: nowrap; }
+.perp tr.at-risk { background: rgba(198,91,91,0.08); }
+.perp .basis { font-family: var(--ui); font-size: 10px; color: var(--sell); margin-top: 2px; }
+.perp .note { margin: 8px 0 0; font-size: 12px; color: var(--faint); line-height: 1.5; }
+.perp .muted { color: var(--faint); font-size: 12.5px; }
+.perp .error { color: var(--sell); font-size: 12.5px; margin-top: 10px; }
+.perp .link { background: none; border: none; color: var(--faint); font-size: 11px; cursor: pointer; padding: 0 6px 0 0; text-decoration: underline; }
+.perp .link:hover:not(:disabled) { color: var(--accent); }
+.perp .link.danger { color: var(--sell); }
+
+/* An accruing holding: the balance is static, the PRICE moves. Marked so the
+   static Amount column is not read as "nothing is happening" — which is exactly
+   what a money-market share looks like if you only show the count. */
+.accruing-tag {
+  margin-left: 6px; padding: 1px 6px; border-radius: 5px;
+  font-family: var(--ui); font-size: 9.5px; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--gold); background: rgba(230,180,80,0.12); border: 1px solid rgba(230,180,80,0.3);
+}
+.mark-now { font-family: var(--mono); font-size: 10.5px; color: var(--gold); margin-top: 2px; }
+
+/* ---------------- The arb ticket (Fund panel) ----------------
+   Two prices and the trade that closes the gap between them. Gold is reserved
+   for NAV in this theme, so the strip borrows it only for the AT-NAV rest state
+   and lets buy/sell carry the live signal. */
+
+.arb-strip {
+  margin: 12px 0 4px; padding: 12px 14px;
+  border: 1px solid var(--border-2); border-left-width: 3px;
+  border-radius: var(--radius-sm); background: var(--surface-2);
+}
+.arb-strip.premium  { border-left-color: var(--sell); }
+.arb-strip.discount { border-left-color: var(--buy); }
+.arb-strip.flat     { border-left-color: var(--border-2); }
+
+.arb-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+
+.arb-tag {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border-2); color: var(--muted);
+}
+.arb-strip.premium  .arb-tag { color: #f0b6b6; border-color: rgba(198,91,91,0.45); background: rgba(198,91,91,0.12); }
+.arb-strip.discount .arb-tag { color: #a7e3c6; border-color: rgba(62,155,114,0.45); background: rgba(62,155,114,0.12); }
+
+.arb-bps { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+.arb-strip.premium  .arb-bps { color: var(--sell); }
+.arb-strip.discount .arb-bps { color: var(--buy); }
+.arb-strip.flat     .arb-bps { color: var(--muted); }
+
+.arb-px { margin-left: auto; font-size: 12px; color: var(--muted); }
+.arb-px strong { color: var(--text); }
+
+.arb-play { margin: 8px 0 10px; font-size: 13px; line-height: 1.55; color: var(--text); }
+.arb-play.muted { color: var(--muted); margin-bottom: 0; }
+.arb-strip button.primary { width: 100%; }
+
+/* Symbol-collision affordances in the basket designer. */
+input.bad, input[aria-invalid='true'] {
+  border-color: var(--sell); background: rgba(198,91,91,0.07);
+}
+.warn.taken { color: #f0b6b6; }
+.hint.in-use { font-size: 11px; color: var(--faint); margin: 2px 0 8px; word-break: break-word; }
+button.link {
+  background: none; border: none; padding: 0; font: inherit; cursor: pointer;
+  color: var(--accent); text-decoration: underline; text-underline-offset: 2px;
+}
+button.link:hover { filter: brightness(1.2); }
+
+/* The ticket's submit button takes `primary` for its colour, but `button.primary`
+   is width:100% and this one has to stay inline with the rest of the ticket row. */
+.continuous-book .ticket .ticket-submit { width: auto; }
+
+/* Bare `.muted` and `.error` never existed — they were only ever defined scoped to
+   .continuous-book / .perp / td. A panel that copied the `className="muted"` idiom
+   silently rendered full-brightness body text, and `className="error"` rendered a
+   failure message in ordinary prose. Both are load-bearing enough to be global. */
+.muted { color: var(--muted); }
+.error { color: var(--sell); font-size: 12.5px; }
+
+/* ---- Ladder row: survive long party ids and a narrow column ----
+   The original grid was five FIXED tracks (72px 78px 1fr 44px auto) inside a
+   240px flex basis. On a shared node the trader renders as `alice-crossdesk`
+   rather than `Alice`, the fixed tracks plus gaps exceed the column, and the
+   cancel button wrapped underneath the row — landing between two levels and
+   reading like it belonged to neither. Now the identity column is the one that
+   gives (it has a title attribute with the full id), and the button is pinned
+   to the end of the row where an action belongs. */
+.continuous-book .ladder .side { flex: 1 1 280px; }
+.continuous-book .lvl {
+  grid-template-columns: minmax(48px, auto) minmax(56px, auto) minmax(0, 1fr) auto auto;
+  gap: 6px;
+}
+.continuous-book .lvl .who {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.continuous-book .lvl .link { justify-self: end; white-space: nowrap; }
+
+/* The committee no longer asks snapshot-vs-accruing — it states what the instrument
+   already implies, so the sentence needs to read as a fact rather than a caption. */
+.committee .attest-mode { margin: 2px 0 0; line-height: 1.5; }
+.committee .attest-mode strong { color: var(--gold); }
+.arb-strip .hedge-open { margin: 8px 0 10px; font-size: 12.5px; line-height: 1.55; color: var(--muted); }
+.arb-strip .hedge-open strong { color: var(--gold); }
+.arb-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }
+.arb-actions button.primary { width: 100%; }
+.arb-actions button.ghost { width: 100%; margin-top: 0; }
+/* The settlement time, kept in the receipt header where an auditor looks first. */
+.receipt-time { margin-left: auto; font-size: 11px; color: var(--faint); white-space: nowrap; }
+.receipt-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.arb-actions button { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.arb-actions .rec { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; opacity: .8; font-weight: 500; }

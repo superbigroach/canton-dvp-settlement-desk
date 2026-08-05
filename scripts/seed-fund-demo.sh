@@ -42,7 +42,17 @@ CASH="USDC"
 # DEFAULT the committee then attests — refresh it from circle.com/usyc before a demo.
 USYC_RATE="0.0320"
 USYC_DAYCOUNT="ACT/360"   # every USD money-market instrument is quoted ACT/360
-USYC_BASE_NAV="1.00"
+
+# THE BASE IS NOT ONE DOLLAR, AND THAT IS THE WHOLE POINT.
+#
+# USYC accrues "via token price increases" (Circle's own words): the holder's balance
+# never changes and the PRICE rises. It launched at 1.00 and trades around 1.12 today,
+# which is not a de-peg but roughly two years of accumulated yield sitting in the
+# price. Seeding the model at 1.00 would show a fund share that has never earned
+# anything, which is precisely the property being demonstrated.
+#
+# Refresh from circle.com/usyc before a demo. It only ever goes up.
+USYC_BASE_NAV="1.12"
 
 say()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
 post() { curl -sS -X POST "$BASE$1" -H 'Content-Type: application/json' -d "$2"; }
@@ -263,6 +273,34 @@ d=json.load(sys.stdin); agg={}
 for h in d: agg[h['instrumentId']]=agg.get(h['instrumentId'],0)+float(h['amount'])
 print('  Alice now holds:', {k: round(v,4) for k,v in sorted(agg.items())})
 "
+
+# -----------------------------------------------------------------------------
+say "6e · make the fund a first-class instrument"
+# -----------------------------------------------------------------------------
+# A BasketDefinition is not an Instrument, so LX1 exists as a fund but appears in
+# no asset picker and can be neither auctioned nor levered from the desk. Giving
+# it an Instrument record with its NAV as the mark fixes three things at once: the
+# fund becomes selectable, the auction can run a SECONDARY MARKET in the shares
+# (which is what the create/redeem arbitrage loop needs and did not have), and a
+# perpetual on it indexes off a published mark rather than a recomputed basket.
+#
+# The mark is the NAV struck from the components' attested marks, so it inherits
+# the committee's signatures rather than inventing a number.
+LX1_NAV="$(curl -sS "$BASE/basket/nav?basketId=LX1&party=Auditor" | python3 -c "
+import sys,json
+try: print(json.load(sys.stdin).get('navPerShare') or '')
+except Exception: print('')
+")"
+if [ -n "$LX1_NAV" ]; then
+  if curl -sS "$BASE/instruments" | grep -q '"LX1"'; then
+    echo "  LX1 instrument already present"
+  else
+    report "LX1 instrument" "$(post /instruments "{\"issuer\":\"Issuer\",\"id\":\"LX1\",\"kind\":\"Fund\",\"description\":\"Tokenised multi-asset fund share (money-market core plus wrapped crypto). Mark = NAV per share from the components' attested marks.\",\"referencePrice\":$LX1_NAV}")"
+  fi
+  echo "  LX1 mark = $LX1_NAV"
+else
+  echo "  (no NAV yet - define the basket first)"
+fi
 
 say "7 · NAV per share, from the attested marks"
 curl -sS "$BASE/basket/nav?basketId=LX1&party=Auditor" 2>/dev/null | python3 -c "

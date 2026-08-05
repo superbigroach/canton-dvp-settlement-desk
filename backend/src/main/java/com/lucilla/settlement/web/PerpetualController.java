@@ -91,9 +91,18 @@ public class PerpetualController {
                                         + " strike a mark with the committee first, or send"
                                         + " indexPrice explicitly"));
 
+        // PARTICIPANTS ARE THE PEOPLE WHO MAY TRADE HERE, not everyone the ledger knows.
+        // The venue is already the operator and the auditor is already an observer, so
+        // listing them again widens the observer set for no gain and muddles who the
+        // market is actually for.
         List<String> participants = ledger.listParties().stream()
                 .map(LedgerService.PartyView::party)
-                .filter(p -> !LedgerService.labelOf(p).equalsIgnoreCase("sandbox"))
+                .filter(p -> {
+                    String l = LedgerService.labelOf(p);
+                    return !l.equalsIgnoreCase("sandbox")
+                            && !l.equalsIgnoreCase("venue")
+                            && !l.equalsIgnoreCase("auditor");
+                })
                 .toList();
 
         BigDecimal maxLev = req.maxLeverage() != null
@@ -421,7 +430,23 @@ public class PerpetualController {
 
     private Dtos.PerpPositionResponse viewOf(
             LedgerService.PerpPositionView p, LedgerService.PerpMarketView m) {
-        BigDecimal mark = m == null ? p.entryPrice() : m.indexPrice();
+        // NO INDEX MEANS NO OPINION — never a favourable one.
+        //
+        // This used to fall back to the entry price when the market could not be
+        // found, which renders P&L of zero, equity equal to collateral, and
+        // liquidatable=false: the most reassuring view it is possible to produce, and
+        // produced exactly when the number that decides those things is unavailable.
+        // On a leveraged product that is the wrong way to fail. An unknown mark is now
+        // reported as unknown, `marked=false`, and the caller can say so.
+        if (m == null) {
+            return new Dtos.PerpPositionResponse(
+                    p.contractId(), p.traderLabel(), p.instrumentId(), p.cashInstrument(),
+                    p.side(), p.size(), p.entryPrice(),
+                    null, p.collateral(), null, null, null, null, null,
+                    liquidationPriceOf(p), false, false,
+                    String.valueOf(p.openedAt()), String.valueOf(p.lastFundingAt()));
+        }
+        BigDecimal mark = m.indexPrice();
         BigDecimal pnl = pnlOf(p, mark);
         BigDecimal equity = equityOf(p, mark);
         BigDecimal maint = maintenanceOf(p, mark);
@@ -432,7 +457,7 @@ public class PerpetualController {
                 p.contractId(), p.traderLabel(), p.instrumentId(), p.cashInstrument(),
                 p.side(), p.size(), p.entryPrice(), mark, p.collateral(),
                 notional, leverage, pnl, equity, maint,
-                liquidationPriceOf(p), equity.compareTo(maint) < 0,
+                liquidationPriceOf(p), equity.compareTo(maint) < 0, true,
                 String.valueOf(p.openedAt()), String.valueOf(p.lastFundingAt()));
     }
 

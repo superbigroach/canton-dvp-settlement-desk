@@ -18,6 +18,16 @@ export interface Holding {
   owner: string;
   amount: number;
   disclosedTo: string[];
+  /** Value per unit RIGHT NOW — the accrued value for an accruing instrument. */
+  mark: number | null;
+  value: number | null;
+  /**
+   * True = this instrument earns. Its balance never changes and its PRICE does,
+   * which is how the real thing works: Circle describes USYC as accruing "via
+   * token price increases", so a holder's 100 units stay 100 and are worth more
+   * by lunchtime.
+   */
+  accruing: boolean;
 }
 
 export interface Instrument {
@@ -548,15 +558,22 @@ export interface PerpPosition {
   side: PerpSide;
   size: number;
   entryPrice: number;
-  markPrice: number;
+  /** Null when `marked` is false — the index could not be read. */
+  markPrice: number | null;
   collateral: number;
-  notional: number;
+  notional: number | null;
   leverage: number | null;
-  unrealisedPnl: number;
-  equity: number;
-  maintenance: number;
+  unrealisedPnl: number | null;
+  equity: number | null;
+  maintenance: number | null;
   liquidationPrice: number | null;
   liquidatable: boolean;
+  /**
+   * False = the market's index was unavailable, so every marked figure is null.
+   * Do NOT render an unmarked position as healthy: "no opinion" and "fine" are
+   * different answers, and on a leveraged product conflating them is dangerous.
+   */
+  marked: boolean;
   openedAt: string;
   lastFundingAt: string;
 }

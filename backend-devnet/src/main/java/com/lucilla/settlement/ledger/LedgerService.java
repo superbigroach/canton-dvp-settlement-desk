@@ -764,6 +764,59 @@ public class LedgerService {
         return ids;
     }
 
+    /**
+     * THE VALUE A CHOICE ACTUALLY RETURNED, pulled out of the transaction it ran in.
+     *
+     * <p>Some choices compute a number the caller cannot recompute honestly — a
+     * settlement's payout, for instance, where the ledger clamps a negative equity to
+     * zero because the insurance pool absorbs the shortfall. Recomputing that
+     * client-side reports a loss the trader never took. This reads the number the
+     * ledger actually produced.
+     *
+     * <p>Returns the LAST {@code Numeric} found in the exercise result, which is the
+     * shape these choices use: a tuple whose final field is the amount. Empty when the
+     * transaction shape does not carry a result, so callers keep their fallback.
+     */
+    public Optional<java.math.BigDecimal> exerciseResultDecimalOf(
+            Transaction tree, Identifier template, String choiceName) {
+        for (Event ev : tree.getEventsById().values()) {
+            if (!(ev instanceof com.daml.ledger.javaapi.data.ExercisedEvent ex)) {
+                continue;
+            }
+            if (!sameTemplate(ex.getTemplateId(), template)
+                    || !ex.getChoice().equals(choiceName)) {
+                continue;
+            }
+            Optional<java.math.BigDecimal> found = lastNumericIn(ex.getExerciseResult());
+            if (found.isPresent()) {
+                return found;
+            }
+        }
+        return Optional.empty();
+    }
+
+    /** Depth-first for the last Numeric in a (possibly nested) result value. */
+    private static Optional<java.math.BigDecimal> lastNumericIn(
+            com.daml.ledger.javaapi.data.Value v) {
+        if (v == null) {
+            return Optional.empty();
+        }
+        if (v instanceof com.daml.ledger.javaapi.data.Numeric n) {
+            return Optional.of(n.getValue());
+        }
+        if (v instanceof com.daml.ledger.javaapi.data.DamlRecord rec) {
+            java.math.BigDecimal last = null;
+            for (var f : rec.getFields()) {
+                var inner = lastNumericIn(f.getValue());
+                if (inner.isPresent()) {
+                    last = inner.get();
+                }
+            }
+            return Optional.ofNullable(last);
+        }
+        return Optional.empty();
+    }
+
     private Optional<String> firstCreatedOf(Transaction tree, Identifier template) {
         return createdOf(tree, template).stream().findFirst();
     }

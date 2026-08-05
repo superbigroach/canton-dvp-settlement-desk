@@ -162,10 +162,20 @@ public class SettlementController {
     public List<Dtos.HoldingResponse> holdings(@RequestParam String party) {
         // Accept either a full party id (from the picker) or a friendly label.
         String resolved = ledger.resolveParty(party);
+        // Mark each balance at what it is worth NOW. An accruing instrument is valued
+        // from the committee's recipe rather than its struck base, so a money-market
+        // holding moves on this screen the way it moves in the fund's NAV.
+        var marks = accruedMarks();
         return ledger.holdingsVisibleTo(resolved).stream()
-                .map(h -> new Dtos.HoldingResponse(
-                        h.contractId(), h.issuer(), h.instrumentId(), h.owner(),
-                        h.amount(), h.disclosedTo()))
+                .map(h -> {
+                    var m = marks.get(h.instrumentId());
+                    BigDecimal mark = m == null ? null : m.mark();
+                    BigDecimal value = mark == null ? null : h.amount().multiply(mark);
+                    return new Dtos.HoldingResponse(
+                            h.contractId(), h.issuer(), h.instrumentId(), h.owner(),
+                            h.amount(), h.disclosedTo(),
+                            mark, value, m != null && m.accruing());
+                })
                 .toList();
     }
 
@@ -1734,6 +1744,47 @@ public class SettlementController {
     }
 
     // ---- helpers ----------------------------------------------------------
+
+    /** An instrument's value per unit right now, and whether it is still moving. */
+    private record MarkNow(BigDecimal mark, boolean accruing) {
+    }
+
+    /**
+     * CURRENT VALUE PER UNIT for every instrument, accruing ones included.
+     *
+     * <p>A traded asset is worth its attested mark. An accruing one is worth what the
+     * committee's recipe says it is worth at this instant: base plus rate times elapsed
+     * over the day-count year, which is the same {@code navAt} the fund's NAV uses.
+     * Taking the newest accruing fix per instrument, because a later strike supersedes
+     * an earlier one.
+     */
+    private java.util.Map<String, MarkNow> accruedMarks() {
+        java.util.Map<String, MarkNow> out = new java.util.HashMap<>();
+        for (var i : ledger.instrumentsVisibleTo(ledger.resolveParty("Issuer"))) {
+            if (i.referencePrice() != null) {
+                out.put(i.id(), new MarkNow(i.referencePrice(), false));
+            }
+        }
+        Instant asOf = Instant.now();
+        // READ THE RECIPE AS THE AUDITOR, not as the holder.
+        //
+        // A NavFixing is disclosed to the venues named in `publishTo`, which is the
+        // right rule for the DISCLOSURE and the wrong one for a MARK. How an instrument
+        // is valued is reference data: it is already republished onto the Instrument
+        // itself, and a holder who cannot read the recipe cannot value the thing it
+        // holds — which showed a money-market share frozen at its struck base on the
+        // one screen its owner looks at. The auditor observes every fixing, so it is
+        // the vantage point from which a public mark can be computed at all. Nothing
+        // private is exposed: only the rate and day-count that the instrument's own
+        // published price already reflects.
+        ledger.navFixingsVisibleTo(ledger.resolveParty("Auditor")).stream()
+                .filter(LedgerService.NavFixingView::accruing)
+                .sorted(Comparator.comparing(LedgerService.NavFixingView::finalizedAt))
+                .forEach(f -> out.put(f.instrumentId(), new MarkNow(
+                        Accrual.navAt(f.price(), f.ratePerAnnum(), f.dayCount(), f.accrualFrom(), asOf),
+                        true)));
+        return out;
+    }
 
     private static <T> ResponseEntity<T> created(T body) {
         return ResponseEntity.status(HttpStatus.CREATED).body(body);

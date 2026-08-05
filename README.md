@@ -45,7 +45,7 @@ thirty seconds:
 | **"complete-order commitments"** | `ClosingAuction` counts `submittedCount` / `cancelledCount`; `RunClose` asserts `length buyOrders + length sellOrders == submittedCount − cancelledCount` **and** that no order id appears twice. An omitted order must be a real, on-ledger cancellation the trader can see. | `daml/MarketOnClose.daml` → `RunClose` (the two `assertMsg`s at the top); `Test:testCompleteBookRequired`, `Test:testCancellationKeepsTheBookHonest` |
 | **"cBTC/cETH are self-issued stand-ins (move to CIP-56) … show one real token-standard DvP"** | `daml/TokenStandardDvp.daml` implements **six** official Token Standard interfaces and runs a **two-leg atomic DvP over `AllocationRequest`** — cETH against cBTC. The official `splice-api-token-*-v1` DARs are vendored unmodified into `deps/`. **The auction path is still the legacy self-issued layer** and we say so, loudly, below. | `daml/TokenStandardDvp.daml`, `daml/TokenStandardTest.daml`, `daml.yaml` → `data-dependencies`, and `docs/TOKEN_STANDARD_DVP.md` |
 
-Three things were added on top, because the feedback exposed the shape of the
+Then more was added on top, because the feedback exposed the shape of the
 problem rather than just the instances:
 
 - **The unpriced MOC order type.** `limitPrice` is now `Optional Decimal`. `None`
@@ -76,8 +76,39 @@ problem rather than just the instances:
   `RestingOrder` has **no observers at all**, so a trader sees only its own orders
   and *even the auditor* sees none of them while they rest — while every fill
   prints to a **public, anonymous** tape. Dark pre-trade, lit post-trade.
-  **23 scenarios** in `daml/ContinuousBookTest.daml`, and it is wired end-to-end:
+  **28 scenarios** in `daml/ContinuousBookTest.daml`, and it is wired end-to-end:
   `POST /api/book/order` → the *Continuous Session* panel in the desk.
+- **Leverage — cash-settled perpetuals.** The desk could price a fund and issue
+  its shares in kind, but nobody could take a *view* on that fund without
+  holding it, or hedge one they held. Creation and redemption move real
+  underlyings, so an arbitrageur has to fund the whole basket before it can act;
+  a holder who wants less exposure for a week had no instrument at all.
+  `daml/Perpetual.daml` is that instrument: post USDC, go long or short up to
+  the market's `maxLeverage`, marked continuously against an index. **A perp on
+  a fund cannot index on an attested mark, because a fund has none.** Its value
+  is derived from what it holds. So the index is the fund's NAV per share,
+  computed from its components' attested marks, and it therefore inherits the
+  committee's signatures instead of inventing a new authority. An unmarked
+  component yields no index at all: a fund you cannot value is a fund you cannot
+  lever. That matters more here than anywhere else in the repo, because this is
+  the number a position is *liquidated* against. **The funding rate is derived,
+  not fetched:** `clamp(premium + interest, ±cap)` from this venue's own perp
+  price against this venue's own index, because another exchange's funding rate
+  is a fact about another exchange's book, and the cap stops one print on a thin
+  book levying an arbitrary charge on everyone who is open. Three things it is
+  honest about. The venue's **insurance pool is the counterparty**, not a matched
+  book, so lopsided interest is directional risk the pool carries, which is why
+  `openLong` and `openShort` sit on the market where the skew is provable.
+  **Liquidation is the operator's duty**, not permissionless, because a
+  `PerpPosition` is private to its trader and a keeper cannot close what it
+  cannot see; a visible liquidation price on a leveraged product is an invitation
+  to push the market into it. And **collateral is cash only**, the market's single
+  `cashInstrument` (USDC). There is no auto-deleveraging, no cross-margin, no
+  partial close and no perp order book. **18 scenarios** in
+  `daml/PerpetualTest.daml`, each of which counts the cash before and after,
+  because an engine that mints a cent per close is worse than one that refuses to
+  open. Wired end-to-end: `POST /api/perp/position` → the *Leverage* panel. It
+  runs on a **local** sandbox and has never been on the shared node.
 
 Full narrative: **[`docs/HOW_IT_WORKS.md`](docs/HOW_IT_WORKS.md)**. Venue rules with
 primary sources: **[`docs/REAL_AUCTION_MECHANICS.md`](docs/REAL_AUCTION_MECHANICS.md)**.
@@ -104,8 +135,9 @@ node runs — the repo reproduces what the ledger executes. Install it per
 [Digital Asset's 3.x installation docs](https://docs.digitalasset.com/build/3.4/);
 the `get.daml.com` one-liner installs the 2.x line and will not satisfy this pin.
 
-`daml test` runs every scenario in `daml/Test.daml` and `daml/TokenStandardTest.daml`
-— **92 of them at the head of this branch, all green**. The suite
+`daml test` runs every scenario in `daml/Test.daml`, `daml/ContinuousBookTest.daml`,
+`daml/PerpetualTest.daml` and `daml/TokenStandardTest.daml` — **115 of them at the
+head of this branch, all green** (63 + 28 + 18 + 6). The suite
 is still growing, so run the command for the live number rather than trusting this
 sentence. `daml build` also links the six vendored Token Standard DARs from `deps/`;
 you can see them in the built package with:
@@ -227,6 +259,7 @@ settled atomically on-ledger.
 | **Governance** | `daml/Governance.daml` | `OperatorCommittee` → K-of-N attested `NavFixing`, plus the continuous-accrual arithmetic (`navAt`, `anchorConsistentWithNav`). |
 | **Fund / ETF** | `daml/Basket.daml` | In-kind creation & redemption against a defined basket; NAV per share. |
 | **Delegation** | `daml/Agent.daml` | `TradingMandate` — an agent/desk initiates settlements for a principal within a ledger-enforced limit. |
+| **Leverage** | `daml/Perpetual.daml` | `PerpMarket` + `PerpPosition`: cash-settled perpetuals on any marked instrument, and on a fund's NAV where the instrument is a basket. Derived, capped funding; the venue's insurance pool is the counterparty; a position is private to its trader. |
 | **CIP-56 layer** | `daml/TokenStandardDvp.daml` | Six official Canton Network Token Standard interface implementations + an atomic two-leg DvP over `AllocationRequest`. **Separate from everything above.** |
 
 ### The seam: Daml / Canton / Ledger API
@@ -739,7 +772,10 @@ of even the compliant path: **[`docs/TOKEN_STANDARD_DVP.md`](docs/TOKEN_STANDARD
 | Gap | Status |
 |---|---|
 | **The auction path is not CIP-56** | Only `daml/TokenStandardDvp.daml` is. `MarketOnClose` clears against legacy self-issued holdings. Migration route is `docs/TOKEN_STANDARD_DVP.md` §5; step 2 (`ClosingAuction` implementing `AllocationRequest`) is the single highest-value remaining piece and it is days, not hours. |
-| **The auction has never run end-to-end on a live participant** | The auction is verified by **Daml Script scenarios (92, all green) plus compiling backends and a clean `tsc`** — not by a cross printing on a shared node. The DAR upload to devnet is admin-only on the node operator's side, and the hosted demo still runs the pre-feedback package `72ec9833…`. The settlement path *was* proven live (atomic DvP, 2026-07-19, receipt `006ef8c599…`). |
+| **The auction has never run end-to-end on a live participant** | The auction is verified by **Daml Script scenarios (115, all green) plus compiling backends and a clean `tsc`** — not by a cross printing on a shared node. The DAR upload to devnet is admin-only on the node operator's side, and the hosted demo still runs the pre-feedback package `72ec9833…`. The settlement path *was* proven live (atomic DvP, 2026-07-19, receipt `006ef8c599…`). |
+| **The leverage layer is local only** | `Perpetual.daml` and `/api/perp/*` are proven by the 18 scenarios plus a full open → mark → close cycle against a locally running ledger, with cash reconciled to the unit before and after. They have never run on `hackcanton-01` and the hosted demo does not carry them. |
+| **A perpetual has no order book of its own** | Positions open **at the index**, not against resting bids, so there is no perp price the ledger discovers for itself. `DeriveFunding` therefore takes the perp's last trade as an *observation* and computes the rate from it, which is a smaller trust surface than accepting a rate outright but is not zero. Pointing `ContinuousBook` at a perp instrument is the obvious next step and is not built. |
+| **No ADL, no cross-margin, no partial closes** | Auto-deleveraging is what a real venue adds so a lopsided pool cannot be exhausted; the funding rate is the only lever here. Each position carries its own collateral with no portfolio netting, and reducing exposure means closing and reopening. All three are listed in `Perpetual.daml`'s own header, under *what is deliberately not here*. |
 | **No time priority in allocation** | Deliberate. A sealed order carries no on-ledger arrival timestamp, and the only ordering available is one the operator controls. Pro-rata by size is the rule the operator cannot game. |
 | **Unpriced MOC exists, but there is no *continuous* session** | `limitPrice = None` behaves correctly inside the call auction. What does not exist is the continuous book an MOC is normally lodged against, so there is no re-pricing of late LOCs against a reference price, no imbalance-only order type, and no paired/unpaired feed. |
 | **No auction phases** | No call phase, no freeze / no-cancel window, no volatility interruption or extension. The close is manually triggered by the venue; a production deployment would fire it from an off-ledger scheduler (a Daml Trigger or cron). *The scheduler decides the moment; every rule about who may do what, and at what price, stays on the ledger.* |
@@ -791,6 +827,12 @@ actually changed.
 | `GET  /api/book/state?as=` | the ladder **as that party may see it** — the venue sees all of it, a trader only its own, the **auditor none of it** |
 | `POST /api/book/order/{cid}/cancel` | pull an order; its reserved backing returns |
 | `GET  /api/book/tape` · `GET /api/book/confirms?as=` | the public anonymous tape, and your own Maker/Taker confirms |
+| `POST /api/perp/market` · `POST /api/perp/market/fund` · `GET /api/perp/markets` | open a perpetual market on an instrument (idempotent), fund the venue's insurance pool, and read every market with its open interest and current funding rate. Without a funded pool no trader can be paid a profit, and the ledger **says so** rather than settling at zero |
+| `POST /api/perp/market/index` | republish the index from the instrument's **attested** mark. A fund has no mark of its own, so it indexes on its basket NAV computed from its components' marks; if any component is unmarked there is no index, and the call fails |
+| `POST /api/perp/market/funding` | `DeriveFunding`: the rate is computed from what the perp itself last traded at against this venue's index, then clamped to the market's cap. Never fetched from another exchange |
+| `POST /api/perp/position` · `/{cid}/close` · `/{cid}/collateral` | open leveraged exposure against posted USDC (the leverage ceiling and the maintenance floor are checked in the choice body, before anything moves); realise P&L at the market's **current** index; or top up to move the liquidation price away |
+| `POST /api/perp/position/{cid}/liquidate` | the **venue** closes a position whose equity has fallen below the maintenance floor. Not permissionless, deliberately: a `PerpPosition` is private, and a keeper cannot close what it cannot see |
+| `GET  /api/perp/positions?as=` | that party's own positions only, marked to the index, each with its notional, equity, maintenance floor and **liquidation price** |
 | `GET  /api/receipts` · `GET /api/parties` · `GET /api/health` | audit view, roster, liveness |
 
 ### How it's wired

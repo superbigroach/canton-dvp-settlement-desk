@@ -141,7 +141,8 @@ standard wallet can render the locked position with no knowledge of this app.
 | **A price collar that clamps, not aborts** | `max($0.50, 10% of anchor)` (Nasdaq's construction). Cancelling a close on a breach lets one oversized order deny everyone else their print — for an index fund whose whole instruction is "own the close", that is the one outcome that cannot be hedged. So: clamp to the nearer boundary and **re-cross the book there**. It is also the bound that makes an unpriced buy fundable at submission time. | `clampToCollar`; `Test:testPriceCollar`, `testCollarClampsDown`, `testUnpricedBuyFundedAtClampedBoundary`, `testInBandPrintIsNotClamped` |
 | **A contestable liquidity mandate** | Imbalance disclosure used to follow a party the venue *named in a field*, owing nothing. Now it requires a live, accepted, obligated `LiquidityMandate` — an open offer any registered participant may take, **at no fee**, many at once. Hu & Murphy (2026, *Management Science* 72(5)) locate the harm of this channel shape precisely where fees suppress competition for the seat. | `daml/LiquidityMandate.daml`; `Test:testMandateSeatIsContestable`, `testNoMandateNoImbalance`, `testTwoLiveMandatesBothSeeTheImbalance`, `testFailedMandateIsRevokedAndBarred` |
 | **Accruing NAV** | A money-market fund's value between marks is *earned*, not discovered. The committee attests base / rate / day-count / as-of; the ledger derives value continuously via `navAt`, and the close checks the anchor is consistent with the NAV accrued to *its own* ledger time (never ahead of it, ≤1 bp behind). | `daml/Governance.daml`; `Test:testAccrualArithmeticUnit` and four more |
-| **A continuous session** — a price–time-priority limit order book | `HOW_IT_WORKS.md` listed "there is no continuous session here" as a known limitation, and it was a structural one: a closing auction does not manufacture a price, it **inherits** one from the ladder that rests all day. Without that ladder, unpriced MOC flow has nothing to price against — which is exactly why Xetra §11.1.1 step 5 and Euronext §3.1 fall back to the venue's reference. So the other end of the book now exists: limit interest rests, is matched **price then time**, and settles at the **maker's** price in one atomic sweep. Orders are dark pre-trade (a `RestingOrder` has *no* observers — not even the auditor); every fill prints to a **public, anonymous** tape. Dark pre-trade, lit post-trade — the shape of MiFIR's waiver structure, not a shortcut around it. | `daml/ContinuousBook.daml`; **23 scenarios** in `daml/ContinuousBookTest.daml` incl. `testPricePriorityBeatsArrivalOrder`, `testTimePriorityWithinAPriceLevel`, `testSweepTwoLevelsAtEachMakersPrice`, `testSelfMatchingIsRejected`, `testRestingOrderIsDark`, `testTapeIsPublicAndAnonymous`, `testMatchConservesEveryUnit`, `testUnpricedOrderCannotRest` |
+| **A continuous session** — a price–time-priority limit order book | `HOW_IT_WORKS.md` listed "there is no continuous session here" as a known limitation, and it was a structural one: a closing auction does not manufacture a price, it **inherits** one from the ladder that rests all day. Without that ladder, unpriced MOC flow has nothing to price against — which is exactly why Xetra §11.1.1 step 5 and Euronext §3.1 fall back to the venue's reference. So the other end of the book now exists: limit interest rests, is matched **price then time**, and settles at the **maker's** price in one atomic sweep. Orders are dark pre-trade (a `RestingOrder` has *no* observers — not even the auditor); every fill prints to a **public, anonymous** tape. Dark pre-trade, lit post-trade — the shape of MiFIR's waiver structure, not a shortcut around it. | `daml/ContinuousBook.daml`; **28 scenarios** in `daml/ContinuousBookTest.daml` incl. `testPricePriorityBeatsArrivalOrder`, `testTimePriorityWithinAPriceLevel`, `testSweepTwoLevelsAtEachMakersPrice`, `testSelfMatchingIsRejected`, `testRestingOrderIsDark`, `testTapeIsPublicAndAnonymous`, `testMatchConservesEveryUnit`, `testUnpricedOrderCannotRest` |
+| **Leverage — cash-settled perpetuals on a marked instrument** | The desk could already price a fund and issue its shares in kind. What nobody could do was take a view on that fund without holding it, or hedge one they did hold: creation and redemption move real underlyings, so an arbitrageur has to find and fund the whole basket before it can act. A perpetual solves both, and it closes the loop the fund layer opens. Creation/redemption keeps a share honest over hours; a perp keeps it honest over seconds. **A perp on a FUND cannot index on an attested mark, because a fund has none.** Its value is *derived* from what it holds. So the index is the fund's NAV per share, computed from its components' attested marks, which means it inherits the committee's signatures rather than inventing a new authority; an unmarked component yields no index at all, because a fund you cannot value is a fund you cannot lever. That is not fussiness: a leveraged position is *liquidated* against this number, so an index one party can move at will is an index one party can use to liquidate people. **The funding rate is derived, never fetched.** `deriveFunding` computes `clamp(premium + interest, ±cap)` from *this* venue's perp price against *this* venue's index, because another exchange's funding rate is a fact about another exchange's book; the cap turns one printed trade on a thin book from an arbitrary levy on every open position into a bounded cost. **Three trade-offs, stated rather than hidden.** (i) The venue's insurance pool is the counterparty, not a matched book, so lopsided open interest is directional risk the pool carries; `openLong` / `openShort` sit on the market precisely so that imbalance is a ledger fact and the funding rate is the lever against it. (ii) Liquidation is the **operator's** duty rather than permissionless, because a `PerpPosition` is private to its trader and a keeper cannot close what it cannot see; a visible liquidation price on a leveraged product is an invitation to push the market into it. (iii) Collateral is cash only, the market's single `cashInstrument` (USDC), so a holder cannot post the fund's own shares as margin. There is **no** auto-deleveraging, **no** cross-margin, **no** partial close and **no** perp order book. | `daml/Perpetual.daml` (the module header is the argument, including what is deliberately absent); **18 scenarios** in `daml/PerpetualTest.daml`, every one of which counts the cash before and after, incl. `testLongProfitIsConserved`, `testShortProfitIsConserved`, `testLossIsPaidToThePoolAndConserved`, `testLeverageCeilingIsEnforced`, `testCannotOpenBelowMaintenance`, `testLiquidationWhenEquityFallsBelowMaintenance`, `testAddCollateralAvertsLiquidation`, `testPositiveFundingIsPaidByLongs`, `testPoolTooSmallIsRefused`, `testPositionIsPrivateToItsTrader`; `PerpetualController.java` (`indexFor` is the fund-NAV fallback); `POST /api/perp/*` and the *Leverage* panel. **Local only:** see §0.6 |
 | **Both NAVs a fund actually has** | A real ETF runs two: an **official** NAV struck from signed marks, which is what creations and redemptions legally settle at, and an **indicative** NAV recomputed continuously and binding on nobody (exchanges disseminate one every ~15s). Marking a volatile asset once a day and settling against it all the next day would be indefensible — and publishing a streamed number as the *official* one would be equally wrong, because it is the signatures, not the freshness, that make a NAV bindable. So the desk shows both, and the **drift in bps** between them is the honest measure of how stale the last strike has become. Each leg is valued by what it is: a wrapped-crypto leg at live spot (BitSafe's own integration guidance for cBTC is a BTC-USD feed), a money-market leg by accrual from the committee's recipe — an MMF has no live price to stream, its NAV is struck and then *earned*. | `GET /api/basket/nav/indicative`; `MarketData.java`; the Fund panel |
 | **SDK pinned to 3.4.11** | So the repo reproduces exactly what the devnet node runs (LF 2.2). Both Java backends were regenerated and are on Ledger API v2. | `daml.yaml` |
 
@@ -153,12 +154,17 @@ standard wallet can render the locked position with no knowledge of this app.
   **`feat/price-discovery-and-cip56`** point at the same commit. What you clone is
   what is described here.
 - **The auction has not been run end-to-end against a live participant.** It is proven by
-  **Daml Script scenarios** (92, all green) plus compiling backends and a
+  **Daml Script scenarios** (115, all green) plus compiling backends and a
   clean `tsc` — not by a
   cross printing on a shared node. Uploading a DAR to `hackcanton-01` is an admin-only
   action on the node operator's side; the request is in with NODERS and the package
-  (`147ddae1…`) is built and waiting. The *settlement* path did have its live run —
+  is built and waiting. The *settlement* path did have its live run —
   the atomic DvP of 2026-07-19, receipt `006ef8c599…`.
+- **The leverage layer is newer still, and it is local.** `Perpetual.daml` and
+  `/api/perp/*` run on a **local sandbox**: the test suite, plus a full open → mark →
+  close cycle against a locally running ledger with the cash reconciled to the unit
+  before and after. It has never been on `hackcanton-01`, and the hosted demo does not
+  carry it. Anything a judge sees of it is a local build.
 - The **hosted demo and the recorded demo video therefore show the *pre-feedback*
   build**, in which the close printed at the committee NAV. That is not what the code
   does now, and §0.1 is the correct description.
@@ -267,10 +273,10 @@ declared party, the data does not exist for you.
 **Daml logic + tests (proves the whole model):**
 ```bash
 daml version              # must be 3.4.11 — daml.yaml pins it (the line devnet runs)
-daml build && daml test   # 92 scripts, all pass
+daml build && daml test   # 115 scripts, all pass
 ```
-(63 scenarios in `daml/Test.daml`, 23 in `daml/ContinuousBookTest.daml`, 6 in
-`daml/TokenStandardTest.daml`, at the last commit on this branch — the suite is still
+(63 scenarios in `daml/Test.daml`, 28 in `daml/ContinuousBookTest.daml`, 18 in
+`daml/PerpetualTest.daml`, 6 in `daml/TokenStandardTest.daml` — the suite is still
 growing, so run the command for the live
 number. The build also links the six vendored `splice-api-token-*` DARs from `deps/`
 — verify with `daml damlc inspect-dar .daml/dist/canton-dvp-settlement-desk-1.0.0.dar`.)
@@ -285,13 +291,14 @@ number. The build also links the six vendored `splice-api-token-*` DARs from `de
 
 ## 6 · What works today (verified)
 
-- ✅ **`daml test` — 92/92 green** (the suite is still growing —
+- ✅ **`daml test` — 115/115 green** (the suite is still growing —
   run it for the live number), including `testPriceDiscoveryUnit`,
   `testPriceDiscoveryBeatsReference`, `testCompleteBookRequired`, `testMixedSurplusTieBreak`,
   `testCollarClampsDown`, `testMocLocLadderEndToEnd`, `testMandateSeatIsContestable`,
   `testAccruedAnchorBindsTheClose`, `testThresholdAttestation`, `testCommitteeAttestedClose`,
   `testCreateThenRedeem`, `testNavPerShare`, atomic-rollback and dark-pool privacy — plus
-  the six CIP-56 scripts in `daml/TokenStandardTest.daml`.
+  the six CIP-56 scripts in `daml/TokenStandardTest.daml` and the 18 leverage scripts in
+  `daml/PerpetualTest.daml`, which check cash conservation on every settlement path.
 - ✅ **Backends** (`backend/` and `backend-devnet/`, Spring Boot over the Daml Java
   bindings 3.4.0 / Ledger API v2) — `./gradlew clean build` SUCCESSFUL at the branch
   head; REST surface for trade / auction / mandate / committee / basket.

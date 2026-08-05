@@ -124,9 +124,10 @@ export default function PendingTransfersPanel({ acting, onChanged, flash }: Prop
   return (
     <section className="card pending-transfers">
       <h2>Pending transfers · CIP-56</h2>
-      <p className="muted">
-        A transfer from another registry arrives as a pending <code>TransferInstruction</code>,
-        not as a balance. It becomes a real holding only when the receiver accepts it.
+      <p className="hint">
+        A transfer from another registry arrives as a pending{' '}
+        <code className="mono">TransferInstruction</code>, not as a balance. It becomes a real
+        holding only when the receiver accepts it.
         {foreign.length > 0 && (
           <>
             {' '}
@@ -139,8 +140,8 @@ export default function PendingTransfersPanel({ acting, onChanged, flash }: Prop
       </p>
 
       <div className="row">
-        <label>
-          Party
+        <label className="field">
+          <span>Party</span>
           <input
             value={party}
             onChange={(e) => setParty(e.target.value.trim())}
@@ -148,8 +149,8 @@ export default function PendingTransfersPanel({ acting, onChanged, flash }: Prop
             size={46}
           />
         </label>
-        <label>
-          Show
+        <label className="field">
+          <span>Show</span>
           <select
             value={direction}
             onChange={(e) => setDirection(e.target.value as 'inbound' | 'all')}
@@ -163,20 +164,20 @@ export default function PendingTransfersPanel({ acting, onChanged, flash }: Prop
         </button>
       </div>
 
-      {err && <p className="error">{err}</p>}
+      {err && <p className="warn">{err}</p>}
 
       {loaded && rows.length === 0 && (
-        <p className="muted">
+        <p className="hint">
           Nothing pending for {label(party) || '—'}.
           {note && <> {note}</>}
         </p>
       )}
 
       {rows.length > 0 && (
-        <table>
+        <table className="blotter">
           <thead>
             <tr>
-              <th>Amount</th>
+              <th className="num">Amount</th>
               <th>Instrument</th>
               <th>From</th>
               <th>Registry</th>
@@ -188,14 +189,16 @@ export default function PendingTransfersPanel({ acting, onChanged, flash }: Prop
           <tbody>
             {rows.map((r) => (
               <tr key={r.instructionCid}>
-                <td>
+                <td className="num mono">
                   <strong>{fmt(r.amount)}</strong>
                 </td>
-                <td>{r.instrumentId}</td>
+                <td>
+                  <span className="pill asset">{r.instrumentId}</span>
+                </td>
                 <td>{label(r.direction === 'outbound' ? r.receiver : r.sender)}</td>
                 <td>
                   {r.ourRegistry ? (
-                    <span className="muted">this desk</span>
+                    <span className="faint">this desk</span>
                   ) : (
                     // The interesting case. Say whose it is, and whether we know how to
                     // reach their off-ledger registry if the accept turns out to need it.
@@ -205,12 +208,13 @@ export default function PendingTransfersPanel({ acting, onChanged, flash }: Prop
                     </span>
                   )}
                 </td>
-                <td>{r.expired ? <span className="error">expired</span> : r.status}</td>
+                <td>{r.expired ? <span className="bad-text">expired</span> : r.status}</td>
                 <td className="muted">{when(r.executeBefore)}</td>
                 <td>
                   {r.direction === 'inbound' ? (
                     <>
                       <button
+                        className="chip confirm"
                         disabled={busy || r.expired}
                         onClick={() => void act(r, 'accept')}
                         title={
@@ -222,7 +226,7 @@ export default function PendingTransfersPanel({ acting, onChanged, flash }: Prop
                         Accept
                       </button>{' '}
                       <button
-                        className="ghost"
+                        className="chip"
                         disabled={busy}
                         onClick={() => void act(r, 'reject')}
                       >
@@ -231,14 +235,14 @@ export default function PendingTransfersPanel({ acting, onChanged, flash }: Prop
                     </>
                   ) : r.direction === 'outbound' ? (
                     <button
-                      className="ghost"
+                      className="chip"
                       disabled={busy}
                       onClick={() => void act(r, 'withdraw')}
                     >
                       Withdraw
                     </button>
                   ) : (
-                    <span className="muted">observer</span>
+                    <span className="faint">observer</span>
                   )}
                 </td>
               </tr>
@@ -248,7 +252,7 @@ export default function PendingTransfersPanel({ acting, onChanged, flash }: Prop
       )}
 
       {outcome && (
-        <div className="muted" style={{ marginTop: '0.75rem' }}>
+        <div className="hint">
           <div>
             <strong>{outcome.choice}</strong> · update {outcome.updateId}
           </div>
@@ -257,7 +261,7 @@ export default function PendingTransfersPanel({ acting, onChanged, flash }: Prop
               Created on the ledger:{' '}
               {outcome.created.map((c) => (
                 <div key={c}>
-                  <code>{c}</code>
+                  <code className="cid mono">{c}</code>
                 </div>
               ))}
             </div>
@@ -275,8 +279,9 @@ export default function PendingTransfersPanel({ acting, onChanged, flash }: Prop
       )}
 
       {inbound.length > 0 && (
-        <p className="muted">
-          Accepting exercises the standard's own <code>TransferInstruction_Accept</code> on the
+        <p className="hint">
+          Accepting exercises the standard's own{' '}
+          <code className="mono">TransferInstruction_Accept</code> on the
           issuing registry's contract. Nothing in this project's Daml code is involved — that is
           what makes the resulting holding a genuine third-party asset rather than a stand-in.
         </p>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   api,
   errorMessage,
@@ -60,7 +60,23 @@ export default function App() {
   const [ledgerReceipts, setLedgerReceipts] = useState<LedgerReceipt[]>([]);
 
   const [mode] = useState<Mode>('Auction'); // auction-only desk (DvP engine still powers the cross)
-  const [asset, setAsset] = useState<string>('');
+  // Same reasoning as the committee: which asset you were looking at is a session
+  // fact, and losing it on every reload sent you back to a demo equity mid-demo.
+  const ASSET_KEY = 'crossdesk.asset';
+  const [asset, setAsset] = useState<string>(() => {
+    try {
+      return window.localStorage.getItem(ASSET_KEY) ?? '';
+    } catch {
+      return '';
+    }
+  });
+  useEffect(() => {
+    try {
+      if (asset) window.localStorage.setItem(ASSET_KEY, asset);
+    } catch {
+      /* ignore */
+    }
+  }, [asset]);
   const [side, setSide] = useState<Side>('Buy');
   const [quantity, setQuantity] = useState<string>('1');
   const [price, setPrice] = useState<string>(''); // DvP only
@@ -125,6 +141,27 @@ export default function App() {
         .filter((f) => f.instrumentId === asset && Number(f.ratePerAnnum) !== 0)
         .slice(-1)[0] ?? null,
     [accruingFixes, asset],
+  );
+
+  // WHOSE ORDER IS THIS? The ledger answers with its own party id — `alice-crossdesk`
+  // on the shared node, or a full `label::1220…` — while the desk holds the display
+  // label `Alice`. Comparing those two strings is always false, which is why a trader
+  // could see its own resting order and get an em-dash where Withdraw belongs: the
+  // ledger was willing, the UI just never asked. Resolve through the roster instead.
+  const partyLabel = useCallback(
+    (raw: string) => {
+      if (!raw) return raw;
+      const head = raw.split('::')[0];
+      const hit = parties.find(
+        (p) => p.party === raw || p.label === raw || p.party.split('::')[0] === head,
+      );
+      return hit ? hit.label : head;
+    },
+    [parties],
+  );
+  const isMine = useCallback(
+    (raw: string) => !!acting && partyLabel(raw) === acting,
+    [acting, partyLabel],
   );
 
   const flash = (msg: string) => {
@@ -198,14 +235,38 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        const [ps, ins] = await Promise.all([api.parties(), api.instruments()]);
+        const [ps, rawIns] = await Promise.all([api.parties(), api.instruments()]);
         setParties(ps);
+        // ONE ROW PER SYMBOL. An Instrument is a contract, and republishing a mark by
+        // creating a fresh one leaves both on the ledger — so a symbol can legitimately
+        // appear more than once in the query. A picker that lists LX1 twice reads as a
+        // bug whatever the cause, so the desk keeps the LAST contract for each id: the
+        // most recently published mark is the one that should be quoted.
+        const byId = new Map<string, (typeof rawIns)[number]>();
+        rawIns.forEach((i) => byId.set(i.id, i));
+        const ins = [...byId.values()];
         setInstruments(ins);
         // Not fatal if it fails: an empty roster just means no fix has been struck.
         api.fixings().then(setAccruingFixes).catch(() => setAccruingFixes([]));
         const first = ps.find((p) => p.label === 'Alice') ?? ps[0];
         setActing(first?.label ?? '');
-        const firstAsset = ins.find((i) => i.kind !== 'Cash');
+        // OPEN ON THE FUND. The desk's whole story is the basket — its NAV, its
+        // premium/discount and its hedge — so landing on a demo equity meant every
+        // visitor's first act was to change the selector. Fall back to the first
+        // tradeable asset only if no fund is listed.
+        // Keep what the operator had selected if it is still listed; only fall back
+        // to the fund (then any tradeable asset) on a genuinely cold start.
+        const remembered = (() => {
+          try {
+            return window.localStorage.getItem(ASSET_KEY) ?? '';
+          } catch {
+            return '';
+          }
+        })();
+        const firstAsset =
+          ins.find((i) => i.id === remembered) ??
+          ins.find((i) => i.kind === 'Fund') ??
+          ins.find((i) => i.kind !== 'Cash');
         setAsset(firstAsset?.id ?? '');
         setPrice(firstAsset?.referencePrice ? String(firstAsset.referencePrice) : '');
         const cp = ps.find((p) => p.label === 'Bob') ?? ps.find((p) => p.label !== first?.label);
@@ -251,7 +312,7 @@ export default function App() {
   const cashPosition = positionOf(CASH);
   const assetPosition = positionOf(asset);
 
-  const qtyNum = Number(quantity) || 0;
+  const qtyNum = Number((Number(quantity) || 0).toFixed(10));
   const priceNum = Number(price) || 0;
   const closePrice = refPriceOf(asset);
   const dvpCash = qtyNum * priceNum;
@@ -295,7 +356,17 @@ export default function App() {
 
   // ---- actions ------------------------------------------------------------
 
+  // ONE ACTION AT A TIME, ENFORCED SYNCHRONOUSLY.
+  // `disabled={busy}` is not a guard: setBusy schedules a re-render, so two clicks
+  // landing in the same frame both pass the check and both submit. On "Run the Cross"
+  // that means two uncross attempts against one auction — the second either double-
+  // settles or dies with a contract-not-found the operator cannot interpret. A ref
+  // flips the instant the first click is handled, before React paints anything.
+  const inFlight = useRef(false);
+
   async function runAction<T>(fn: () => Promise<T>): Promise<T | undefined> {
+    if (inFlight.current) return undefined;
+    inFlight.current = true;
     setBusy(true);
     setError('');
     try {
@@ -305,6 +376,7 @@ export default function App() {
       setError(errorMessage(e));
       return undefined;
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   }
@@ -601,17 +673,38 @@ export default function App() {
               </thead>
               <tbody>
                 {aggregate(holdings).map((h) => {
+                  // VALUE COMES FROM THE SERVER NOW, because an accruing instrument is
+                  // not worth its struck base. A money-market share is bought at 1.00
+                  // and is worth more by lunchtime; valuing it at the base would show a
+                  // static number on the one screen a holder actually looks at.
                   const rp = refPriceOf(h.instrumentId);
-                  const val = h.instrumentId === CASH ? h.amount : rp != null ? h.amount * rp : null;
+                  const val =
+                    h.instrumentId === CASH
+                      ? h.amount
+                      : h.value != null
+                        ? h.value
+                        : rp != null
+                          ? h.amount * rp
+                          : null;
                   return (
                     <tr key={h.instrumentId}>
                       <td>
                         <span className={`pill ${h.instrumentId === CASH ? 'cash' : 'asset'}`}>
                           {h.instrumentId}
                         </span>
+                        {h.accruing && (
+                          <span className="accruing-tag" title="Earns through a rising price, not a rising balance — the units never change">
+                            accruing
+                          </span>
+                        )}
                       </td>
                       <td className="num mono strong">{fmt(h.amount)}</td>
-                      <td className="num mono muted">{val != null ? fmt2(val) : '—'}</td>
+                      <td className="num mono muted">
+                        {val != null ? fmt2(val) : '—'}
+                        {h.accruing && h.mark != null && (
+                          <div className="mark-now">@ {h.mark.toFixed(8)}</div>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
@@ -626,7 +719,10 @@ export default function App() {
         {/* -------- Trade panel -------- */}
         <section className="card trade">
           <div className="card-head">
-            <h2>Trade</h2>
+            {/* "Trade" alone read like a generic ticket. What this card actually lodges
+                is a SEALED order into the open or closing cross — never a live order
+                against a visible book — and saying so removes the question. */}
+            <h2>Trade — Market-on-Close Orders</h2>
           </div>
 
           <div className="row">
@@ -1033,7 +1129,7 @@ export default function App() {
                   <tbody>
                     {mocState.orders.map((o) => (
                       <tr key={o.contractId}>
-                        <td>{o.trader}</td>
+                        <td title={o.trader}>{partyLabel(o.trader)}</td>
                         <td>
                           <span className={`side ${o.side.toLowerCase()}`}>{o.side}</span>
                         </td>
@@ -1052,7 +1148,7 @@ export default function App() {
                           )}
                         </td>
                         <td className="num">
-                          {o.trader === acting ? (
+                          {isMine(o.trader) ? (
                             <button
                               className="ghost small"
                               disabled={busy}
@@ -1061,7 +1157,7 @@ export default function App() {
                               Withdraw
                             </button>
                           ) : (
-                            <span className="muted">—</span>
+                            <span className="faint">—</span>
                           )}
                         </td>
                       </tr>
@@ -1132,6 +1228,8 @@ export default function App() {
           parties={parties}
           instruments={instruments}
           acting={acting}
+          asset={asset}
+          onAsset={setAsset}
           onChanged={() => {
             void loadHoldings(acting);
             void loadReceipts(acting);
@@ -1149,6 +1247,8 @@ export default function App() {
           parties={parties}
           instruments={instruments}
           acting={acting}
+          asset={asset}
+          onAsset={setAsset}
           onChanged={() => {
             void loadHoldings(acting);
             void loadReceipts(acting);
@@ -1157,7 +1257,7 @@ export default function App() {
         />
 
         {/* -------- Decentralised operator · committee-attested NAV -------- */}
-        <CommitteePanel parties={parties} instruments={instruments} flash={flash} />
+        <CommitteePanel parties={parties} instruments={instruments} asset={asset} flash={flash} />
 
         {/* -------- Fund / ETF builder · in-kind create & redeem -------- */}
         <FundPanel
@@ -1198,6 +1298,18 @@ export default function App() {
                     <div className="receipt-head">
                       <span className={`badge ${cls}`}>{r.kind}</span>
                       <span className="receipt-headline">{r.headline}</span>
+                      {/* WHEN IT SETTLED. `settledAt` is on the SettlementReceipt template
+                          itself — signed as part of the record, not stamped by this browser
+                          — so it is the ledger's own answer to "when". A receipt without a
+                          time is not an audit trail; it is an assertion. */}
+                      {r.settledAt && (
+                        <time className="receipt-time mono" dateTime={r.settledAt} title={r.settledAt}>
+                          {new Date(r.settledAt).toLocaleString(undefined, {
+                            year: 'numeric', month: 'short', day: '2-digit',
+                            hour: '2-digit', minute: '2-digit', second: '2-digit',
+                          })}
+                        </time>
+                      )}
                     </div>
                     <div className="receipt-body">
                       <span className="cp">
@@ -1228,11 +1340,39 @@ export default function App() {
 }
 
 // Sum holdings per instrument so the position shows one row per token.
-function aggregate(holdings: Holding[]): { instrumentId: string; amount: number }[] {
-  const m = new Map<string, number>();
-  for (const h of holdings) m.set(h.instrumentId, (m.get(h.instrumentId) ?? 0) + h.amount);
+/**
+ * Sum a party's holdings per instrument.
+ *
+ * A position is spread across many Holding contracts — reservations split them — so a
+ * raw list shows one asset five times. Amounts add; the MARK does not, because every
+ * slice of the same instrument carries the same one. Value is re-derived from the
+ * summed amount rather than added up, so a null mark on one slice cannot silently
+ * under-report the total.
+ */
+function aggregate(holdings: Holding[]): {
+  instrumentId: string;
+  amount: number;
+  mark: number | null;
+  value: number | null;
+  accruing: boolean;
+}[] {
+  const m = new Map<string, { amount: number; mark: number | null; accruing: boolean }>();
+  for (const h of holdings) {
+    const prev = m.get(h.instrumentId);
+    m.set(h.instrumentId, {
+      amount: (prev?.amount ?? 0) + h.amount,
+      mark: h.mark ?? prev?.mark ?? null,
+      accruing: h.accruing || (prev?.accruing ?? false),
+    });
+  }
   return [...m.entries()]
-    .map(([instrumentId, amount]) => ({ instrumentId, amount }))
+    .map(([instrumentId, v]) => ({
+      instrumentId,
+      amount: v.amount,
+      mark: v.mark,
+      value: v.mark == null ? null : v.amount * v.mark,
+      accruing: v.accruing,
+    }))
     .sort((a, b) => a.instrumentId.localeCompare(b.instrumentId));
 }
 

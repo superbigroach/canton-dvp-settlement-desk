@@ -73,7 +73,7 @@ public class MarketData {
     /** ACT/360 — the convention every USD money-market instrument is quoted on. */
     public static final String MONEY_MARKET_DAY_COUNT = "ACT/360";
 
-    private static final Duration TTL = Duration.ofSeconds(60);
+    private static final Duration TTL = Duration.ofSeconds(15);
 
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))

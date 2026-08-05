@@ -46,9 +46,22 @@ public final class Dtos {
             @NotNull @Positive BigDecimal amount) {
     }
 
+    /**
+     * A balance, and what it is worth NOW.
+     *
+     * <p>{@code mark} is the instrument's current value per unit. For an ordinary asset
+     * that is its attested mark. For an ACCRUING instrument it is the value derived
+     * from the committee's recipe at this instant, which is not the same number as the
+     * struck base: a money-market fund share is bought at 1.00 and is worth more by
+     * lunchtime. USYC, the real instrument this models, works exactly this way, and
+     * Circle describes it as accruing "via token price increases" — the holder's
+     * balance never changes, the price does. Valuing such a holding at its struck base
+     * would show a static number on the one screen where a holder would look.
+     */
     public record HoldingResponse(
             String contractId, String issuer, String instrumentId, String owner,
-            BigDecimal amount, List<String> disclosedTo) {
+            BigDecimal amount, List<String> disclosedTo,
+            BigDecimal mark, BigDecimal value, boolean accruing) {
     }
 
     // ---- Bilateral DvP ----------------------------------------------------
@@ -721,6 +734,9 @@ public final class Dtos {
             BigDecimal collateral, BigDecimal notional, BigDecimal leverage,
             BigDecimal unrealisedPnl, BigDecimal equity, BigDecimal maintenance,
             BigDecimal liquidationPrice, boolean liquidatable,
+            /** False = the market's index could not be read, so every marked figure
+                above is null and none of them may be treated as reassuring. */
+            boolean marked,
             String openedAt, String lastFundingAt) {
     }
 

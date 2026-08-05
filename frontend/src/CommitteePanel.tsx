@@ -40,6 +40,8 @@ import {
 interface Props {
   parties: Party[];
   instruments: Instrument[];
+  /** The desk's selected asset. The committee strikes THIS, not a random default. */
+  asset?: string;
   flash: (m: string) => void;
 }
 
@@ -64,7 +66,7 @@ const DAY_COUNTS: { value: DayCountConvention; note: string }[] = [
   { value: 'ACT/365F', note: 'GBP/AUD/NZD/HKD/SGD money market' },
 ];
 
-export default function CommitteePanel({ parties, instruments, flash }: Props) {
+export default function CommitteePanel({ parties, instruments, asset, flash }: Props) {
   const people = parties.filter((p) => p.label.toLowerCase() !== 'sandbox');
   const assets = instruments.filter((i) => i.kind !== 'Cash');
 
@@ -73,10 +75,32 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
   const [members, setMembers] = useState<string[]>(['Issuer', 'Bank', 'Auditor']);
   const [threshold, setThreshold] = useState<number>(2);
   const [admin] = useState<string>('Issuer');
-  const [committeeCid, setCommitteeCid] = useState<string>('');
+  // THE COMMITTEE IS A CONTRACT ON THE LEDGER; ONLY THE POINTER WAS IN MEMORY.
+  // Standing one up creates a real OperatorCommittee that outlives the tab, but the
+  // cid lived in React state, so a refresh made the desk offer to stand up a SECOND
+  // committee over a book that already had one. Keep the handle where the page can
+  // find it again.
+  const CID_KEY = 'crossdesk.committeeCid';
+  const [committeeCid, setCommitteeCid] = useState<string>(
+    () => {
+      try {
+        return window.localStorage.getItem(CID_KEY) ?? '';
+      } catch {
+        return '';
+      }
+    },
+  );
+  useEffect(() => {
+    try {
+      if (committeeCid) window.localStorage.setItem(CID_KEY, committeeCid);
+      else window.localStorage.removeItem(CID_KEY);
+    } catch {
+      /* private browsing — the desk still works, it just forgets */
+    }
+  }, [committeeCid]);
 
   // Fixing in progress
-  const [instrumentId, setInstrumentId] = useState<string>(assets[0]?.id ?? 'cETH');
+  const [instrumentId, setInstrumentId] = useState<string>(asset || assets[0]?.id || 'cETH');
   const [session, setSession] = useState<Session>('Close');
   const [price, setPrice] = useState<string>('');
   const [proposalCid, setProposalCid] = useState<string>('');
@@ -86,6 +110,34 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
   // The accrual recipe under attestation. `accruing=false` is the original snapshot
   // path, byte-for-byte — a fixing with rate 0 accrues nothing at any instant.
   const [accruing, setAccruing] = useState<boolean>(true);
+
+  // THE FORM STRIKES WHAT THE DESK IS LOOKING AT. Opening on whatever happened to be
+  // first in the instrument list meant the committee card described a different asset
+  // from every other card on the page — which reads as a bug even when it is not.
+  useEffect(() => {
+    if (asset) setInstrumentId(asset);
+  }, [asset]);
+
+  // AND THE MODE IS A PROPERTY OF THE INSTRUMENT, NOT A QUESTION FOR THE OPERATOR.
+  // A money-market share earns continuously, so its value is a recipe (base + rate +
+  // day count) the ledger keeps deriving. Anything with a market has a mark, and a
+  // mark is a snapshot. Asking a human to classify that every time is an invitation
+  // to attest a T-bill as a static number, or cETH as though it accrued interest.
+  useEffect(() => {
+    const kind = instruments.find((i) => i.id === instrumentId)?.kind ?? '';
+    setAccruing(kind === 'MoneyMarket');
+  }, [instrumentId, instruments]);
+
+  // A FUND HAS NO OPENING NAV. Equity markets genuinely run two auctions and both
+  // prints are official, which is why the Open/Close choice exists at all — but a
+  // fund strikes ONE net asset value per day, at the close. Offering "Open" on a
+  // basket or a money-market share invites an attestation that has no meaning in
+  // fund accounting, so for those the session is stated rather than chosen.
+  const kindOf = instruments.find((i) => i.id === instrumentId)?.kind ?? '';
+  const closeOnly = kindOf === 'MoneyMarket' || kindOf === 'Fund';
+  useEffect(() => {
+    if (closeOnly) setSession('Close');
+  }, [closeOnly]);
   const [rate, setRate] = useState<string>('0.036');
   const [dayCount, setDayCount] = useState<DayCountConvention>('ACT/360');
 
@@ -354,14 +406,20 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
             </label>
             <div className="field">
               <span>Session</span>
-              <div className="segmented session">
-                <button className={session === 'Open' ? 'on' : ''} disabled={busy} onClick={() => setSession('Open')}>
-                  Open
-                </button>
-                <button className={session === 'Close' ? 'on' : ''} disabled={busy} onClick={() => setSession('Close')}>
-                  Close
-                </button>
-              </div>
+              {closeOnly ? (
+                <p className="hint attest-mode">
+                  <strong>Close</strong> — a fund strikes one NAV a day. There is no opening NAV.
+                </p>
+              ) : (
+                <div className="segmented session">
+                  <button className={session === 'Open' ? 'on' : ''} disabled={busy} onClick={() => setSession('Open')}>
+                    Open
+                  </button>
+                  <button className={session === 'Close' ? 'on' : ''} disabled={busy} onClick={() => setSession('Close')}>
+                    Close
+                  </button>
+                </div>
+              )}
             </div>
             <label className="field small">
               <span>{accruing ? `Base NAV (${CASH})` : `Price (${CASH})`}</span>
@@ -395,17 +453,24 @@ export default function CommitteePanel({ parties, instruments, flash }: Props) {
             </label>
           </div>
 
-          {/* SNAPSHOT vs ACCRUING — the choice that decides which Daml choice runs. */}
+          {/* WHAT IS BEING ATTESTED — derived from the instrument, stated not asked.
+              It still decides which Daml choice runs; the operator simply no longer
+              has to know that, because the instrument already does. */}
           <div className="field">
             <span>What is being attested</span>
-            <div className="segmented accrual-mode">
-              <button className={!accruing ? 'on' : ''} disabled={busy} onClick={() => setAccruing(false)}>
-                Snapshot
-              </button>
-              <button className={accruing ? 'on' : ''} disabled={busy} onClick={() => setAccruing(true)}>
-                Accruing
-              </button>
-            </div>
+            <p className="hint attest-mode">
+              {accruing ? (
+                <>
+                  <strong>A recipe</strong> — base, rate and day count. {instrumentId} earns
+                  continuously, so the ledger derives its value every second from here.
+                </>
+              ) : (
+                <>
+                  <strong>A mark</strong> — one number, true at this instant. {instrumentId} has
+                  a market, so it is snapshotted rather than accrued.
+                </>
+              )}
+            </p>
           </div>
 
           {accruing ? (

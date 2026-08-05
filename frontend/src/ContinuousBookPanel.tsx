@@ -15,7 +15,7 @@
 //     the whole session and names no one. Dark pre-trade, lit post-trade — which
 //     is the whole of MiFID II's waiver structure, not a shortcut.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   api,
   errorMessage,
@@ -33,6 +33,9 @@ interface Props {
   parties: Party[];
   instruments: Instrument[];
   acting: string;
+  /** The desk's selected asset — shared with the quote, the cross and leverage. */
+  asset: string;
+  onAsset: (id: string) => void;
   onChanged: () => void; // the desk's holdings move on every fill
   flash: (m: string) => void;
 }
@@ -48,6 +51,8 @@ export default function ContinuousBookPanel({
   parties,
   instruments,
   acting,
+  asset,
+  onAsset,
   onChanged,
   flash,
 }: Props) {
@@ -55,8 +60,13 @@ export default function ContinuousBookPanel({
   // Only instruments with a published mark can anchor a session's price band.
   const assets = instruments.filter((i) => i.kind !== 'Cash' && i.referencePrice != null);
 
-  const [instrumentId, setInstrumentId] = useState<string>('');
-  const [viewAs, setViewAs] = useState<string>('Venue');
+  const instrumentId = asset;
+  const setInstrumentId = onAsset;
+  // THE BOOK IS VIEWED AS WHOEVER THE DESK IS ACTING AS, until you say otherwise.
+  // Defaulting to Venue meant the header said "Alice" while the ladder quietly showed
+  // the operator's full book — the one place in this app where being wrong about whose
+  // eyes you are looking through changes what the data MEANS.
+  const [viewAs, setViewAs] = useState<string>(acting || 'Venue');
   const [state, setState] = useState<BookState | null>(null);
   const [tape, setTape] = useState<BookTape[]>([]);
   const [confirms, setConfirms] = useState<BookConfirm[]>([]);
@@ -74,12 +84,27 @@ export default function ContinuousBookPanel({
   const [err, setErr] = useState<string>('');
 
   useEffect(() => {
-    if (!instrumentId && assets.length > 0) setInstrumentId(assets[0].id);
-  }, [assets, instrumentId]);
-
-  useEffect(() => {
     setTrader(acting || 'Alice');
+    // Follow the desk. The selector still overrides this — that is the disclosure
+    // demo — but switching who you ARE must not leave you looking through the
+    // previous party's eyes.
+    setViewAs(acting || 'Venue');
   }, [acting]);
+
+  /**
+   * The desk's own label for a party. The ledger hands back ids that carry a
+   * deployment suffix (`alice-crossdesk`, or a full `label::1220…` on a shared
+   * node); rendering those raw is both unreadable and wide enough to break the
+   * ladder's grid.
+   */
+  function who(raw: string): string {
+    if (!raw) return raw;
+    const head = raw.split('::')[0];
+    const hit = people.find(
+      (p) => p.party === raw || p.label === raw || p.party.split('::')[0] === head,
+    );
+    return hit ? hit.label : head;
+  }
 
   async function run<T>(fn: () => Promise<T>): Promise<T | undefined> {
     setBusy(true);
@@ -94,8 +119,9 @@ export default function ContinuousBookPanel({
     }
   }
 
-  const refresh = useCallback(async () => {
-    if (!instrumentId) return;
+  /** Resolves TRUE when a session already exists for the selected asset. */
+  const refresh = useCallback(async (): Promise<boolean> => {
+    if (!instrumentId) return false;
     try {
       const [s, t, c] = await Promise.all([
         api.bookState(instrumentId, viewAs, CASH),
@@ -106,6 +132,7 @@ export default function ContinuousBookPanel({
       setTape(t);
       setConfirms(c);
       setErr('');
+      return true;
     } catch (e) {
       // No session yet is the normal cold-start state, not an error to shout about.
       const m = errorMessage(e);
@@ -113,23 +140,49 @@ export default function ContinuousBookPanel({
       setTape([]);
       setConfirms([]);
       setErr(/no continuous session/i.test(m) ? '' : m);
+      return false;
     }
   }, [instrumentId, viewAs]);
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  const openSession = useCallback(
+    async (quiet = false) => {
+      const r = await run(() => api.openBookSession({ instrumentId, cashInstrument: CASH }));
+      if (r) {
+        setState(r);
+        if (!quiet) {
+          flash(
+            `Continuous session open for ${instrumentId} — band ${px(r.bandLow)} … ${px(r.bandHigh)}`,
+          );
+        }
+        void refresh();
+      }
+    },
+    // `run` and `flash` are stable for the panel's lifetime; the identity that
+    // matters here is the selected asset.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [instrumentId, refresh],
+  );
 
-  async function openSession() {
-    const r = await run(() =>
-      api.openBookSession({ instrumentId, cashInstrument: CASH }),
-    );
-    if (r) {
-      setState(r);
-      flash(`Continuous session open for ${instrumentId} — band ${px(r.bandLow)} … ${px(r.bandHigh)}`);
-      void refresh();
-    }
-  }
+  // THE SESSION OPENS ON SELECTION, NOT ON A BUTTON. A venue runs a continuous
+  // session on every asset it lists, so choosing the asset already IS the intent —
+  // making someone click "open" first shows them our plumbing and puts a dead card
+  // in the middle of the desk. Each instrument is attempted ONCE: if opening
+  // genuinely fails, the manual button below is still there and we do not sit in a
+  // retry loop against the ledger.
+  const autoOpened = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!instrumentId) return;
+    let alive = true;
+    void (async () => {
+      const exists = await refresh();
+      if (!alive || exists || autoOpened.current.has(instrumentId)) return;
+      autoOpened.current.add(instrumentId);
+      await openSession(true);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [instrumentId, refresh, openSession]);
 
   async function place() {
     const qty = Number(quantity);
@@ -246,11 +299,21 @@ export default function ContinuousBookPanel({
           </select>
         </label>
 
-        <button type="button" onClick={() => void refresh()} disabled={busy || !instrumentId}>
+        <button
+          type="button"
+          className="ghost small"
+          onClick={() => void refresh()}
+          disabled={busy || !instrumentId}
+        >
           Refresh
         </button>
         {state && (
-          <button type="button" onClick={() => void toggleSession()} disabled={busy}>
+          <button
+            type="button"
+            className="ghost small"
+            onClick={() => void toggleSession()}
+            disabled={busy}
+          >
             {state.isOpen ? 'Halt session' : 'Resume session'}
           </button>
         )}
@@ -259,11 +322,24 @@ export default function ContinuousBookPanel({
       {!state && instrumentId && (
         <div className="empty">
           <p>
-            No continuous session for <strong>{instrumentId}</strong> yet. Opening one anchors
-            the price band on the instrument's published mark.
+            {busy ? (
+              <>
+                Opening the continuous session for <strong>{instrumentId}</strong>…
+              </>
+            ) : (
+              <>
+                No continuous session for <strong>{instrumentId}</strong>. Opening one anchors
+                the price band on the instrument&rsquo;s published mark.
+              </>
+            )}
           </p>
-          <button type="button" onClick={() => void openSession()} disabled={busy}>
-            Open the session
+          <button
+            type="button"
+            className="primary venue"
+            onClick={() => void openSession()}
+            disabled={busy}
+          >
+            {busy ? 'Opening…' : 'Open the session'}
           </button>
         </div>
       )}
@@ -370,10 +446,14 @@ export default function ContinuousBookPanel({
               </select>
             </label>
             {/* Sized to match Refresh in the row above — the ticket's controls are all
-                one line, and a button that outgrows its own row reads like an error. */}
+                one line, and a button that outgrows its own row reads like an error.
+                `ticket-submit` carries ONLY that sizing; it has no colour of its own, so
+                without `primary` this renders as a raw OS button in the middle of the
+                busiest card on the desk. The width override that keeps it inline lives
+                next to the rule in styles.css. */}
             <button
               type="button"
-              className="ticket-submit"
+              className="primary ticket-submit"
               onClick={() => void place()}
               disabled={busy || !state.isOpen}
             >
@@ -404,7 +484,7 @@ export default function ContinuousBookPanel({
                           walkBook enforces, and the confirm proves it. */}
                       <td>{px(f.price)}</td>
                       <td>{px(f.cashAmount)}</td>
-                      <td className="muted">{f.maker}</td>
+                      <td className="muted">{who(f.maker)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -426,7 +506,7 @@ export default function ContinuousBookPanel({
                 <div className="lvl" key={o.contractId}>
                   <span className="qty">{fmt(o.quantity)}</span>
                   <span className="px">{px(o.limitPrice)}</span>
-                  <span className="who">{o.trader}</span>
+                  <span className="who" title={o.trader}>{who(o.trader)}</span>
                   <span className="seq" title="arrival stamp — time priority">
                     #{o.seqNo}
                   </span>
@@ -448,7 +528,7 @@ export default function ContinuousBookPanel({
                 <div className="lvl" key={o.contractId}>
                   <span className="qty">{fmt(o.quantity)}</span>
                   <span className="px">{px(o.limitPrice)}</span>
-                  <span className="who">{o.trader}</span>
+                  <span className="who" title={o.trader}>{who(o.trader)}</span>
                   <span className="seq" title="arrival stamp — time priority">
                     #{o.seqNo}
                   </span>

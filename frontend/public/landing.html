@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CrossDesk — price discovery, attested NAV and settlement for tokenised funds</title>
+<meta name="description" content="One ledger for the three jobs a tokenised fund needs on day one: a price, an official NAV nobody can accuse the issuer of setting, and in-kind creation and redemption that settles against it. Built on Canton.">
+<style>
+/* Marketing front door for the desk. Same palette as the app (frontend/src/styles.css)
+   so a visitor who clicks through does not feel handed to a different product. */
+:root{
+  --bg:#0A0B0F; --surface:#12141A; --surface2:#171A21;
+  --border:#1E212B; --border2:#262A35;
+  --text:#E8EAED; --muted:#8A909C; --faint:#5B616D;
+  --accent:#4C82F7; --accent-dk:#2E5FCB; --gold:#E6B450; --buy:#3E9B72; --sell:#C65B5B;
+  --ui:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --mono:ui-monospace,'SF Mono','Cascadia Code',Menlo,monospace;
+  --max:1080px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--ui);line-height:1.6;
+     -webkit-font-smoothing:antialiased}
+.wrap{max-width:var(--max);margin:0 auto;padding:0 24px}
+section{padding:84px 0;border-top:1px solid var(--border)}
+section:first-of-type{border-top:0}
+h1{font-size:clamp(38px,6vw,68px);line-height:1.04;letter-spacing:-.03em;font-weight:700}
+h2{font-size:clamp(26px,3.4vw,38px);line-height:1.15;letter-spacing:-.02em;font-weight:650;margin-bottom:14px}
+h3{font-size:18px;font-weight:650;margin-bottom:6px}
+p{color:var(--muted);font-size:16.5px}
+.lede{font-size:clamp(18px,2.2vw,23px);color:var(--muted);margin-top:20px;max-width:44ch;line-height:1.5}
+.kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.2em;text-transform:uppercase;
+        color:var(--faint);margin-bottom:18px}
+strong{color:var(--text);font-weight:650}
+
+/* header */
+header{position:sticky;top:0;z-index:20;background:rgba(10,11,15,.86);
+       backdrop-filter:blur(10px);border-bottom:1px solid var(--border)}
+header .wrap{display:flex;align-items:center;justify-content:space-between;height:62px}
+.logo{font-weight:700;letter-spacing:-.02em;font-size:18px}
+.logo span{color:var(--accent)}
+nav{display:flex;gap:22px;align-items:center}
+nav a{color:var(--muted);text-decoration:none;font-size:14px}
+nav a:hover{color:var(--text)}
+
+/* buttons */
+.btn{display:inline-block;padding:13px 22px;border-radius:9px;font-size:15px;font-weight:600;
+     text-decoration:none;border:1px solid var(--accent-dk);color:#fff;
+     background:linear-gradient(180deg,var(--accent),var(--accent-dk));
+     box-shadow:0 6px 18px rgba(76,130,247,.28);transition:filter .15s,box-shadow .15s}
+.btn:hover{filter:brightness(1.08);box-shadow:0 8px 24px rgba(76,130,247,.4)}
+.btn.ghost{background:none;border-color:var(--border2);color:var(--muted);box-shadow:none}
+.btn.ghost:hover{color:var(--text);border-color:var(--faint)}
+.cta-row{display:flex;gap:12px;flex-wrap:wrap;margin-top:34px}
+.note{font-family:var(--mono);font-size:12px;color:var(--faint);margin-top:16px}
+
+/* hero */
+.hero{padding:96px 0 76px}
+.pill{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;
+      color:var(--buy);background:rgba(62,155,114,.1);border:1px solid rgba(62,155,114,.35);
+      border-radius:999px;padding:6px 13px;margin-bottom:26px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--buy)}
+
+/* grids */
+.grid{display:grid;gap:18px;margin-top:34px}
+.g3{grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
+.g4{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+.card{background:var(--surface);border:1px solid var(--border2);border-radius:14px;padding:24px}
+.card.accent{border-left:3px solid var(--accent)}
+.card.buy{border-left:3px solid var(--buy)}
+.card p{font-size:15px}
+
+/* the privacy proof */
+.eyes{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px;margin-top:28px}
+.eye{background:var(--surface);border:1px solid var(--border2);border-radius:14px;padding:22px 14px;text-align:center}
+.eye .who{font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.eye .n{font-size:44px;font-weight:700;letter-spacing:-.03em;margin:6px 0 2px}
+.eye .sub{font-size:12.5px;color:var(--faint)}
+.eye.zero{border-color:rgba(62,155,114,.55);background:rgba(62,155,114,.07)}
+.eye.zero .n{color:var(--buy)}
+.eye.own .n{color:var(--accent)}
+
+/* the two numbers */
+.vs{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:30px}
+@media(max-width:640px){.vs{grid-template-columns:1fr}}
+.vs .card .lab{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;
+               text-transform:uppercase;color:var(--muted)}
+.vs .fig{font-size:44px;font-weight:700;letter-spacing:-.03em;margin:10px 0 4px}
+.vs .fig small{font-size:17px;font-weight:600}
+.vs .lo{border-color:rgba(198,91,91,.4)} .vs .lo .fig{color:var(--sell)}
+.vs .hi{border-color:rgba(230,180,80,.45)} .vs .hi .fig{color:var(--gold)}
+.punch{margin-top:24px;font-size:clamp(19px,2.4vw,26px);font-weight:650;color:var(--text);
+       letter-spacing:-.015em}
+.src{font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-top:14px}
+
+/* steps */
+.steps{counter-reset:s;display:grid;gap:14px;margin-top:30px}
+.step{display:flex;gap:16px;background:var(--surface);border:1px solid var(--border2);
+      border-radius:12px;padding:20px 22px}
+.step::before{counter-increment:s;content:counter(s);font-family:var(--mono);font-size:13px;
+              color:var(--accent);border:1px solid var(--border2);border-radius:8px;
+              min-width:32px;height:32px;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+
+table{width:100%;border-collapse:collapse;margin-top:26px;font-size:15px}
+th,td{text-align:left;padding:12px 10px;border-bottom:1px solid var(--border)}
+th{font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:600}
+td.mono{font-family:var(--mono);font-size:13.5px}
+
+footer{border-top:1px solid var(--border);padding:44px 0 60px}
+footer p{font-size:14px}
+a.inline{color:var(--accent);text-decoration:none}
+a.inline:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="logo">Cross<span>Desk</span></div>
+    <nav>
+      <a href="#problem">Problem</a>
+      <a href="#how">How it works</a>
+      <a href="#pricing">Pricing</a>
+      <a href="/pitch/">Pitch deck</a>
+      <a href="/desk" class="btn" style="padding:9px 16px;font-size:14px">Open the desk</a>
+    </nav>
+  </div>
+</header>
+
+<!-- ---------------- hero ---------------- -->
+<section class="hero">
+  <div class="wrap">
+    <div class="pill"><span class="dot"></span> Live on the Canton Network · package crossdesk 2.0.0</div>
+    <h1>Price discovery, attested&nbsp;NAV<br>and settlement — on one ledger.</h1>
+    <p class="lede">A tokenised fund needs three things on day one. Today that's three vendors and
+      a reconciliation. CrossDesk makes it one ledger event.</p>
+    <div class="cta-row">
+      <a class="btn" href="/desk">Open the desk →</a>
+      <a class="btn ghost" href="#pilot">Run a 90-day pilot</a>
+    </div>
+    <p class="note">No signup. The desk is live — switch parties and watch the order book change.</p>
+  </div>
+</section>
+
+<!-- ---------------- problem ---------------- -->
+<section id="problem">
+  <div class="wrap">
+    <div class="kicker">The problem</div>
+    <h2>Three companies. Three fees. One number.</h2>
+    <p style="max-width:60ch">To launch a tokenised fund you hire an <strong>exchange</strong> to
+      discover a price, an <strong>administrator</strong> to strike the NAV, and a
+      <strong>custodian</strong> to settle the shares. Each hands a number to the next — and the
+      gaps between them are where the money leaks.</p>
+
+    <div class="grid g3">
+      <div class="card">
+        <h3>The arbitrage is expensive</h3>
+        <p>Closing a fund's discount means three legs on three venues, carrying price risk between
+          each. So arbitrageurs quote wide and only show up when the gap is big. The fund's own
+          investors pay that spread.</p>
+      </div>
+      <div class="card">
+        <h3>A public chain makes it worse</h3>
+        <p>Put the order book on a public chain and the mempool <em>is</em> the book. Every resting
+          order is visible before it executes. Index funds are estimated to leak
+          <strong>$1–2bn a year</strong> to exactly this.</p>
+      </div>
+      <div class="card">
+        <h3>The NAV is one firm's assertion</h3>
+        <p>Oracles put NAVs on-chain, but they only <strong>deliver</strong> a number one
+          administrator already decided — struck once a day, stale the moment it's signed.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ---------------- how ---------------- -->
+<section id="how">
+  <div class="wrap">
+    <div class="kicker">How it works</div>
+    <h2>One venue. Three mechanisms.</h2>
+    <div class="steps">
+      <div class="step"><div>
+        <h3>A sealed closing auction discovers the price</h3>
+        <p>Everyone lodges orders nobody can see. At the close the venue uncrosses the whole book at
+          one uniform price — one the orders determine, not one the operator supplies.</p>
+      </div></div>
+      <div class="step"><div>
+        <h3>A K-of-N committee attests what has no market</h3>
+        <p>And it signs the <strong>recipe</strong> — base, rate, day-count — not a number. So the
+          ledger keeps deriving the value every second between strikes instead of going stale for
+          twenty-four hours.</p>
+      </div></div>
+      <div class="step"><div>
+        <h3>Creation and redemption settle against that number</h3>
+        <p>In kind, atomically, all-or-nothing. Deliver the underlyings, receive shares — or the
+          reverse. The mechanism that keeps a fund glued to its NAV.</p>
+      </div></div>
+      <div class="step"><div>
+        <h3>Cash-settled perpetuals hedge the wait</h3>
+        <p>A market maker can be flat on price between creating and selling, which turns the
+          arbitrage into a fully-hedged basis trade rather than a directional bet.</p>
+      </div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ---------------- privacy ---------------- -->
+<section id="privacy">
+  <div class="wrap">
+    <div class="kicker">The part that can't be copied</div>
+    <h2>Dark pre-trade. Lit post-trade.</h2>
+    <p style="max-width:60ch">On Canton a contract is visible only to its signatories. A resting
+      order is signed by the venue and the trader and observed by <strong>nobody</strong> — so a
+      sealed book isn't a feature we bolted on, it's the default. One order book, four resting
+      orders, four parties looking at it:</p>
+    <div class="eyes">
+      <div class="eye"><div class="who">Venue</div><div class="n">4</div><div class="sub">the operator</div></div>
+      <div class="eye own"><div class="who">Alice</div><div class="n">1</div><div class="sub">only her own</div></div>
+      <div class="eye own"><div class="who">Bob</div><div class="n">1</div><div class="sub">only his own</div></div>
+      <div class="eye zero"><div class="who">Auditor</div><div class="n">0</div><div class="sub">every fill · not one order</div></div>
+    </div>
+    <p class="punch">Unbuildable on a public chain. Unprovable in a private database.</p>
+    <p class="src">Verified on the shared Canton participant. Every fill still prints to a public tape that names nobody.</p>
+  </div>
+</section>
+
+<!-- ---------------- pricing ---------------- -->
+<section id="pricing">
+  <div class="wrap">
+    <div class="kicker">Why this is a business</div>
+    <h2>Same computation. Two price tags.</h2>
+    <div class="vs">
+      <div class="card lo">
+        <div class="lab">Calculating a NAV</div>
+        <div class="fig">0.325<small> bps</small></div>
+        <p>What a fund accountant charges to strike a daily NAV. Disclosed by Brown Brothers
+          Harriman in an SEC filing — and it fell 19% at the last renewal.</p>
+      </div>
+      <div class="card hi">
+        <div class="lab">Publishing an official price</div>
+        <div class="fig">3<small> bps + $600k/yr</small></div>
+        <p>What State Street pays S&amp;P Dow Jones for SPY. Index providers take roughly a third
+          of every ETF management fee on earth.</p>
+      </div>
+    </div>
+    <p class="punch">One is accounting. One is a benchmark. Ten to fifteen times the money.</p>
+    <p class="src">BBH Trust, Form N-CSR FY2023 · An, Benetton &amp; Song, <em>Journal of Financial Economics</em></p>
+
+    <table>
+      <thead><tr><th>Line</th><th>Who pays</th><th>Price</th></tr></thead>
+      <tbody>
+        <tr><td><strong>NAV-as-a-service</strong> — a private, auditable daily strike</td><td>the issuer</td><td class="mono">$50–150k/yr flat → 1–3 bps at scale</td></tr>
+        <tr><td><strong>Execution</strong> — notional crossed at the close</td><td>traders</td><td class="mono">bps on notional</td></tr>
+        <tr><td><strong>Platform licence</strong> — run the venue for your own members</td><td>market infrastructure</td><td class="mono">annual licence</td></tr>
+      </tbody>
+    </table>
+    <p class="src">Your administrator loses nothing. It keeps the mandate and the fee — and becomes one of the signers.</p>
+  </div>
+</section>
+
+<!-- ---------------- live ---------------- -->
+<section id="live">
+  <div class="wrap">
+    <div class="kicker">What's running today</div>
+    <h2>Not a mockup.</h2>
+    <div class="grid g4">
+      <div class="card buy"><h3>Order books</h3><p>A continuous book with price-time priority, plus the sealed cross.</p></div>
+      <div class="card buy"><h3>Private OTC</h3><p>Bilateral atomic delivery-versus-payment.</p></div>
+      <div class="card buy"><h3>Leverage</h3><p>Cash-settled perpetuals — margin, funding rate, liquidation.</p></div>
+      <div class="card buy"><h3>Treasury tools</h3><p>An accruing money-market NAV and in-kind create &amp; redeem.</p></div>
+    </div>
+    <div class="grid g4" style="margin-top:18px">
+      <div class="card"><h3>4.16 cBTC</h3><p>Real BitSafe cBTC claimed through the CIP-56 registry flow, on their own templates.</p></div>
+      <div class="card"><h3>30 templates</h3><p>Around 15,700 lines of Daml across the settlement, auction, committee and perpetual layers.</p></div>
+      <div class="card"><h3>213 scenarios</h3><p>Every settlement path asserts total cash before equals total cash after.</p></div>
+      <div class="card"><h3>crossdesk 2.0.0</h3><p>Registered on a shared Canton participant, running against the real Ledger API.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ---------------- deck ---------------- -->
+<section id="deck">
+  <div class="wrap">
+    <div class="kicker">The four-minute version</div>
+    <h2>The pitch deck, as delivered.</h2>
+    <p style="max-width:60ch">Twelve slides and a screen recording of the desk executing a hedged
+      arbitrage on a live Canton participant — the problem, the mechanism, the numbers and the
+      ask. Arrow keys to advance; it runs in the browser.</p>
+    <div class="cta-row">
+      <a class="btn" href="/pitch/">Open the deck →</a>
+      <a class="btn ghost" href="mailto:s.borjas@lucilla.ca?subject=CrossDesk">Ask me something</a>
+    </div>
+    <p class="note">Press <strong>F</strong> for full screen, <strong>P</strong> to print it as a PDF.</p>
+  </div>
+</section>
+
+<!-- ---------------- pilot ---------------- -->
+<section id="pilot">
+  <div class="wrap">
+    <div class="kicker">The ask</div>
+    <h2>One pilot fund. Ninety days. Shadow mode.</h2>
+    <p style="max-width:62ch">We strike the NAV alongside whoever strikes it today, and publish
+      both. <strong>Nobody switches. Nothing is at risk.</strong> At the end you own a signed,
+      auditable price history a regulator can read — and a daily measurement of how far your
+      current mark drifts between strikes.</p>
+    <div class="grid g3">
+      <div class="card accent"><h3>Days 1–30</h3><p>We derive your NAV from the signed recipe. One signer — you. You get a continuous indicative NAV you don't have today.</p></div>
+      <div class="card accent"><h3>Days 31–60</h3><p>Your administrator joins as a second signer. The fixing becomes genuinely multi-party.</p></div>
+      <div class="card accent"><h3>Days 61–90</h3><p>A market maker or collateral taker joins. K-of-N is real, and the price history is the artefact.</p></div>
+    </div>
+    <div class="cta-row">
+      <a class="btn" href="mailto:s.borjas@lucilla.ca?subject=CrossDesk%20pilot">Start a pilot conversation</a>
+      <a class="btn ghost" href="/desk">Open the desk first →</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p><strong>CrossDesk</strong> — price discovery, attested NAV and atomic settlement for
+      tokenised funds. Built on the <a class="inline" href="https://www.canton.network" rel="noopener">Canton Network</a>.</p>
+    <p style="margin-top:10px;color:var(--faint);font-size:13px">
+      The demo desk runs on a shared Canton devnet participant. Instruments in the demo basket are
+      issued for demonstration; the cBTC integration is a real CIP-56 registry claim.
+      Figures cited carry their sources.
+    </p>
+    <p style="margin-top:14px">
+      <a class="inline" href="mailto:s.borjas@lucilla.ca">s.borjas@lucilla.ca</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

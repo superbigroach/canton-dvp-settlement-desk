@@ -6,7 +6,7 @@
   "description": "Simple Buy/Sell product UI for the Canton DvP Settlement Desk",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && node scripts/arrange-dist.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

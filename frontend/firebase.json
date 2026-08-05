@@ -1,13 +1,35 @@
 {
   "hosting": {
     "public": "dist",
-    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
     "rewrites": [
       {
         "source": "/api/**",
-        "run": { "serviceId": "crossdesk-devnet-api", "region": "us-central1" }
+        "run": {
+          "serviceId": "crossdesk-devnet-api",
+          "region": "us-central1"
+        }
       },
-      { "source": "**", "destination": "/index.html" }
+      {
+        "source": "/desk",
+        "destination": "/desk/index.html"
+      },
+      {
+        "source": "/desk/**",
+        "destination": "/desk/index.html"
+      },
+      {
+        "source": "/pitch",
+        "destination": "/pitch/index.html"
+      },
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
     ]
   }
 }
