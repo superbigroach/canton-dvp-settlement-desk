@@ -1,0 +1,603 @@
+-- Perpetual.daml
+-- ===========================================================================
+-- LEVERAGED LONG AND SHORT ON A TOKENISED FUND — cash-settled perpetuals.
+-- ===========================================================================
+-- WHY THIS FILE EXISTS. The desk can already price a fund and issue its shares
+-- in kind. What it could not do is let anyone take a VIEW on that fund without
+-- holding it, or hedge one they do hold. Creation and redemption move real
+-- underlyings, which means an arbitrageur must find and fund the whole basket
+-- before it can act — and a holder who wants to reduce exposure for a week has
+-- no instrument at all. Both are solved by the same thing: a cash-settled
+-- perpetual on the fund's mark.
+--
+-- It also completes the arbitrage loop the fund layer starts. A share that
+-- drifts from NAV is only corrected if somebody can take the other side of the
+-- drift, and the cheapest way to take that side is synthetic rather than
+-- physical. Creation/redemption keeps the fund honest over hours; a perp keeps
+-- it honest over seconds.
+--
+-- ---------------------------------------------------------------------------
+-- WHAT IT IS, IN ONE PARAGRAPH
+-- ---------------------------------------------------------------------------
+-- A `PerpMarket` tracks one instrument's mark — for a fund, its NAV. Traders
+-- post USDC collateral and open a `PerpPosition`, long or short, whose notional
+-- may exceed that collateral up to `maxLeverage`. Positions are marked against
+-- the market's index continuously: a long gains what the mark gains, a short
+-- gains what it loses. `ApplyFunding` periodically moves cash between the
+-- position and the venue at the attested funding rate, which is the mechanism
+-- that pulls the perp's own price back toward the index. A position whose
+-- equity falls below `maintenanceMarginBps` of notional may be `Liquidate`d by
+-- anyone, because a position that cannot pay its losses is everyone's problem.
+--
+-- ---------------------------------------------------------------------------
+-- 🔴 WHO IS THE COUNTERPARTY, SAID PLAINLY
+-- ---------------------------------------------------------------------------
+-- The venue's `insurance` pool. A trader's profit is paid FROM it and a
+-- trader's loss is paid INTO it. That is the broker/CFD model, and it is the
+-- honest description of what this module does — it is NOT a matched book where
+-- every long is paired with a short.
+--
+-- The consequence, stated rather than hidden: if open interest is lopsided the
+-- pool carries directional risk, and a large enough adverse move could exhaust
+-- it. Real perpetual venues answer this with (a) a funding rate that makes the
+-- crowded side pay the thin side until the imbalance closes, which this module
+-- has, and (b) an insurance fund plus auto-deleveraging, which it does not. So:
+-- `openLong` and `openShort` are tracked on the market so the imbalance is
+-- always visible and always provable, and the funding rate is the lever the
+-- committee turns. A production venue would add ADL. This one does not pretend
+-- to have it.
+--
+-- ---------------------------------------------------------------------------
+-- WHERE THE MARK COMES FROM, AND WHY THAT MATTERS HERE MOST OF ALL
+-- ---------------------------------------------------------------------------
+-- `indexPrice` is set by the operator from the same attested mark the rest of
+-- the desk values against — the committee's NavFixing, or the auction's print.
+-- It is NOT a separate oracle, and that is the whole point: a leveraged
+-- position is liquidated against this number, so an index a single party can
+-- move at will is an index a single party can use to liquidate people. Feeding
+-- it from a K-of-N attestation is not a nicety on a leveraged product, it is
+-- the difference between a market and a trap.
+--
+-- ---------------------------------------------------------------------------
+-- WHAT IS DELIBERATELY NOT HERE
+-- ---------------------------------------------------------------------------
+--   * auto-deleveraging (ADL) — see above
+--   * partial closes: a position is closed whole. Reducing means close and reopen.
+--   * cross-margin: each position carries its own collateral. No portfolio netting.
+--   * a perp order book: positions open AT the index, not against resting bids.
+--     Matching perps through `ContinuousBook` is the obvious next step and would
+--     give the perp its own price, which is what a funding rate is meant to
+--     measure the gap to. Today the funding rate is attested rather than derived.
+-- ===========================================================================
+
+module Perpetual where
+
+import Holding
+import DA.Optional ()
+
+-- ---------------------------------------------------------------------------
+-- Sides and arithmetic
+-- ---------------------------------------------------------------------------
+
+data PositionSide = Long | Short
+  deriving (Eq, Show)
+
+-- Basis points, as a divisor. 10,000 bps = 1.
+bpsDivisor : Decimal
+bpsDivisor = 10000.0
+
+-- | Notional value of a position: what it controls, not what it cost.
+notionalOf : Decimal -> Decimal -> Decimal
+notionalOf size price = size * price
+
+-- | UNREALISED P&L. The only asymmetry in the module, and it is the definition
+-- of the two sides: a long earns the rise, a short earns the fall.
+unrealisedPnl : PositionSide -> Decimal -> Decimal -> Decimal -> Decimal
+unrealisedPnl Long  size entry mark = size * (mark - entry)
+unrealisedPnl Short size entry mark = size * (entry - mark)
+
+-- | Equity — collateral plus (or minus) what the position is currently worth.
+-- This is the number liquidation is judged on, because it is what the trader
+-- would walk away with if the position closed at `mark` right now.
+equityOf : PositionSide -> Decimal -> Decimal -> Decimal -> Decimal -> Decimal
+equityOf side size entry mark collateral =
+  collateral + unrealisedPnl side size entry mark
+
+-- | The floor equity may not fall below before anyone may close the position.
+maintenanceOf : Decimal -> Decimal -> Decimal -> Decimal
+maintenanceOf size mark maintenanceMarginBps =
+  notionalOf size mark * maintenanceMarginBps / bpsDivisor
+
+-- | A position is liquidatable when marking it to the index leaves less equity
+-- than the maintenance floor. Strictly less: exactly at the floor is still alive.
+isLiquidatable : PositionSide -> Decimal -> Decimal -> Decimal -> Decimal -> Decimal -> Bool
+isLiquidatable side size entry mark collateral maintenanceMarginBps =
+  equityOf side size entry mark collateral < maintenanceOf size mark maintenanceMarginBps
+
+-- | FUNDING. Positive rate = longs pay shorts; negative = shorts pay longs.
+-- Charged on NOTIONAL, not on collateral, because the imbalance a funding rate
+-- exists to correct is an imbalance of exposure.
+fundingPayment : PositionSide -> Decimal -> Decimal -> Decimal -> Decimal
+fundingPayment side size mark ratePerInterval =
+  let charge = notionalOf size mark * ratePerInterval
+  in case side of
+       Long  -> charge          -- a long PAYS a positive rate
+       Short -> negate charge   -- a short RECEIVES it
+
+-- ---------------------------------------------------------------------------
+-- THE FUNDING RATE IS DERIVED, NOT FETCHED.
+-- ---------------------------------------------------------------------------
+-- A perpetual has no expiry, so nothing forces its price to converge on the
+-- thing it tracks. The funding rate IS that force: when the perp trades above
+-- the index, longs pay shorts, which makes being long expensive and being short
+-- profitable until the gap closes. It is a spring, and its tension is the gap.
+--
+-- So the rate is not a number anyone chooses and it is emphatically not a number
+-- fetched from another exchange — Binance's funding rate is a fact about
+-- Binance's book, not about this one. It is computed from THIS venue's own perp
+-- price against THIS venue's own index:
+--
+--     premium  = (perpMark - indexPrice) / indexPrice
+--     funding  = clamp(premium + interest, ±cap)
+--
+-- `interest` is the cost-of-carry term every venue carries (the difference
+-- between funding the quote currency and funding the base). It is small, fixed
+-- per market, and exists so a perfectly-tracking perp still pays something.
+--
+-- `cap` matters more than it looks: an uncapped premium on a thin book lets one
+-- printed trade at an absurd price levy an arbitrary charge on every open
+-- position. The cap turns a manipulation into a bounded cost.
+--
+-- ⚠️ WHERE perpMark COMES FROM, HONESTLY. Deriving it needs the perp to TRADE —
+-- a price of its own, from a book. `ContinuousBook` is that book and pointing it
+-- at a perp instrument is the intended next step. Until then `perpMark` is
+-- supplied to `DeriveFunding`, which computes the rate deterministically from it
+-- rather than accepting a rate outright. That is a smaller trust surface — the
+-- venue can be wrong about what the perp traded at, and the tape contradicts it —
+-- but it is not zero, and calling it zero would be a lie.
+
+-- | Cost-of-carry term. Small, fixed, and the reason a perfectly-tracking perp
+-- still pays: 0.01% per interval is the convention most venues settled on.
+defaultInterestComponent : Decimal
+defaultInterestComponent = 0.0001
+
+-- | The premium: how far the perp is trading from what it tracks, as a fraction.
+premiumOf : Decimal -> Decimal -> Decimal
+premiumOf perpMark index = (perpMark - index) / index
+
+-- | Clamp to ±cap. An uncapped premium on a thin book is an arbitrary levy on
+-- every open position, so this is a safety rail rather than a refinement.
+clampRate : Decimal -> Decimal -> Decimal
+clampRate cap r
+  | r >  cap = cap
+  | r < -cap = -cap
+  | otherwise = r
+
+-- | THE RATE. Pure, total, and re-executed by every validator — which is what
+-- makes it checkable rather than asserted.
+deriveFunding : Decimal -> Decimal -> Decimal -> Decimal -> Decimal
+deriveFunding perpMark index interest cap =
+  clampRate cap (premiumOf perpMark index + interest)
+
+-- ===========================================================================
+-- PerpMarket — one instrument's perpetual market.
+-- ===========================================================================
+template PerpMarket
+  with
+    operator       : Party
+    auditor        : Party
+    participants   : [Party]
+    instrumentId   : Text     -- what is tracked: a fund ("LX1"), or any marked asset
+    cashInstrument : Text     -- collateral and settlement unit, e.g. "USDC"
+    -- THE INDEX. Set from the desk's attested mark — the committee's NavFixing or
+    -- the auction's print. Never an independent oracle: see the header.
+    indexPrice     : Decimal
+    -- Signed. Positive = longs pay shorts. Attested, not derived — a derived rate
+    -- needs a perp price to compare against, which needs a perp order book.
+    fundingRate    : Decimal
+    -- Ceiling on |funding| per interval. Bounds what one printed trade on a thin
+    -- book can levy on everyone who is open.
+    fundingRateCap : Decimal
+    maxLeverage    : Decimal  -- 10.0 = a position may be 10x its collateral
+    maintenanceMarginBps : Decimal
+    -- OPEN INTEREST, both sides. Tracked so the pool's directional exposure is a
+    -- ledger fact rather than something the venue asserts. `openLong - openShort`
+    -- is exactly what the funding rate exists to close.
+    openLong       : Decimal
+    openShort      : Decimal
+    -- The venue's pool: profits are paid from it, losses into it.
+    insurance      : Optional (ContractId Holding)
+    isOpen         : Bool
+  where
+    signatory operator
+    observer auditor :: participants
+
+    ensure indexPrice > 0.0
+        && fundingRateCap > 0.0 && fundingRateCap < 0.01
+        && maxLeverage > 0.0
+        && maintenanceMarginBps > 0.0
+        && maintenanceMarginBps < bpsDivisor
+        && openLong >= 0.0
+        && openShort >= 0.0
+
+    -- =====================================================================
+    -- OPEN — post collateral, take leveraged exposure.
+    -- =====================================================================
+    -- CONSUMING, because open interest moves. The caller threads the successor
+    -- market cid forward, the same discipline the auction and the book use.
+    choice OpenPosition : (ContractId PerpMarket, ContractId PerpPosition)
+      with
+        trader       : Party
+        side         : PositionSide
+        size         : Decimal
+        collateral   : Decimal            -- USDC to post
+        collateralCid : ContractId Holding
+      controller trader
+      do
+        assertMsg "the perpetual market is closed" isOpen
+        assertMsg "size must be positive" (size > 0.0)
+        assertMsg "collateral must be positive" (collateral > 0.0)
+        assertMsg "submitter must be a registered participant" (trader `elem` participants)
+
+        let notional = notionalOf size indexPrice
+        -- THE LEVERAGE GATE. Checked before anything moves, and stated as a
+        -- comparison on notional rather than a division so a zero collateral can
+        -- never produce a division by zero on the way to being rejected.
+        assertMsg
+          ("leverage exceeds the market maximum: notional " <> show notional
+            <> " against collateral " <> show collateral)
+          (notional <= collateral * maxLeverage)
+
+        -- MAINTENANCE MUST BE SATISFIABLE AT ENTRY. Opening a position that is
+        -- already liquidatable is not a trade, it is a gift to whoever notices
+        -- first — so the same test liquidation uses is applied at open, against
+        -- the entry price where P&L is zero by construction.
+        assertMsg "collateral is below the maintenance floor for this size"
+          (collateral >= maintenanceOf size indexPrice maintenanceMarginBps)
+
+        -- Lock the collateral and disclose it to the venue, exactly as a sealed
+        -- order's backing is locked. The trader keeps ownership; the venue can
+        -- see and move it, which is what settlement at close requires.
+        locked <- reservePerp collateralCid collateral operator cashInstrument trader
+
+        now <- getTime
+        posCid <- create PerpPosition with
+          operator; auditor; trader
+          instrumentId; cashInstrument
+          side; size
+          entryPrice = indexPrice
+          collateral
+          collateralCid = locked
+          openedAt = now
+          lastFundingAt = now
+          maintenanceMarginBps
+
+        marketCid <- create this with
+          openLong  = if side == Long  then openLong  + size else openLong
+          openShort = if side == Short then openShort + size else openShort
+
+        pure (marketCid, posCid)
+
+    -- =====================================================================
+    -- SET THE INDEX — republish the mark this market is judged against.
+    -- =====================================================================
+    -- The operator's authority here is the sharpest in the module: this number
+    -- decides who gets liquidated. It is fed from the committee's attested mark,
+    -- which is why the committee exists. A venue that could move it freely could
+    -- liquidate at will, so the honest place for this to end up is a choice that
+    -- takes a NavFixing cid and reads the price off it rather than accepting a
+    -- Decimal. That is the next change, and it is stated here rather than implied.
+    choice SetIndex : ContractId PerpMarket
+      with
+        newIndex : Decimal
+      controller operator
+      do
+        assertMsg "index must be positive" (newIndex > 0.0)
+        create this with indexPrice = newIndex
+
+    -- DERIVE the rate from what the perp is trading at. Preferred over
+    -- `SetFundingRate`: the operator supplies an OBSERVATION (what the perp
+    -- printed at) and the ledger computes the consequence, so the number every
+    -- position is charged is one anyone can recompute and the tape can refute.
+    choice DeriveFunding : ContractId PerpMarket
+      with
+        perpMark : Decimal   -- what the perpetual itself last traded at
+      controller operator
+      do
+        assertMsg "perp mark must be positive" (perpMark > 0.0)
+        let rate = deriveFunding perpMark indexPrice
+                     defaultInterestComponent fundingRateCap
+        create this with fundingRate = rate
+
+    -- The manual override. Kept for a market whose perp has no book yet, and
+    -- bounded by the same cap so it cannot exceed what a derivation could.
+    choice SetFundingRate : ContractId PerpMarket
+      with
+        newRate : Decimal
+      controller operator
+      do
+        -- A rate of 100% per interval would confiscate the notional in one
+        -- application; bound it well inside anything a real venue charges.
+        assertMsg "funding rate exceeds this market's cap"
+          (newRate >= -fundingRateCap && newRate <= fundingRateCap)
+        create this with fundingRate = newRate
+
+    -- Fund the venue's pool. Without it, no trader can ever be paid a profit.
+    choice FundInsurance : ContractId PerpMarket
+      with
+        poolCid : ContractId Holding
+      controller operator
+      do
+        h <- fetch poolCid
+        assertMsg "insurance pool must be the market's cash instrument"
+          (h.instrumentId == cashInstrument)
+        assertMsg "insurance pool must be owned by the operator" (h.owner == operator)
+        -- THE POOL IS DISCLOSED TO EVERY PARTICIPANT, and that is a feature twice
+        -- over. Mechanically, a trader closing a winning position must be able to
+        -- FETCH the contract that pays it — settlement happens under the trader's
+        -- submission, and Daml will not let a party fetch what it is not a
+        -- stakeholder of. Substantively, the size of the fund standing behind
+        -- every open position is exactly what a trader is entitled to know before
+        -- taking leverage on this venue; real perpetual exchanges publish it for
+        -- the same reason. Both point the same way, so the pool is public.
+        disclosed <- discloseToAll poolCid participants
+        create this with insurance = Some disclosed
+
+    -- Settlement's one write-back to the market: the pool contract id may have
+    -- changed (a Split leaves a new remainder) and open interest must fall by the
+    -- size just closed. Kept as a single choice so `settlePerp` cannot update one
+    -- without the other.
+    choice SetPoolAndInterest : ContractId PerpMarket
+      with
+        newPool    : Optional (ContractId Holding)
+        closedSide : PositionSide
+        closedSize : Decimal
+      controller operator
+      do
+        let l = if closedSide == Long  then openLong  - closedSize else openLong
+            s = if closedSide == Short then openShort - closedSize else openShort
+        -- Open interest is a conservation check, not a display field: it can only
+        -- fall by a size that was actually opened, so a negative result means the
+        -- ledger lost track of a position and the transaction should die here.
+        assertMsg "closing more open interest than was opened" (l >= 0.0 && s >= 0.0)
+        create this with insurance = newPool; openLong = l; openShort = s
+
+    choice CloseMarket : ContractId PerpMarket
+      controller operator
+      do create this with isOpen = False
+
+    choice ReopenMarket : ContractId PerpMarket
+      controller operator
+      do create this with isOpen = True
+
+-- ===========================================================================
+-- PerpPosition — one trader's leveraged exposure.
+-- ===========================================================================
+-- Signed by operator AND trader: the venue must be able to move the collateral
+-- to settle, and the trader must have authorised the position that binds it.
+-- Observed by the auditor and nobody else — a position is as private as a
+-- resting order, and for the same reason.
+template PerpPosition
+  with
+    operator       : Party
+    auditor        : Party
+    trader         : Party
+    instrumentId   : Text
+    cashInstrument : Text
+    side           : PositionSide
+    size           : Decimal
+    entryPrice     : Decimal
+    collateral     : Decimal
+    collateralCid  : ContractId Holding
+    openedAt       : Time
+    lastFundingAt  : Time
+    maintenanceMarginBps : Decimal
+  where
+    signatory operator, trader
+    observer auditor
+
+    ensure size > 0.0 && entryPrice > 0.0 && collateral > 0.0
+
+    -- =====================================================================
+    -- CLOSE — realise the P&L and hand back what is left.
+    -- =====================================================================
+    -- The trader closes at the market's CURRENT index, which it must pass in as
+    -- the market cid rather than a number, so the price used is the one on the
+    -- ledger at this instant and not one the caller chose.
+    choice ClosePosition : (ContractId PerpMarket, Decimal)
+      with
+        marketCid : ContractId PerpMarket
+      controller trader
+      do
+        settlePerp self marketCid operator auditor trader instrumentId cashInstrument
+          side size entryPrice collateral collateralCid maintenanceMarginBps False
+
+    -- =====================================================================
+    -- LIQUIDATE — the venue closes a position that can no longer pay.
+    -- =====================================================================
+    -- 🔴 A TRADE-OFF, NOT AN OVERSIGHT, AND IT IS WORTH STATING EXACTLY.
+    --
+    -- Permissionless liquidation — the DeFi default, where any bot may close any
+    -- underwater position for a fee — requires that positions be PUBLIC. A
+    -- liquidator cannot act on what it cannot see, and Daml enforces that
+    -- literally: a party may not fetch a contract it is not a stakeholder of.
+    --
+    -- A `PerpPosition` here is signed by operator and trader and observed only by
+    -- the auditor. A rival cannot see your size, your entry or how close you are
+    -- to being closed — which is the same property the sealed book and the dark
+    -- resting order have, and on a LEVERAGED product it matters more, not less:
+    -- a visible liquidation price is an invitation to push the market into it,
+    -- and hunting stops is a real strategy that real venues have been sued over.
+    --
+    -- The two cannot both be had. This venue keeps privacy and makes liquidation
+    -- the OPERATOR's duty. The cost, said plainly: prompt liquidation now depends
+    -- on the venue doing its job, where a public book would have had a hundred
+    -- bots competing to do it. A production venue would close that gap with a
+    -- disclosed liquidation-price commitment — enough for a keeper to know a
+    -- position is closable without learning whose it is or how big — which is a
+    -- real design and is not built here.
+    choice Liquidate : (ContractId PerpMarket, Decimal)
+      with
+        marketCid : ContractId PerpMarket
+      controller operator
+      do
+        m <- fetch marketCid
+        assertMsg
+          "this position is not liquidatable: its equity is at or above the maintenance floor"
+          (isLiquidatable side size entryPrice m.indexPrice collateral maintenanceMarginBps)
+        settlePerp self marketCid operator auditor trader instrumentId cashInstrument
+          side size entryPrice collateral collateralCid maintenanceMarginBps True
+
+    -- =====================================================================
+    -- FUNDING — the lever that closes an open-interest imbalance.
+    -- =====================================================================
+    -- Charged on notional at the market's attested rate: a positive rate is paid
+    -- BY longs and TO shorts. Settled against the pool rather than peer-to-peer,
+    -- which is the same counterparty model as P&L and is stated in the header.
+    --
+    -- Applied by the operator because it is periodic venue housekeeping, and it
+    -- adjusts COLLATERAL rather than paying out, so a funded position stays
+    -- funded and an underfunded one becomes liquidatable — which is exactly what
+    -- should happen to a position that can no longer carry its own funding.
+    choice ApplyFunding : ContractId PerpPosition
+      with
+        marketCid : ContractId PerpMarket
+      controller operator
+      do
+        m <- fetch marketCid
+        let pay = fundingPayment side size m.indexPrice m.fundingRate
+        -- `pay` > 0 means this position OWES. Reduce its collateral by that much;
+        -- a position that cannot cover it is left liquidatable rather than being
+        -- force-closed here, so the trader keeps the chance to top up.
+        let newCollateral = collateral - pay
+        assertMsg "funding would exhaust the position's collateral" (newCollateral > 0.0)
+        now <- getTime
+        create this with collateral = newCollateral; lastFundingAt = now
+
+    -- Post more collateral to move away from the liquidation price.
+    choice AddCollateral : ContractId PerpPosition
+      with
+        extra    : Decimal
+        extraCid : ContractId Holding
+      controller trader
+      do
+        assertMsg "extra collateral must be positive" (extra > 0.0)
+        locked <- reservePerp extraCid extra operator cashInstrument trader
+        merged <- exercise collateralCid Merge with otherCid = locked
+        create this with collateral = collateral + extra; collateralCid = merged
+
+-- ===========================================================================
+-- settlePerp — the ONE place a position turns back into cash.
+-- ===========================================================================
+-- Close and liquidation differ in who may call them and in nothing else, so they
+-- share this. Duplicating the settlement maths into two choices is how the two
+-- paths drift until one of them can mint money.
+--
+-- THE ACCOUNTING, EXPLICITLY:
+--   equity = collateral + unrealised P&L, floored at zero
+--   profit (equity > collateral): the pool pays the difference to the trader
+--   loss   (equity < collateral): the trader's collateral is split and the loss
+--                                 portion is transferred to the pool
+--   the trader always receives exactly `equity`, and the pool's balance moves by
+--   exactly the opposite amount. Nothing is created and nothing vanishes.
+settlePerp :
+     ContractId PerpPosition -> ContractId PerpMarket
+  -> Party -> Party -> Party -> Text -> Text
+  -> PositionSide -> Decimal -> Decimal -> Decimal -> ContractId Holding -> Decimal
+  -> Bool
+  -> Update (ContractId PerpMarket, Decimal)
+settlePerp _self marketCid operator _auditor trader _instrumentId cashInstrument
+           side size entryPrice collateral collateralCid _maintenanceMarginBps _isLiquidation = do
+  m <- fetch marketCid
+  assertMsg "position and market are for different instruments"
+    (m.cashInstrument == cashInstrument)
+
+  let pnl = unrealisedPnl side size entryPrice m.indexPrice
+      rawEquity = collateral + pnl
+      -- A position can lose more than it posted between two marks. The trader
+      -- cannot be paid a negative amount, and this module has no mechanism to
+      -- pursue the shortfall, so the pool absorbs it — which is the bad debt an
+      -- insurance fund exists to cover and the reason liquidation is prompt and
+      -- permissionless.
+      equity = if rawEquity > 0.0 then rawEquity else 0.0
+
+  -- ---- move the money -----------------------------------------------------
+  if equity > collateral
+    then do
+      -- PROFIT. The pool pays the difference; the trader gets collateral + profit.
+      let profit = equity - collateral
+      pool <- case m.insurance of
+        None -> abort "the venue has no insurance pool funded, so no profit can be paid"
+        Some p -> pure p
+      ph <- fetch pool
+      assertMsg "the insurance pool cannot cover this profit" (ph.amount >= profit)
+      (payout, poolRest) <-
+        if ph.amount == profit
+          then pure (pool, None)
+          else do
+            (a, b) <- exercise pool Split with splitAmount = profit
+            -- A Split produces a FRESH remainder whose disclosure list is inherited
+            -- but whose contract id is new; re-disclosing keeps the invariant that
+            -- the live pool is always readable by everyone who might close against
+            -- it. Without this the pool goes dark after its first payout.
+            b' <- discloseToAll b m.participants
+            pure (a, Some b')
+      _ <- exercise payout Transfer with newOwner = trader
+      -- The collateral returns to the trader untouched.
+      _ <- exercise collateralCid Transfer with newOwner = trader
+      marketCid' <- exercise marketCid SetPoolAndInterest with
+        newPool = poolRest; closedSide = side; closedSize = size
+      pure (marketCid', equity)
+    else do
+      -- LOSS (or flat). The loss portion of the collateral goes to the pool and
+      -- the remainder returns to the trader.
+      let loss = collateral - equity
+      remainderCid <-
+        if loss <= 0.0
+          then pure (Some collateralCid)
+          else if loss >= collateral
+            then do
+              _ <- exercise collateralCid Transfer with newOwner = operator
+              pure None
+            else do
+              (lossSlice, rest) <- exercise collateralCid Split with splitAmount = loss
+              _ <- exercise lossSlice Transfer with newOwner = operator
+              pure (Some rest)
+      case remainderCid of
+        Some r -> do
+          _ <- exercise r Transfer with newOwner = trader
+          pure ()
+        None -> pure ()
+      -- Fold whatever the pool just received back into the pool holding, so the
+      -- venue's cash stays one contract rather than fragmenting per liquidation.
+      marketCid' <- exercise marketCid SetPoolAndInterest with
+        newPool = m.insurance; closedSide = side; closedSize = size
+      pure (marketCid', equity)
+
+-- | Disclose a holding to every party in a list, folding left so the final
+-- contract id carries all of them. Used for the insurance pool, which must stay
+-- readable by anyone who might settle against it.
+discloseToAll : ContractId Holding -> [Party] -> Update (ContractId Holding)
+discloseToAll cid [] = pure cid
+discloseToAll cid (p :: rest) = do
+  next <- exercise cid Disclose with newObserver = p
+  discloseToAll next rest
+
+-- | Reserve collateral: same shape as a sealed order's backing, and the same
+-- reasons — exact slice, disclosed to the operator so settlement can move it.
+reservePerp :
+     ContractId Holding -> Decimal -> Party -> Text -> Party
+  -> Update (ContractId Holding)
+reservePerp holdingCid amt operator cashInstrument trader = do
+  h <- fetch holdingCid
+  assertMsg "collateral must be the market's cash instrument"
+    (h.instrumentId == cashInstrument)
+  assertMsg "collateral must belong to the trader" (h.owner == trader)
+  assertMsg "collateral holding is too small" (h.amount >= amt)
+  reserved <-
+    if h.amount == amt
+      then pure holdingCid
+      else do
+        (r, _change) <- exercise holdingCid Split with splitAmount = amt
+        pure r
+  exercise reserved Disclose with newObserver = operator

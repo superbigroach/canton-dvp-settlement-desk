@@ -29,6 +29,8 @@ import com.lucilla.settlement.model.continuousbook.ContinuousBook;
 import com.lucilla.settlement.model.continuousbook.RestingOrder;
 import com.lucilla.settlement.model.continuousbook.TapePrint;
 import com.lucilla.settlement.model.continuousbook.TradeConfirm;
+import com.lucilla.settlement.model.perpetual.PerpMarket;
+import com.lucilla.settlement.model.perpetual.PerpPosition;
 import com.lucilla.settlement.model.settlement.FillRecord;
 import com.lucilla.settlement.model.settlement.SettlementBatch;
 import com.lucilla.settlement.model.settlement.SettlementReceipt;
@@ -1039,6 +1041,82 @@ public class LedgerService {
                     });
             return out;
         });
+    }
+
+    // =====================================================================
+    // LEVERAGED LONG / SHORT — party-aware reads
+    // =====================================================================
+
+    /** Perpetual markets visible to {@code party}. Observed by every participant. */
+    public List<PerpMarketView> perpMarketsVisibleTo(String party) {
+        return withRetry("perp markets for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<PerpMarket.Contract> filter = ContractFilter.of(PerpMarket.COMPANION);
+            List<PerpMarketView> out = new ArrayList<>();
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false,
+                            client.getStateClient().getLedgerEnd().blockingGet())
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (PerpMarket.Contract c : active.activeContracts) {
+                            PerpMarket m = c.data;
+                            out.add(new PerpMarketView(c.id.contractId, m.operator, m.instrumentId,
+                                    m.cashInstrument, m.indexPrice, m.fundingRate, m.fundingRateCap,
+                                    m.maxLeverage, m.maintenanceMarginBps,
+                                    m.openLong, m.openShort, m.insurance.isPresent(), m.isOpen));
+                        }
+                    });
+            return out;
+        });
+    }
+
+    /**
+     * Positions visible to {@code party} — and a position is PRIVATE.
+     *
+     * <p>A {@code PerpPosition} is signed by operator + trader and observed only by
+     * the auditor, so a trader sees its own book and nobody else's. On a leveraged
+     * product that matters more than it does on a resting order: a visible
+     * liquidation price is an invitation to push the market into it.
+     */
+    public List<PerpPositionView> perpPositionsVisibleTo(String party) {
+        return withRetry("perp positions for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<PerpPosition.Contract> filter = ContractFilter.of(PerpPosition.COMPANION);
+            List<PerpPositionView> out = new ArrayList<>();
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false,
+                            client.getStateClient().getLedgerEnd().blockingGet())
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (PerpPosition.Contract c : active.activeContracts) {
+                            PerpPosition p = c.data;
+                            out.add(new PerpPositionView(c.id.contractId, labelOf(p.trader),
+                                    p.instrumentId, p.cashInstrument,
+                                    p.side.toString().equalsIgnoreCase("LONG") ? "Long" : "Short",
+                                    p.size, p.entryPrice, p.collateral,
+                                    p.maintenanceMarginBps, p.openedAt, p.lastFundingAt));
+                        }
+                    });
+            return out;
+        });
+    }
+
+    /** Flat view of a perpetual market. {@code insured} = a pool is funded. */
+    public record PerpMarketView(
+            String contractId, String operator, String instrumentId, String cashInstrument,
+            java.math.BigDecimal indexPrice, java.math.BigDecimal fundingRate,
+            java.math.BigDecimal fundingRateCap, java.math.BigDecimal maxLeverage,
+            java.math.BigDecimal maintenanceMarginBps,
+            java.math.BigDecimal openLong, java.math.BigDecimal openShort,
+            boolean insured, boolean isOpen) {
+    }
+
+    /** Flat view of one leveraged position. */
+    public record PerpPositionView(
+            String contractId, String traderLabel, String instrumentId, String cashInstrument,
+            String side, java.math.BigDecimal size, java.math.BigDecimal entryPrice,
+            java.math.BigDecimal collateral, java.math.BigDecimal maintenanceMarginBps,
+            java.time.Instant openedAt, java.time.Instant lastFundingAt) {
     }
 
     /** Flat view of a continuous session. */

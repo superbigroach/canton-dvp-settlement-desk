@@ -22,7 +22,7 @@ import java.util.List;
 import java.util.Objects;
 
 public class PublishTo extends DamlRecord<PublishTo> {
-  public static final String _packageId = "16b1d7198cf7c7ec9373fe2d1bdb48ab1770fe7ffcb7281ad87048ebecd45ab4";
+  public static final String _packageId = "d81a41bb2e1aa776f0aa94408776a420c484ef52e52923ccb232d86139f082be";
 
   public final String attestor;
 

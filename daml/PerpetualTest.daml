@@ -1,0 +1,417 @@
+-- PerpetualTest.daml
+-- ===========================================================================
+-- Tests for the leveraged long/short layer.
+--
+-- THE PROPERTY THAT MATTERS MOST IS CONSERVATION. This module moves other
+-- people's money against a price that moves, so the first thing every test does
+-- after the interesting part is count the cash — the trader's plus the pool's,
+-- before and after. A perpetuals engine that mints a cent per close is worse
+-- than one that refuses to open, because the second failure is visible.
+-- ===========================================================================
+
+module PerpetualTest where
+
+import Daml.Script
+import DA.Assert ((===))
+import DA.List ()
+
+import Holding
+import Perpetual
+
+usdc : Text
+usdc = "USDC"
+
+lx1 : Text
+lx1 = "LX1"
+
+data PDesk = PDesk
+  with
+    issuer  : Party
+    venue   : Party
+    auditor : Party
+    alice   : Party
+    bob     : Party
+
+pdeskSetup : Script PDesk
+pdeskSetup = do
+  issuer  <- allocatePartyByHint (PartyIdHint "Issuer")
+  venue   <- allocatePartyByHint (PartyIdHint "Venue")
+  auditor <- allocatePartyByHint (PartyIdHint "Auditor")
+  alice   <- allocatePartyByHint (PartyIdHint "Alice")
+  bob     <- allocatePartyByHint (PartyIdHint "Bob")
+  pure (PDesk issuer venue auditor alice bob)
+
+pmint : Party -> Text -> Party -> Decimal -> Script (ContractId Holding)
+pmint issuer instrumentId owner amount =
+  submit issuer do createCmd Holding with issuer; instrumentId; owner; amount; disclosedTo = []
+
+-- | Open a market on the fund at 100, 10x max, 5% maintenance, funded pool.
+openMarket : PDesk -> Decimal -> Script (ContractId PerpMarket)
+openMarket PDesk{..} poolSize = do
+  mcid <- submit venue do
+    createCmd PerpMarket with
+      operator = venue; auditor; participants = [alice, bob]
+      instrumentId = lx1; cashInstrument = usdc
+      indexPrice = 100.0
+      fundingRate = 0.0; fundingRateCap = 0.0075
+      maxLeverage = 10.0
+      maintenanceMarginBps = 500.0     -- 5%
+      openLong = 0.0; openShort = 0.0
+      insurance = None
+      isOpen = True
+  pool <- pmint issuer usdc venue poolSize
+  submit venue do exerciseCmd mcid FundInsurance with poolCid = pool
+
+owned : Party -> Text -> Script Decimal
+owned p inst = do
+  hs <- query @Holding p
+  pure $ foldl (\acc (_, h) -> if h.instrumentId == inst && h.owner == p then acc + h.amount else acc) 0.0 hs
+
+-- | Every unit in existence, read through the issuer — the only vantage point
+-- from which conservation can be checked at all.
+totalCash : Party -> Script Decimal
+totalCash issuer = do
+  hs <- query @Holding issuer
+  pure $ foldl (\acc (_, h) -> if h.instrumentId == usdc then acc + h.amount else acc) 0.0 hs
+
+-- ---------------------------------------------------------------------------
+-- Opening
+-- ---------------------------------------------------------------------------
+
+-- 10 units at an index of 100 is 1,000 of notional. With 200 of collateral that
+-- is 5x — inside the market's 10x ceiling — so it opens, and open interest moves.
+testOpenLongWithinLeverage : Script ()
+testOpenLongWithinLeverage = script do
+  d@PDesk{..} <- pdeskSetup
+  m0 <- openMarket d 10000.0
+  cash <- pmint issuer usdc alice 500.0
+
+  (m1, pos) <- submit alice do
+    exerciseCmd m0 OpenPosition with
+      trader = alice; side = Long; size = 10.0
+      collateral = 200.0; collateralCid = cash
+
+  Some market <- queryContractId venue m1
+  market.openLong === 10.0
+  market.openShort === 0.0
+
+  Some p <- queryContractId alice pos
+  p.entryPrice === 100.0
+  p.collateral === 200.0
+  -- COLLATERAL IS RESERVED, NOT TAKEN. Posting margin splits the holding and
+  -- discloses the slice to the venue so settlement can move it — but the trader
+  -- still OWNS every unit of it until a close or a liquidation says otherwise.
+  -- So Alice's balance is unchanged at 500: 200 committed, 300 free, none gone.
+  aliceOwned <- owned alice usdc
+  aliceOwned === 500.0
+
+-- 10 units at 100 is 1,000 of notional; 50 of collateral is 20x against a 10x
+-- ceiling, so the gate refuses it before anything moves.
+testLeverageCeilingIsEnforced : Script ()
+testLeverageCeilingIsEnforced = script do
+  d@PDesk{..} <- pdeskSetup
+  m0 <- openMarket d 10000.0
+  cash <- pmint issuer usdc alice 500.0
+  submitMustFail alice do
+    exerciseCmd m0 OpenPosition with
+      trader = alice; side = Long; size = 10.0
+      collateral = 50.0; collateralCid = cash
+
+-- A position that would be liquidatable the instant it opened is not a trade.
+-- 10 at 100 needs 5% of 1,000 = 50 maintenance; 40 of collateral is below it.
+testCannotOpenBelowMaintenance : Script ()
+testCannotOpenBelowMaintenance = script do
+  d@PDesk{..} <- pdeskSetup
+  m0 <- openMarket d 10000.0
+  cash <- pmint issuer usdc alice 500.0
+  submitMustFail alice do
+    exerciseCmd m0 OpenPosition with
+      trader = alice; side = Long; size = 10.0
+      collateral = 40.0; collateralCid = cash
+
+-- An outsider cannot open on a market it is not a participant of.
+testOutsiderCannotOpen : Script ()
+testOutsiderCannotOpen = script do
+  d@PDesk{..} <- pdeskSetup
+  m0 <- openMarket d 10000.0
+  eve <- allocatePartyByHint (PartyIdHint "Eve")
+  cash <- pmint issuer usdc eve 500.0
+  submitMustFail eve do
+    exerciseCmd m0 OpenPosition with
+      trader = eve; side = Long; size = 1.0
+      collateral = 200.0; collateralCid = cash
+
+-- ---------------------------------------------------------------------------
+-- P&L — and the conservation check that guards it
+-- ---------------------------------------------------------------------------
+
+-- Long 10 from 100, index to 110: +10 per unit = +100. The trader receives
+-- collateral + profit, the pool pays exactly the profit, and the total supply of
+-- cash is unchanged.
+testLongProfitIsConserved : Script ()
+testLongProfitIsConserved = script do
+  d@PDesk{..} <- pdeskSetup
+  m0 <- openMarket d 10000.0
+  cash <- pmint issuer usdc alice 500.0
+  before <- totalCash issuer
+
+  (m1, pos) <- submit alice do
+    exerciseCmd m0 OpenPosition with
+      trader = alice; side = Long; size = 10.0
+      collateral = 200.0; collateralCid = cash
+  m2 <- submit venue do exerciseCmd m1 SetIndex with newIndex = 110.0
+  (m3, equity) <- submit alice do exerciseCmd pos ClosePosition with marketCid = m2
+
+  equity === 300.0                       -- 200 collateral + 100 profit
+  aliceCash <- owned alice usdc
+  aliceCash === 600.0                    -- 300 unreserved + 300 returned
+  venueCash <- owned venue usdc
+  venueCash === 9900.0                   -- pool paid 100
+
+  after <- totalCash issuer
+  after === before                       -- ⬅ nothing minted, nothing burned
+
+  Some market <- queryContractId venue m3
+  market.openLong === 0.0                -- open interest unwound
+
+-- Short 10 from 100, index to 90: the short earns the fall, same 100.
+testShortProfitIsConserved : Script ()
+testShortProfitIsConserved = script do
+  d@PDesk{..} <- pdeskSetup
+  m0 <- openMarket d 10000.0
+  cash <- pmint issuer usdc bob 500.0
+  before <- totalCash issuer
+
+  (m1, pos) <- submit bob do
+    exerciseCmd m0 OpenPosition with
+      trader = bob; side = Short; size = 10.0
+      collateral = 200.0; collateralCid = cash
+  m2 <- submit venue do exerciseCmd m1 SetIndex with newIndex = 90.0
+  (_, equity) <- submit bob do exerciseCmd pos ClosePosition with marketCid = m2
+
+  equity === 300.0
+  after <- totalCash issuer
+  after === before
+
+-- A loss moves the other way: the trader's collateral is split and the loss
+-- portion goes to the pool. Long 10 from 100, index to 95 = −50.
+testLossIsPaidToThePoolAndConserved : Script ()
+testLossIsPaidToThePoolAndConserved = script do
+  d@PDesk{..} <- pdeskSetup
+  m0 <- openMarket d 10000.0
+  cash <- pmint issuer usdc alice 500.0
+  before <- totalCash issuer
+
+  (m1, pos) <- submit alice do
+    exerciseCmd m0 OpenPosition with
+      trader = alice; side = Long; size = 10.0
+      collateral = 200.0; collateralCid = cash
+  m2 <- submit venue do exerciseCmd m1 SetIndex with newIndex = 95.0
+  (_, equity) <- submit alice do exerciseCmd pos ClosePosition with marketCid = m2
+
+  equity === 150.0                       -- 200 − 50
+  aliceCash <- owned alice usdc
+  aliceCash === 450.0                    -- 300 unreserved + 150 back
+  venueCash <- owned venue usdc
+  venueCash === 10050.0                  -- pool gained the 50
+
+  after <- totalCash issuer
+  after === before
+
+-- ---------------------------------------------------------------------------
+-- Liquidation
+-- ---------------------------------------------------------------------------
+
+-- Long 10 from 100 on 200 of collateral. At an index of 84 the position is worth
+-- 200 − 160 = 40 against a maintenance floor of 5% × 840 = 42 — so it is under
+-- water and anyone may close it.
+testLiquidationWhenEquityFallsBelowMaintenance : Script ()
+testLiquidationWhenEquityFallsBelowMaintenance = script do
+  d@PDesk{..} <- pdeskSetup
+  m0 <- openMarket d 10000.0
+  cash <- pmint issuer usdc alice 500.0
+  before <- totalCash issuer
+
+  (m1, pos) <- submit alice do
+    exerciseCmd m0 OpenPosition with
+      trader = alice; side = Long; size = 10.0
+      collateral = 200.0; collateralCid = cash
+  m2 <- submit venue do exerciseCmd m1 SetIndex with newIndex = 84.0
+
+  -- THE VENUE liquidates. Not permissionless, and deliberately so: a keeper
+  -- cannot liquidate what it cannot see, and positions here are private. The
+  -- trade-off is argued in full at the choice.
+  (_, equity) <- submit venue do
+    exerciseCmd pos Liquidate with marketCid = m2
+  equity === 40.0
+
+  after <- totalCash issuer
+  after === before
+
+-- A healthy position cannot be liquidated by a rival who would like it closed.
+testHealthyPositionCannotBeLiquidated : Script ()
+testHealthyPositionCannotBeLiquidated = script do
+  d@PDesk{..} <- pdeskSetup
+  m0 <- openMarket d 10000.0
+  cash <- pmint issuer usdc alice 500.0
+  (m1, pos) <- submit alice do
+    exerciseCmd m0 OpenPosition with
+      trader = alice; side = Long; size = 10.0
+      collateral = 200.0; collateralCid = cash
+  -- 98 leaves equity 180 against a 49 floor: comfortably alive.
+  m2 <- submit venue do exerciseCmd m1 SetIndex with newIndex = 98.0
+  submitMustFail venue do
+    exerciseCmd pos Liquidate with marketCid = m2
+
+-- Topping up collateral moves the liquidation price away, and a position that
+-- WOULD have been liquidatable no longer is.
+testAddCollateralAvertsLiquidation : Script ()
+testAddCollateralAvertsLiquidation = script do
+  d@PDesk{..} <- pdeskSetup
+  m0 <- openMarket d 10000.0
+  cash <- pmint issuer usdc alice 1000.0
+  (m1, pos) <- submit alice do
+    exerciseCmd m0 OpenPosition with
+      trader = alice; side = Long; size = 10.0
+      collateral = 200.0; collateralCid = cash
+
+  top <- pmint issuer usdc alice 300.0
+  pos2 <- submit alice do
+    exerciseCmd pos AddCollateral with extra = 300.0; extraCid = top
+
+  Some p <- queryContractId alice pos2
+  p.collateral === 500.0
+
+  m2 <- submit venue do exerciseCmd m1 SetIndex with newIndex = 84.0
+  -- Equity is now 500 − 160 = 340, far above the 42 floor.
+  submitMustFail venue do
+    exerciseCmd pos2 Liquidate with marketCid = m2
+
+-- ---------------------------------------------------------------------------
+-- Funding
+-- ---------------------------------------------------------------------------
+
+-- A positive rate is paid BY longs. 0.001 on 1,000 of notional = 1, taken from
+-- collateral rather than paid out — so an underfunded position becomes
+-- liquidatable instead of being force-closed behind the trader's back.
+testPositiveFundingIsPaidByLongs : Script ()
+testPositiveFundingIsPaidByLongs = script do
+  d@PDesk{..} <- pdeskSetup
+  m0 <- openMarket d 10000.0
+  cash <- pmint issuer usdc alice 500.0
+  (m1, pos) <- submit alice do
+    exerciseCmd m0 OpenPosition with
+      trader = alice; side = Long; size = 10.0
+      collateral = 200.0; collateralCid = cash
+
+  m2 <- submit venue do exerciseCmd m1 SetFundingRate with newRate = 0.001
+  pos2 <- submit venue do exerciseCmd pos ApplyFunding with marketCid = m2
+
+  Some p <- queryContractId alice pos2
+  p.collateral === 199.0
+
+-- ...and RECEIVED by shorts, which is the whole point: the crowded side pays the
+-- thin side until the imbalance closes.
+testPositiveFundingIsReceivedByShorts : Script ()
+testPositiveFundingIsReceivedByShorts = script do
+  d@PDesk{..} <- pdeskSetup
+  m0 <- openMarket d 10000.0
+  cash <- pmint issuer usdc bob 500.0
+  (m1, pos) <- submit bob do
+    exerciseCmd m0 OpenPosition with
+      trader = bob; side = Short; size = 10.0
+      collateral = 200.0; collateralCid = cash
+
+  m2 <- submit venue do exerciseCmd m1 SetFundingRate with newRate = 0.001
+  pos2 <- submit venue do exerciseCmd pos ApplyFunding with marketCid = m2
+
+  Some p <- queryContractId bob pos2
+  p.collateral === 201.0
+
+-- A rate large enough to confiscate the notional in one application is refused.
+testFundingRateIsBounded : Script ()
+testFundingRateIsBounded = script do
+  d@PDesk{..} <- pdeskSetup
+  m0 <- openMarket d 10000.0
+  submitMustFail venue do exerciseCmd m0 SetFundingRate with newRate = 0.5
+
+-- ---------------------------------------------------------------------------
+-- The pool
+-- ---------------------------------------------------------------------------
+
+-- A venue that has not funded its pool cannot pay a profit, and says so rather
+-- than silently settling at zero.
+testProfitWithoutAPoolIsRefused : Script ()
+testProfitWithoutAPoolIsRefused = script do
+  PDesk{..} <- pdeskSetup
+  m0 <- submit venue do
+    createCmd PerpMarket with
+      operator = venue; auditor; participants = [alice, bob]
+      instrumentId = lx1; cashInstrument = usdc
+      indexPrice = 100.0; fundingRate = 0.0; fundingRateCap = 0.0075
+      maxLeverage = 10.0; maintenanceMarginBps = 500.0
+      openLong = 0.0; openShort = 0.0
+      insurance = None                 -- ⬅ never funded
+      isOpen = True
+  cash <- pmint issuer usdc alice 500.0
+  (m1, pos) <- submit alice do
+    exerciseCmd m0 OpenPosition with
+      trader = alice; side = Long; size = 10.0
+      collateral = 200.0; collateralCid = cash
+  m2 <- submit venue do exerciseCmd m1 SetIndex with newIndex = 110.0
+  submitMustFail alice do exerciseCmd pos ClosePosition with marketCid = m2
+
+-- A pool too small to cover the profit is refused rather than partially paid.
+testPoolTooSmallIsRefused : Script ()
+testPoolTooSmallIsRefused = script do
+  d@PDesk{..} <- pdeskSetup
+  m0 <- openMarket d 10.0            -- pool holds 10; the profit will be 100
+  cash <- pmint issuer usdc alice 500.0
+  (m1, pos) <- submit alice do
+    exerciseCmd m0 OpenPosition with
+      trader = alice; side = Long; size = 10.0
+      collateral = 200.0; collateralCid = cash
+  m2 <- submit venue do exerciseCmd m1 SetIndex with newIndex = 110.0
+  submitMustFail alice do exerciseCmd pos ClosePosition with marketCid = m2
+
+-- ---------------------------------------------------------------------------
+-- Privacy — a position is as private as a resting order
+-- ---------------------------------------------------------------------------
+testPositionIsPrivateToItsTrader : Script ()
+testPositionIsPrivateToItsTrader = script do
+  d@PDesk{..} <- pdeskSetup
+  m0 <- openMarket d 10000.0
+  cash <- pmint issuer usdc alice 500.0
+  (_, _) <- submit alice do
+    exerciseCmd m0 OpenPosition with
+      trader = alice; side = Long; size = 10.0
+      collateral = 200.0; collateralCid = cash
+
+  aliceSees <- query @PerpPosition alice
+  length aliceSees === 1
+  -- Bob is a participant of the MARKET and still sees nothing of Alice's book.
+  bobSees <- query @PerpPosition bob
+  length bobSees === 0
+  -- The venue signs it, so it sees it; the auditor observes it. Nobody else.
+  venueSees <- query @PerpPosition venue
+  length venueSees === 1
+  auditorSees <- query @PerpPosition auditor
+  length auditorSees === 1
+
+-- ---------------------------------------------------------------------------
+-- Arithmetic, with no ledger at all
+-- ---------------------------------------------------------------------------
+testPerpArithmeticUnit : Script ()
+testPerpArithmeticUnit = script do
+  unrealisedPnl Long  10.0 100.0 110.0 === 100.0
+  unrealisedPnl Long  10.0 100.0  90.0 === -100.0
+  unrealisedPnl Short 10.0 100.0  90.0 === 100.0
+  unrealisedPnl Short 10.0 100.0 110.0 === -100.0
+  notionalOf 10.0 100.0 === 1000.0
+  maintenanceOf 10.0 100.0 500.0 === 50.0
+  equityOf Long 10.0 100.0 84.0 200.0 === 40.0
+  -- 40 < 42, so liquidatable at 84 but not at 98.
+  isLiquidatable Long 10.0 100.0 84.0 200.0 500.0 === True
+  isLiquidatable Long 10.0 100.0 98.0 200.0 500.0 === False
+  fundingPayment Long  10.0 100.0 0.001 === 1.0
+  fundingPayment Short 10.0 100.0 0.001 === -1.0

@@ -647,6 +647,92 @@ public final class Dtos {
     }
 
     // =====================================================================
+    // LEVERAGED LONG / SHORT (daml/Perpetual.daml)
+    // =====================================================================
+
+    public record PerpMarketRequest(
+            @NotBlank String instrumentId,
+            String cashInstrument,          // defaults to USDC
+            BigDecimal indexPrice,          // defaults to the instrument's attested mark
+            BigDecimal maxLeverage,         // defaults to 10x
+            BigDecimal maintenanceMarginBps) {  // defaults to 500 (5%)
+    }
+
+    /**
+     * A market, with the two numbers that describe its risk: {@code skew} is
+     * {@code openLong - openShort}, the directional exposure the venue's pool is
+     * carrying, and {@code fundingRate} is the lever that closes it.
+     */
+    public record PerpMarketResponse(
+            String contractId, String instrumentId, String cashInstrument,
+            BigDecimal indexPrice, BigDecimal fundingRate, BigDecimal fundingRateCap,
+            BigDecimal maxLeverage, BigDecimal maintenanceMarginBps,
+            BigDecimal openLong, BigDecimal openShort, BigDecimal skew,
+            boolean insured, boolean isOpen) {
+    }
+
+    public record PerpFundRequest(
+            @NotBlank String instrumentId,
+            String cashInstrument,
+            @NotNull @Positive BigDecimal amount) {
+    }
+
+    public record PerpIndexRequest(
+            @NotBlank String instrumentId,
+            String cashInstrument,
+            /** Omit to read the instrument's attested mark, which is the safe path. */
+            BigDecimal indexPrice) {
+    }
+
+    public record PerpFundingRequest(
+            @NotBlank String instrumentId,
+            String cashInstrument,
+            /** What the perpetual itself last traded at. The rate is DERIVED from it. */
+            @NotNull @Positive BigDecimal perpMark) {
+    }
+
+    public record PerpOpenRequest(
+            @NotBlank String trader,
+            @NotBlank String side,          // Long | Short
+            @NotNull @Positive BigDecimal size,
+            @NotBlank String instrumentId,
+            String cashInstrument,
+            @NotNull @Positive BigDecimal collateral) {
+    }
+
+    public record PerpCloseRequest(@NotBlank String trader) {
+    }
+
+    public record PerpCollateralRequest(
+            @NotBlank String trader,
+            @NotNull @Positive BigDecimal extra) {
+    }
+
+    /**
+     * A position, marked to the market's index.
+     *
+     * <p>{@code liquidationPrice} is the index at which equity meets the maintenance
+     * floor — the number a trader most wants and that no venue shows prominently
+     * enough. {@code liquidatable} is that comparison made now.
+     */
+    public record PerpPositionResponse(
+            String contractId, String trader, String instrumentId, String cashInstrument,
+            String side, BigDecimal size, BigDecimal entryPrice, BigDecimal markPrice,
+            BigDecimal collateral, BigDecimal notional, BigDecimal leverage,
+            BigDecimal unrealisedPnl, BigDecimal equity, BigDecimal maintenance,
+            BigDecimal liquidationPrice, boolean liquidatable,
+            String openedAt, String lastFundingAt) {
+    }
+
+    /** What a close or a liquidation actually realised. */
+    public record PerpCloseResponse(
+            String contractId, String side, BigDecimal size,
+            BigDecimal entryPrice, BigDecimal exitPrice,
+            BigDecimal realisedPnl, BigDecimal payout,
+            PerpMarketResponse market) {
+    }
+
+    // =====================================================================
     // THE CONTINUOUS SESSION (daml/ContinuousBook.daml)
     // =====================================================================
 

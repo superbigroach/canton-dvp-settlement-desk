@@ -31,6 +31,9 @@ import com.lucilla.settlement.model.continuousbook.RestingOrder;
 import com.lucilla.settlement.model.continuousbook.TapePrint;
 import com.lucilla.settlement.model.continuousbook.TimeInForce;
 import com.lucilla.settlement.model.continuousbook.TradeConfirm;
+import com.lucilla.settlement.model.perpetual.PerpMarket;
+import com.lucilla.settlement.model.perpetual.PerpPosition;
+import com.lucilla.settlement.model.perpetual.PositionSide;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -809,6 +812,115 @@ public final class LedgerCommands {
 
     public static com.daml.ledger.javaapi.data.Identifier tradeConfirmTemplateId() {
         return TradeConfirm.TEMPLATE_ID;
+    }
+
+    // =====================================================================
+    // LEVERAGED LONG / SHORT (daml/Perpetual.daml)
+    // =====================================================================
+    // Cash-settled perpetuals on a marked instrument — for a fund, its NAV. The
+    // risk rules (leverage ceiling, maintenance floor, liquidation, conservation
+    // of cash on every settlement path) are all in the choice bodies; nothing here
+    // decides anything.
+
+    /** 10x. A ceiling a venue sets per market, not a constant of the system. */
+    public static final BigDecimal DEFAULT_MAX_LEVERAGE = new BigDecimal("10");
+
+    /** 5% of notional. Below this equity, the position may be closed. */
+    public static final BigDecimal DEFAULT_MAINTENANCE_BPS = new BigDecimal("500");
+
+    /**
+     * Ceiling on |funding| per interval (0.75%). Bounds what one printed trade on
+     * a thin book can levy on everyone who is open — see Perpetual.daml.
+     */
+    public static final BigDecimal DEFAULT_FUNDING_CAP = new BigDecimal("0.0075");
+
+    public static Update<?> createPerpMarket(
+            String operator, String auditor, List<String> participants,
+            String instrumentId, String cashInstrument, BigDecimal indexPrice,
+            BigDecimal maxLeverage, BigDecimal maintenanceMarginBps, BigDecimal fundingRateCap) {
+        return new PerpMarket(operator, auditor, participants, instrumentId, cashInstrument,
+                indexPrice, BigDecimal.ZERO, fundingRateCap, maxLeverage, maintenanceMarginBps,
+                BigDecimal.ZERO, BigDecimal.ZERO, Optional.empty(), true)
+                .create();
+    }
+
+    /**
+     * Open leveraged exposure. CONSUMING on the market (open interest moves), so
+     * the caller threads the successor cid forward — the same discipline the
+     * auction and the continuous book impose.
+     */
+    public static Update<?> openPerpPosition(
+            String marketCid, String trader, PositionSide side, BigDecimal size,
+            BigDecimal collateral, String collateralCid) {
+        return new PerpMarket.ContractId(marketCid)
+                .exerciseOpenPosition(trader, side, size, collateral,
+                        new Holding.ContractId(collateralCid));
+    }
+
+    /** Realise P&L against the market's CURRENT index and return what is left. */
+    public static Update<?> closePerpPosition(String positionCid, String marketCid) {
+        return new PerpPosition.ContractId(positionCid)
+                .exerciseClosePosition(new PerpMarket.ContractId(marketCid));
+    }
+
+    /**
+     * Close a position whose equity has fallen below the maintenance floor.
+     * Operator-controlled, because positions here are PRIVATE and a keeper cannot
+     * liquidate what it cannot see — the trade-off is argued in Perpetual.daml.
+     */
+    public static Update<?> liquidatePerpPosition(String positionCid, String marketCid) {
+        return new PerpPosition.ContractId(positionCid)
+                .exerciseLiquidate(new PerpMarket.ContractId(marketCid));
+    }
+
+    /** Move the position's collateral by the market's funding rate. */
+    public static Update<?> applyPerpFunding(String positionCid, String marketCid) {
+        return new PerpPosition.ContractId(positionCid)
+                .exerciseApplyFunding(new PerpMarket.ContractId(marketCid));
+    }
+
+    public static Update<?> addPerpCollateral(String positionCid, BigDecimal extra, String extraCid) {
+        return new PerpPosition.ContractId(positionCid)
+                .exerciseAddCollateral(extra, new Holding.ContractId(extraCid));
+    }
+
+    /** Republish the index this market is judged against — from the attested mark. */
+    public static Update<?> setPerpIndex(String marketCid, BigDecimal newIndex) {
+        return new PerpMarket.ContractId(marketCid).exerciseSetIndex(newIndex);
+    }
+
+    /**
+     * DERIVE the funding rate from what the perp itself traded at. Preferred over
+     * setting a rate outright: the venue supplies an observation and the ledger
+     * computes the consequence, so the charge is one anyone can recompute.
+     */
+    public static Update<?> derivePerpFunding(String marketCid, BigDecimal perpMark) {
+        return new PerpMarket.ContractId(marketCid).exerciseDeriveFunding(perpMark);
+    }
+
+    public static Update<?> fundPerpInsurance(String marketCid, String poolCid) {
+        return new PerpMarket.ContractId(marketCid)
+                .exerciseFundInsurance(new Holding.ContractId(poolCid));
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier perpMarketTemplateId() {
+        return PerpMarket.TEMPLATE_ID;
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier perpPositionTemplateId() {
+        return PerpPosition.TEMPLATE_ID;
+    }
+
+    /** Long/Short from the wire. */
+    public static PositionSide positionSide(String raw) {
+        if (raw == null) {
+            throw new IllegalArgumentException("side is required (Long or Short)");
+        }
+        return switch (raw.trim().toLowerCase()) {
+            case "long", "buy", "bid" -> PositionSide.LONG;
+            case "short", "sell", "ask" -> PositionSide.SHORT;
+            default -> throw new IllegalArgumentException("side must be Long or Short, got: " + raw);
+        };
     }
 
     /** Bid/Ask for the continuous book. Accepts the auction's Buy/Sell vocabulary too. */

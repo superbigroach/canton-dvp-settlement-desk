@@ -48,15 +48,15 @@ import java.util.Objects;
 import java.util.Set;
 
 public final class FixingProposal extends Template {
-  public static final Identifier TEMPLATE_ID = new Identifier("#canton-dvp-settlement-desk", "Governance", "FixingProposal");
+  public static final Identifier TEMPLATE_ID = new Identifier("#crossdesk", "Governance", "FixingProposal");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("16b1d7198cf7c7ec9373fe2d1bdb48ab1770fe7ffcb7281ad87048ebecd45ab4", "Governance", "FixingProposal");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("d81a41bb2e1aa776f0aa94408776a420c484ef52e52923ccb232d86139f082be", "Governance", "FixingProposal");
 
-  public static final String PACKAGE_ID = "16b1d7198cf7c7ec9373fe2d1bdb48ab1770fe7ffcb7281ad87048ebecd45ab4";
+  public static final String PACKAGE_ID = "d81a41bb2e1aa776f0aa94408776a420c484ef52e52923ccb232d86139f082be";
 
-  public static final String PACKAGE_NAME = "canton-dvp-settlement-desk";
+  public static final String PACKAGE_NAME = "crossdesk";
 
-  public static final PackageVersion PACKAGE_VERSION = new PackageVersion(new int[] {1, 0, 0});
+  public static final PackageVersion PACKAGE_VERSION = new PackageVersion(new int[] {2, 0, 0});
 
   public static final Choice<FixingProposal, Confirm, ContractId> CHOICE_Confirm = 
       Choice.create("Confirm", value$ -> value$.toValue(), value$ -> Confirm.valueDecoder()
