@@ -85,10 +85,10 @@ public class PerpetualController {
 
         BigDecimal index = req.indexPrice() != null
                 ? req.indexPrice()
-                : ledger.referencePriceOf("Issuer", req.instrumentId())
+                : indexFor(req.instrumentId())
                         .orElseThrow(() -> new IllegalArgumentException(
-                                req.instrumentId() + " has no attested mark to index against —"
-                                        + " strike one with the committee first, or send"
+                                req.instrumentId() + " has no attested mark and is not a basket —"
+                                        + " strike a mark with the committee first, or send"
                                         + " indexPrice explicitly"));
 
         List<String> participants = ledger.listParties().stream()
@@ -160,9 +160,9 @@ public class PerpetualController {
 
         BigDecimal index = req.indexPrice() != null
                 ? req.indexPrice()
-                : ledger.referencePriceOf("Issuer", req.instrumentId())
+                : indexFor(req.instrumentId())
                         .orElseThrow(() -> new IllegalArgumentException(
-                                "no attested mark for " + req.instrumentId()));
+                                "no attested mark or basket NAV for " + req.instrumentId()));
         if (req.indexPrice() != null) {
             log.warn("PERP INDEX set EXPLICITLY to {} for {} — not read from an attested mark",
                     index, req.instrumentId());
@@ -372,6 +372,44 @@ public class PerpetualController {
     // =====================================================================
     // helpers
     // =====================================================================
+
+    /**
+     * THE INDEX FOR ONE INSTRUMENT, and a fund is not priced the way an asset is.
+     *
+     * <p>A traded asset carries an attested mark on its {@code Instrument} — the
+     * auction's print or the committee's signature. A FUND does not: its value is
+     * <em>derived</em> from what it holds, so a perpetual on a fund must index on the
+     * fund's NAV per share, computed from the marks of its components.
+     *
+     * <p>That is the correct semantics rather than a convenience. A perp on LX1 is a
+     * leveraged view on the basket, so the number it is liquidated against has to be
+     * the basket's value — and because every component mark is itself attested, the
+     * index inherits the committee's signatures rather than inventing a new authority.
+     * If any component is unmarked the NAV is incomplete and this returns empty, which
+     * is the honest answer: a fund you cannot value is a fund you cannot lever.
+     */
+    private Optional<BigDecimal> indexFor(String instrumentId) {
+        Optional<BigDecimal> mark = ledger.referencePriceOf("Issuer", instrumentId);
+        if (mark.isPresent()) {
+            return mark;
+        }
+        String auditor = ledger.resolveParty("Auditor");
+        var basket = ledger.basketsVisibleTo(auditor).stream()
+                .filter(b -> b.basketId().equals(instrumentId))
+                .findFirst();
+        if (basket.isEmpty()) {
+            return Optional.empty();
+        }
+        BigDecimal nav = BigDecimal.ZERO;
+        for (var c : basket.get().components()) {
+            Optional<BigDecimal> p = ledger.referencePriceOf("Issuer", c.instrumentId());
+            if (p.isEmpty()) {
+                return Optional.empty();   // an incomplete NAV is not an index
+            }
+            nav = nav.add(c.unitsPerShare().multiply(p.get()));
+        }
+        return nav.signum() > 0 ? Optional.of(nav) : Optional.empty();
+    }
 
     private Dtos.PerpMarketResponse viewOf(LedgerService.PerpMarketView m) {
         BigDecimal skew = m.openLong().subtract(m.openShort());

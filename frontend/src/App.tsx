@@ -18,6 +18,7 @@ import CommitteePanel from './CommitteePanel';
 import ContinuousBookPanel from './ContinuousBookPanel';
 import FundPanel from './FundPanel';
 import PendingTransfersPanel from './PendingTransfersPanel';
+import PerpetualPanel from './PerpetualPanel';
 
 const CASH = 'USDC';
 
@@ -1128,6 +1129,23 @@ export default function App() {
             also the clearest demonstration of the privacy property: the book is
             dark pre-trade (even to the auditor), the tape is public post-trade. */}
         <ContinuousBookPanel
+          parties={parties}
+          instruments={instruments}
+          acting={acting}
+          onChanged={() => {
+            void loadHoldings(acting);
+            void loadReceipts(acting);
+          }}
+          flash={flash}
+        />
+
+        {/* -------- Leverage · cash-settled perpetuals --------
+            The one place exposure is taken WITHOUT holding the asset: post cash,
+            get a view, settle in cash. It completes the arbitrage loop the fund
+            layer starts — a share that drifts from NAV is only corrected if
+            somebody can cheaply take the other side, and synthetic is cheaper
+            than funding the whole basket. */}
+        <PerpetualPanel
           parties={parties}
           instruments={instruments}
           acting={acting}

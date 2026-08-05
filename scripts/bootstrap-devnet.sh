@@ -85,6 +85,13 @@ give Bob   CBTC               2
 give Bob   "DEMO:AAPL"       10
 give Bob   "MMF:USYC-REF" 100000
 
+# THE VENUE NEEDS CASH OF ITS OWN. It is the counterparty to every perpetual: a
+# trader's profit is paid FROM the venue's insurance pool and a loss is paid INTO
+# it, so a venue with no balance cannot honour a winning position — and the ledger
+# refuses the close rather than settling at zero, which is the right failure but a
+# baffling one to hit in a demo.
+give Venue USDC          500000
+
 give Bank  USDC         2000000
 give Bank  cETH             100
 give Bank  CBTC              20

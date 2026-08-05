@@ -510,6 +510,68 @@ export interface LiveMark {
   note: string;
 }
 
+// ---- LEVERAGED LONG / SHORT (daml/Perpetual.daml) -------------------------
+
+export type PerpSide = 'Long' | 'Short';
+
+/**
+ * A perpetual market. `skew` is openLong − openShort: the directional exposure
+ * the venue's pool is carrying, and what the funding rate exists to close.
+ */
+export interface PerpMarket {
+  contractId: string;
+  instrumentId: string;
+  cashInstrument: string;
+  indexPrice: number;
+  fundingRate: number;
+  fundingRateCap: number;
+  maxLeverage: number;
+  maintenanceMarginBps: number;
+  openLong: number;
+  openShort: number;
+  skew: number;
+  /** False = no pool funded, so no profit can be paid. */
+  insured: boolean;
+  isOpen: boolean;
+}
+
+/**
+ * One position, marked to the index. `liquidationPrice` is the index at which
+ * equity meets the maintenance floor — the number a trader most wants and that
+ * no venue shows prominently enough.
+ */
+export interface PerpPosition {
+  contractId: string;
+  trader: string;
+  instrumentId: string;
+  cashInstrument: string;
+  side: PerpSide;
+  size: number;
+  entryPrice: number;
+  markPrice: number;
+  collateral: number;
+  notional: number;
+  leverage: number | null;
+  unrealisedPnl: number;
+  equity: number;
+  maintenance: number;
+  liquidationPrice: number | null;
+  liquidatable: boolean;
+  openedAt: string;
+  lastFundingAt: string;
+}
+
+export interface PerpCloseResult {
+  contractId: string;
+  side: PerpSide;
+  size: number;
+  entryPrice: number;
+  exitPrice: number;
+  realisedPnl: number;
+  payout: number;
+  market: PerpMarket;
+}
+
 // ---- THE CONTINUOUS SESSION (daml/ContinuousBook.daml) --------------------
 
 export type BookSideName = 'Bid' | 'Ask';
@@ -1010,6 +1072,72 @@ export const api = {
       `/basket/nav/indicative?basketId=${encodeURIComponent(basketId)}` +
         (actingAs ? `&actingAs=${encodeURIComponent(actingAs)}` : ''),
     ),
+
+  // ---- LEVERAGED LONG / SHORT ------------------------------------------
+
+  perpMarkets: (as = 'Venue') =>
+    req<PerpMarket[]>(`/perp/markets?as=${encodeURIComponent(as)}`),
+
+  openPerpMarket: (body: {
+    instrumentId: string;
+    cashInstrument?: string;
+    indexPrice?: number | null;
+    maxLeverage?: number | null;
+    maintenanceMarginBps?: number | null;
+  }) => req<PerpMarket>('/perp/market', { method: 'POST', body: JSON.stringify(body) }),
+
+  /** Without a funded pool no trader can ever be paid a profit. */
+  fundPerpInsurance: (instrumentId: string, amount: number, cashInstrument = 'USDC') =>
+    req<PerpMarket>('/perp/market/fund', {
+      method: 'POST',
+      body: JSON.stringify({ instrumentId, amount, cashInstrument }),
+    }),
+
+  /** Republish the index from the instrument's ATTESTED mark. */
+  setPerpIndex: (instrumentId: string, indexPrice?: number | null) =>
+    req<PerpMarket>('/perp/market/index', {
+      method: 'POST',
+      body: JSON.stringify({ instrumentId, indexPrice: indexPrice ?? null }),
+    }),
+
+  /** Derive funding from what the perp itself traded at — never fetched. */
+  derivePerpFunding: (instrumentId: string, perpMark: number) =>
+    req<PerpMarket>('/perp/market/funding', {
+      method: 'POST',
+      body: JSON.stringify({ instrumentId, perpMark }),
+    }),
+
+  /** YOUR positions. A position is private to its trader. */
+  perpPositions: (as: string) =>
+    req<PerpPosition[]>(`/perp/positions?as=${encodeURIComponent(as)}`),
+
+  openPerpPosition: (body: {
+    trader: string;
+    side: PerpSide;
+    size: number;
+    instrumentId: string;
+    collateral: number;
+    cashInstrument?: string;
+  }) => req<PerpPosition>('/perp/position', { method: 'POST', body: JSON.stringify(body) }),
+
+  closePerpPosition: (cid: string, trader: string) =>
+    req<PerpCloseResult>(`/perp/position/${encodeURIComponent(cid)}/close`, {
+      method: 'POST',
+      body: JSON.stringify({ trader }),
+    }),
+
+  addPerpCollateral: (cid: string, trader: string, extra: number) =>
+    req<PerpPosition>(`/perp/position/${encodeURIComponent(cid)}/collateral`, {
+      method: 'POST',
+      body: JSON.stringify({ trader, extra }),
+    }),
+
+  /** Venue-side: positions are private, so a keeper cannot do this. */
+  liquidatePerpPosition: (cid: string) =>
+    req<PerpCloseResult>(`/perp/position/${encodeURIComponent(cid)}/liquidate`, { method: 'POST' }),
+
+  applyPerpFunding: (cid: string) =>
+    req<PerpPosition>(`/perp/position/${encodeURIComponent(cid)}/funding`, { method: 'POST' }),
 
   // ---- THE CONTINUOUS SESSION ------------------------------------------
   // The auction's counterpart: limit interest that RESTS and is matched by

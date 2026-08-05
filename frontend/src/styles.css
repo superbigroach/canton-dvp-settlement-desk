@@ -757,3 +757,43 @@ select.cross-instrument:disabled { opacity: 0.55; }
 }
 .party-balances .pb-inst { color: var(--muted); }
 .party-balances .muted { font-size: 12.5px; margin: 0; }
+
+/* ---------------- Leverage (PerpetualPanel) ----------------
+   Reuses the continuous session's controls; adds only what leverage needs — a
+   skew that reads directionally and a row that shouts when it is about to be
+   closed. */
+.perp label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); min-width: 0; }
+.perp input, .perp select {
+  font-family: var(--mono); font-size: 13px; padding: 7px 9px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 92px;
+}
+.perp input:disabled, .perp select:disabled { opacity: 0.55; }
+.perp .row.wrap { flex-wrap: wrap; }
+.perp .row.gap { gap: 12px; }
+.perp .ticket-submit { align-self: flex-end; padding: 7px 14px; font-size: 13px; line-height: 1.2; white-space: nowrap; }
+.perp h3 { margin: 16px 0 8px; font-size: 12px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.perp h3 .sub { font-family: var(--ui); font-size: 11px; text-transform: none; letter-spacing: 0; color: var(--faint); }
+.perp table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12.5px; }
+.perp th {
+  text-align: left; font-family: var(--ui); font-size: 11px; font-weight: 600;
+  letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint);
+  padding: 5px 8px; border-bottom: 1px solid var(--border);
+}
+.perp td { padding: 5px 8px; border-bottom: 1px solid var(--border); color: var(--text); }
+.perp td.muted { color: var(--faint); }
+.perp td.maker { color: var(--buy); }
+.perp td.taker { color: var(--sell); }
+.perp .note { margin: 8px 0 0; font-size: 12px; color: var(--faint); line-height: 1.5; }
+.perp .muted { color: var(--faint); font-size: 12.5px; }
+.perp .error { color: var(--sell); font-size: 12.5px; margin-top: 12px; }
+.perp .link { background: none; border: none; color: var(--faint); font-size: 11px; cursor: pointer; padding: 0 6px 0 0; text-decoration: underline; }
+.perp .link:hover:not(:disabled) { color: var(--accent); }
+.perp .basis { font-family: var(--ui); font-size: 10.5px; color: var(--sell); margin-top: 2px; }
+
+/* A position at the maintenance floor. Loud on purpose. */
+.perp tr.at-risk { background: rgba(198,91,91,0.08); }
+
+/* Which way the venue's pool is exposed. */
+.skew.long  strong { color: var(--buy); }
+.skew.short strong { color: var(--sell); }
