@@ -417,8 +417,44 @@ export default function App() {
   // "here are the terms, take them" is the contestability made visible.
   const holdsMandate = !!mandate?.held;
   const openTerms = terms.find((t) => t.openToActingParty) ?? null;
-  const showLpPanel = !actingIsVenue && (holdsMandate || !!openTerms);
+
+  // THE IMBALANCE IS A VENUE-SIDE VIEW. A trader submits orders and is told nothing
+  // about the residual — which is the same posture NYSE takes toward everyone who is
+  // not the DMM, and the reason the auction stays sealed to the people in it.
+  //
+  // The obligated-seat machinery is still on the LEDGER and still enforced there: the
+  // ledger discloses an ImbalanceDisclosure only to a party holding a live
+  // LiquidityMandate, several may hold one at once, and a provider that misses its
+  // commitment is revoked and barred (daml/LiquidityMandate.daml). What changed is
+  // only who is INVITED to take a seat from this screen. Onboarding a liquidity
+  // provider is a relationship a venue enters deliberately, the way an exchange
+  // approves a member firm — not a button a trader finds mid-session. Narrowing the
+  // eligible roster on the posted terms is how that is expressed on the ledger.
+  const showLpPanel = false;   // retired from the desk screen - see the note above
   const isMandatedLp = holdsMandate && !!imbalance?.disclosed;
+
+  // THE VENUE'S OWN IMBALANCE — arithmetic, not a disclosure.
+  //
+  // The venue signs every sealed order, so it already holds the whole book; summing it
+  // reveals nothing the operator was not already entitled to. That is why this needs no
+  // mandate and no ledger change: an ImbalanceDisclosure exists to tell a party
+  // something it CANNOT see, and the venue is not such a party.
+  const venueImbalance = (() => {
+    if (!actingIsVenue || !mocState?.orders?.length) return null;
+    const buy = mocState.orders
+      .filter((o) => o.side === 'Buy')
+      .reduce((t, o) => t + o.quantity, 0);
+    const sell = mocState.orders
+      .filter((o) => o.side === 'Sell')
+      .reduce((t, o) => t + o.quantity, 0);
+    const net = buy - sell;
+    return {
+      buy,
+      sell,
+      net: Math.abs(net),
+      side: net > 0 ? 'Buy' : net < 0 ? 'Sell' : 'Flat',
+    };
+  })();
   const hasImbalance = isMandatedLp && imbalance?.netSide != null && imbalance.netSide !== 'Flat';
 
   // ACCEPT THE MANDATE — take up the posted seat and become an obligated provider.
@@ -777,6 +813,42 @@ export default function App() {
             as before. WITHOUT one it shows the venue's posted terms and an Accept
             action — because the seat is contestable, and a party that has not taken
             it is not shut out, it simply has not committed yet. */}
+        {/* -------- Imbalance · the VENUE's view --------
+            Unmatched interest is what forces the print to move, so the operator needs
+            it to run an orderly close. A trader is told nothing about it: the book is
+            sealed to the people in it, which is the same posture NYSE takes toward
+            everyone who is not the DMM. */}
+        {actingIsVenue && venueImbalance && (
+          <section className="card lp-imbalance" aria-label="Venue imbalance view">
+            <div className="card-head">
+              <h2>Imbalance</h2>
+              <span className="lp-tag">venue only</span>
+            </div>
+            <p className="hint">
+              The unmatched side of <strong>{asset}</strong>&rsquo;s sealed book. Only the venue
+              sees this — it signs every order, so this is arithmetic on what it already holds,
+              not a disclosure. Traders see nothing about the residual.
+            </p>
+            <div className="cross-meta">
+              <span className={`pill ${venueImbalance.side === 'Flat' ? 'cash' : 'asset'}`}>
+                {venueImbalance.side === 'Flat'
+                  ? 'balanced'
+                  : `${fmt(venueImbalance.net)} ${asset} to ${venueImbalance.side.toLowerCase()}`}
+              </span>
+              <span className="cross-meta-price">
+                {fmt(venueImbalance.buy)} buy · {fmt(venueImbalance.sell)} sell
+              </span>
+            </div>
+            {venueImbalance.side !== 'Flat' && (
+              <p className="hint subtle">
+                Unmatched interest moves the print. A venue that wants a tighter close
+                onboards a liquidity provider to absorb it — an obligation signed in
+                advance, which the ledger models as a mandate.
+              </p>
+            )}
+          </section>
+        )}
+
         {showLpPanel && !holdsMandate && openTerms && (
           <section className="card lp-imbalance" aria-label="Liquidity mandate on offer">
             <div className="card-head">
