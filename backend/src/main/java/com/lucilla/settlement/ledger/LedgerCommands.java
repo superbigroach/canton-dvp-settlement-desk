@@ -777,6 +777,16 @@ public final class LedgerCommands {
                 .exerciseCancelOrder(trader, new RestingOrder.ContractId(orderCid));
     }
 
+    /**
+     * The venue's cancel. Used for an order whose instruction forbids it to rest — an
+     * unmatched IOC or a FOK the ladder could not cover — where leaving it on the book
+     * would strand the trader's collateral and cross the spread.
+     */
+    public static Update<?> killBookOrder(String bookCid, String orderCid) {
+        return new ContinuousBook.ContractId(bookCid)
+                .exerciseKillOrder(new RestingOrder.ContractId(orderCid));
+    }
+
     public static Update<?> closeBookSession(String bookCid) {
         return new ContinuousBook.ContractId(bookCid).exerciseCloseSession();
     }
@@ -821,7 +831,10 @@ public final class LedgerCommands {
      */
     public static TimeInForce timeInForce(String raw, Optional<BigDecimal> limitPrice) {
         if (limitPrice.isEmpty()) {
-            return TimeInForce.IOC;
+            // An unpriced order may not rest, so GTC and AON are illegal for it. FOK is
+            // legal and meaningful (take the whole size at any price, or nothing), so
+            // honour it; anything else becomes IOC.
+            return "FOK".equalsIgnoreCase(raw) ? TimeInForce.FOK : TimeInForce.IOC;
         }
         if (raw == null || raw.isBlank()) {
             return TimeInForce.GTC;
@@ -829,13 +842,10 @@ public final class LedgerCommands {
         return switch (raw.trim().toUpperCase()) {
             case "GTC" -> TimeInForce.GTC;
             case "IOC" -> TimeInForce.IOC;
-            // FOK rides on the ledger's IOC: both refuse to rest, and the difference —
-            // whether a PARTIAL fill is acceptable — is checked by the desk before any
-            // leg moves (see ContinuousBookController). The enum on the ledger has two
-            // values, so this maps to the one whose resting behaviour is identical.
-            case "FOK" -> TimeInForce.IOC;
+            case "FOK" -> TimeInForce.FOK;
+            case "AON" -> TimeInForce.AON;
             default -> throw new IllegalArgumentException(
-                    "timeInForce must be GTC, IOC or FOK, got: " + raw);
+                    "timeInForce must be GTC, IOC, FOK or AON, got: " + raw);
         };
     }
 

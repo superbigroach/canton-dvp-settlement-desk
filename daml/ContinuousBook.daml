@@ -223,8 +223,36 @@ opposite Ask = Bid
 -- here means "the venue must fill or `KillOrder` it in the next transaction", and the
 -- window is one ledger round trip, not zero. That is a property of order lifecycle on
 -- a ledger, not of this module.
-data TimeInForce = GTC | IOC
+--   FOK — fill or kill: fill the WHOLE order immediately or trade nothing at all.
+--         The difference from IOC is precisely whether a PARTIAL fill is acceptable,
+--         and for a size that must not be broken up it is the whole instruction.
+--         `MatchOrder` refuses to commit a partial fill of a FOK aggressor, so the
+--         attempt aborts and no leg moves; the venue then `KillOrder`s it.
+--   AON — all or none: also refuses a partial fill, but MAY REST while it waits for
+--         enough size to arrive. So FOK is "all of it, now, or never" and AON is
+--         "all of it, whenever". An AON that cannot be filled in full simply does not
+--         trade — the attempt aborts and the order is left exactly where it was.
+--
+-- 🔴 AON CUTS BOTH WAYS, and that is the subtle half. A resting AON is a promise the
+-- BOOK makes to its owner: nobody may take a piece of it. So an AON is protected as a
+-- CONTRA too — an aggressor that would fill only part of it is refused. Without that,
+-- "all or none" would mean "all or none, unless someone smaller comes along", which
+-- is not a constraint at all.
+data TimeInForce = GTC | IOC | FOK | AON
   deriving (Eq, Show)
+
+-- Does this instruction forbid a partial fill?
+allOrNothing : TimeInForce -> Bool
+allOrNothing FOK = True
+allOrNothing AON = True
+allOrNothing _   = False
+
+-- May the unfilled remainder rest on the book? IOC and FOK are both immediate
+-- instructions; only GTC and AON wait.
+mayRest : TimeInForce -> Bool
+mayRest IOC = False
+mayRest FOK = False
+mayRest _   = True
 
 -- ---------------------------------------------------------------------------
 -- crossesAt — THE ONE DEFINITION of "would this order trade at this price".
@@ -412,8 +440,12 @@ template ContinuousBook
         -- to trade at any price at any future time — a free option handed to whoever
         -- next crosses it, and the reason no venue lets one sit on the book. It may
         -- TAKE (that is what a market order is for) and its remainder is cancelled.
-        assertMsg "an unpriced (market) order must be immediate-or-cancel — it cannot rest"
-          (case limitPrice of None -> timeInForce == IOC; Some _ -> True)
+        -- AN UNPRICED ORDER MAY NOT REST, whatever its instruction. IOC and FOK are
+        -- both immediate so both are legal; GTC and AON would leave a standing promise
+        -- to trade at any price at any future time, which is the free option this
+        -- module refuses to write.
+        assertMsg "an unpriced (market) order must be immediate — IOC or FOK, never GTC or AON"
+          (case limitPrice of None -> not (mayRest timeInForce); Some _ -> True)
         let lo = bandLowOf  referencePrice bandFraction
             hi = bandHighOf referencePrice bandFraction
         -- A limit outside the band could never legally print here, so accepting it
@@ -571,6 +603,17 @@ template ContinuousBook
         -- TIME IN FORCE. A GTC remainder RESTS (keeping its seqNo — see `Fill`). An IOC
         -- remainder is cancelled here, in the same transaction as the fills, with its
         -- backing returned to the trader and un-disclosed.
+        -- ALL-OR-NOTHING, ENFORCED WHERE IT CANNOT BE SKIPPED. A residual means the
+        -- aggressor was only partly filled, which a FOK or an AON forbids. Asserting
+        -- it HERE — after the legs have been walked, inside the same transaction —
+        -- means the abort unwinds every fill with it: the trader gets all of it or the
+        -- book is untouched. Checking before the walk would need the fillable size
+        -- recomputed outside the engine that computes it, which is how the two drift.
+        assertMsg
+          ("this order forbids a partial fill (" <> show aggr.timeInForce
+            <> "): the reachable ladder does not cover its full size")
+          (not (allOrNothing aggr.timeInForce) || aggrResidual == None)
+
         killed <- case (aggrResidual, aggr.timeInForce) of
           (Some rc, IOC) -> do
             _ <- exercise rc VenueRelease
@@ -974,6 +1017,15 @@ walkBook aggrCid (cCid :: rest) = do
     -- future change that breaks the invariant fails loudly instead of trading at 0.
     None   -> abort "a resting order must be priced — an unpriced order cannot make a market"
   let fillQty = if aggr.quantity <= contra.quantity then aggr.quantity else contra.quantity
+
+  -- A RESTING ALL-OR-NONE MAY NOT BE NIBBLED. The book made its owner a promise that
+  -- nobody takes a piece of it, and an aggressor smaller than the AON would do exactly
+  -- that. Refusing here aborts the whole walk, so the AON is left untouched rather than
+  -- half-consumed — which is the only reading of "all or none" that is a constraint
+  -- rather than a preference.
+  assertMsg
+    "a resting all-or-none order cannot be partially filled"
+    (not (allOrNothing contra.timeInForce) || fillQty == contra.quantity)
 
   -- BOTH LEGS INTO THE VENUE. Each `Fill` runs inside a choice on that trader's own
   -- order, so that trader's authority is present exactly where its money moves.

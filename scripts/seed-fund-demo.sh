@@ -245,6 +245,25 @@ for o in d.get('asks',[]): print('   ASK %-5s %-6s @ %-9s #%s' % (o['trader'],o[
 print('   best bid %s / best ask %s   resting: %s' % (d.get('bestBid'), d.get('bestAsk'), d.get('liveCount')))
 "
 
+# -----------------------------------------------------------------------------
+say "6d · put fund shares in an AP's hands"
+# -----------------------------------------------------------------------------
+# WHO MAKES LX1: the ADMINISTRATOR (Bank) defines the basket - what one share is
+# made of - and an AUTHORISED PARTICIPANT (Alice) creates the shares by delivering
+# those underlyings in kind. The venue does not mint them and neither does the
+# issuer; that split is the point of a primary market.
+#
+# Seeded so a reset leaves a position on screen. Creating shares from an empty
+# Position is a fine demo beat, but starting from nothing means the Fund panel and
+# Position both read as broken until someone thinks to press a button.
+report "create 10 LX1" "$(post /basket/create '{"basketId":"LX1","ap":"Alice","shares":10}')"
+curl -sS "$BASE/holdings?party=Alice" | python3 -c "
+import sys,json
+d=json.load(sys.stdin); agg={}
+for h in d: agg[h['instrumentId']]=agg.get(h['instrumentId'],0)+float(h['amount'])
+print('  Alice now holds:', {k: round(v,4) for k,v in sorted(agg.items())})
+"
+
 say "7 · NAV per share, from the attested marks"
 curl -sS "$BASE/basket/nav?basketId=LX1&party=Auditor" 2>/dev/null | python3 -c "
 import sys,json

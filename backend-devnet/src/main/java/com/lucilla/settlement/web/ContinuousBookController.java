@@ -276,17 +276,55 @@ public class ContinuousBookController {
 
         // CROSS IT, if anything on the other side is reachable.
         List<String> ladder = ladderFor(venue, book.instrumentId(), cash, orderCid);
+        // AN ORDER THAT MAY NOT REST MUST NOT BE LEFT RESTING.
+        //
+        // `PlaceOrder` and `MatchOrder` are two transactions — the taker cannot name its
+        // own contras, because it cannot see them — so there is one commit in between
+        // where the order exists on the book. For GTC and AON that is simply the order
+        // resting, which is what they are for. For IOC and FOK it is a lie: the ledger
+        // refuses to let them rest, and if the match then fails or finds nothing, the
+        // order is still there holding the trader's collateral and crossing the book.
+        // So the venue kills it, which is exactly the duty `ContinuousBook.daml`'s
+        // header assigns it ("the venue must fill or KillOrder it in the next
+        // transaction, and the window is one ledger round trip, not zero").
+        boolean mustNotRest = tif.toString().equalsIgnoreCase("IOC")
+                || tif.toString().equalsIgnoreCase("FOK");
+
         if (ladder.isEmpty()) {
-            // Nothing to trade with. A limit order rests; an unpriced order cannot, and
-            // the ledger already refused to let it rest, so say so plainly rather than
-            // leaving a contract the caller believes is working.
+            if (mustNotRest) {
+                ledger.submit(venue, LedgerCommands.killBookOrder(bookCid, orderCid));
+                log.info("BOOK ORDER killed (no contra, {}) order={}", tif, orderCid);
+                throw new IllegalStateException(
+                        tif + ": nothing on the other side was reachable, so the order was"
+                                + " killed and nothing traded");
+            }
             log.info("BOOK ORDER rests (no contra) order={}", orderCid);
             return created(new Dtos.BookOrderResponse(orderCid, bookCid, opened,
                     book.referencePrice(), List.of(), BigDecimal.ZERO, req.quantity()));
         }
 
-        Transaction matched = ledger.submit(venue,
-                LedgerCommands.matchOrder(bookCid, orderCid, ladder));
+        Transaction matched;
+        try {
+            matched = ledger.submit(venue, LedgerCommands.matchOrder(bookCid, orderCid, ladder));
+        } catch (RuntimeException e) {
+            // The match aborted — for a FOK or an AON that means the ladder did not cover
+            // the full size, which is the instruction working. A FOK is killed; an AON is
+            // LEFT RESTING, because "all or none, whenever" is precisely a promise to wait.
+            if (mustNotRest) {
+                try {
+                    ledger.submit(venue, LedgerCommands.killBookOrder(bookCid, orderCid));
+                } catch (RuntimeException killFailed) {
+                    log.warn("BOOK ORDER {} could not be killed after a failed match: {}",
+                            orderCid, killFailed.toString());
+                }
+                log.info("BOOK ORDER killed after failed match ({}) order={}", tif, orderCid);
+                throw new IllegalStateException(
+                        tif + ": the reachable ladder did not cover the full size, so the"
+                                + " order was killed and nothing traded");
+            }
+            log.info("BOOK ORDER rests after a refused match ({}) order={}", tif, orderCid);
+            throw e;
+        }
         String afterCid = successorBook(matched, bookCid);
 
         // What actually filled: read the confirms this transaction minted for the

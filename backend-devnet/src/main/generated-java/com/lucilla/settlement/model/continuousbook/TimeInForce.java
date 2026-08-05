@@ -15,9 +15,13 @@ import java.util.Map;
 public enum TimeInForce implements DamlEnum<TimeInForce> {
   GTC,
 
-  IOC;
+  IOC,
 
-  private static final com.daml.ledger.javaapi.data.DamlEnum[] __values$ = {new com.daml.ledger.javaapi.data.DamlEnum("GTC"), new com.daml.ledger.javaapi.data.DamlEnum("IOC")};
+  FOK,
+
+  AON;
+
+  private static final com.daml.ledger.javaapi.data.DamlEnum[] __values$ = {new com.daml.ledger.javaapi.data.DamlEnum("GTC"), new com.daml.ledger.javaapi.data.DamlEnum("IOC"), new com.daml.ledger.javaapi.data.DamlEnum("FOK"), new com.daml.ledger.javaapi.data.DamlEnum("AON")};
 
   private static final Map<String, TimeInForce> __enums$ = __buildEnumsMap$();
 
@@ -25,13 +29,15 @@ public enum TimeInForce implements DamlEnum<TimeInForce> {
     Map<String, TimeInForce> m = new HashMap<String, TimeInForce>();
     m.put("GTC", GTC);
     m.put("IOC", IOC);
+    m.put("FOK", FOK);
+    m.put("AON", AON);
     return m;
   }
 
   public static final ValueDecoder<TimeInForce> valueDecoder() {
     return value$ -> {
       String constructor$ = value$.asEnum().orElseThrow(() -> new IllegalArgumentException("Expected DamlEnum to build an instance of the Enum com.lucilla.settlement.model.continuousbook.TimeInForce")).getConstructor();
-      if (!__enums$.containsKey(constructor$)) throw new IllegalArgumentException("Found unknown constructor " + constructor$ + " for enum com.lucilla.settlement.model.continuousbook.TimeInForce, expected one of [GTC, IOC]. This could be a failed enum downgrade.");
+      if (!__enums$.containsKey(constructor$)) throw new IllegalArgumentException("Found unknown constructor " + constructor$ + " for enum com.lucilla.settlement.model.continuousbook.TimeInForce, expected one of [GTC, IOC, FOK, AON]. This could be a failed enum downgrade.");
       return __enums$.get(constructor$);
     } ;
   }

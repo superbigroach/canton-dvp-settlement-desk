@@ -48,9 +48,9 @@ import java.util.Set;
 public final class OperatorCommittee extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#canton-dvp-settlement-desk", "Governance", "OperatorCommittee");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("147ddae1818ea7e3662c51714525ac4d6de9c853914d723962bb7ed563ad363d", "Governance", "OperatorCommittee");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("16b1d7198cf7c7ec9373fe2d1bdb48ab1770fe7ffcb7281ad87048ebecd45ab4", "Governance", "OperatorCommittee");
 
-  public static final String PACKAGE_ID = "147ddae1818ea7e3662c51714525ac4d6de9c853914d723962bb7ed563ad363d";
+  public static final String PACKAGE_ID = "16b1d7198cf7c7ec9373fe2d1bdb48ab1770fe7ffcb7281ad87048ebecd45ab4";
 
   public static final String PACKAGE_NAME = "canton-dvp-settlement-desk";
 

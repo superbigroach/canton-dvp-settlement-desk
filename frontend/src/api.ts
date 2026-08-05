@@ -517,12 +517,12 @@ export type BookSideName = 'Bid' | 'Ask';
  * GTC rests; IOC fills what it can now and cancels the rest; FOK fills the WHOLE
  * order now or none of it.
  *
- * GTC and IOC are values of the ledger's own enum. FOK is enforced by the desk
- * before any leg moves — the on-ledger enum has two values and adding a third is a
- * package change — so an underfilled FOK never trades, but that rule lives in the
- * venue's order handler rather than in the choice body every validator re-executes.
+ * AON also refuses a partial fill but MAY REST, so FOK is "all of it, now, or never"
+ * and AON is "all of it, whenever". All four are values of the ledger's own enum and
+ * every rule is enforced in the choice body: a partial fill of a FOK or an AON aborts
+ * the whole match, and a resting AON cannot be nibbled by a smaller aggressor either.
  */
-export type TimeInForce = 'GTC' | 'IOC' | 'FOK';
+export type TimeInForce = 'GTC' | 'IOC' | 'FOK' | 'AON';
 
 export interface BookSessionRequest {
   instrumentId: string;

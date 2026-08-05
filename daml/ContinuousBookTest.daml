@@ -951,3 +951,119 @@ testArrivalStampsAreMonotonicAndNeverRecycled = script do
     None   -> abort "Alice's order should be resting"
     Some o -> o.seqNo === 2
   pure ()
+
+-- ---------------------------------------------------------------------------
+-- FOK — fill the whole order now, or trade nothing.
+-- ---------------------------------------------------------------------------
+-- The difference from IOC is exactly whether a PARTIAL fill is acceptable. Here the
+-- ladder holds 3 and the aggressor wants 5: an IOC would take the 3, a FOK must take
+-- none. The assertion lives inside `MatchOrder`, after the legs have been walked, so
+-- the abort unwinds every fill with it and the book is left untouched.
+testFokRefusesAPartialFill : Script ()
+testFokRefusesAPartialFill = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  bobAsset <- mint issuer ceth bob 3.0
+  (book1, bobAsk) <- placeLimit book0 bob Ask 3.0 100.0 bobAsset
+
+  aliceCash <- mint issuer usdc alice 550.0
+  (book2, aliceFok) <- place book1 alice Bid 5.0 (Some 110.0) FOK aliceCash
+
+  -- Only 3 of the 5 are reachable, so the match must not commit.
+  submitMustFail venue do
+    exerciseCmd book2 MatchOrder with
+      aggressorCid = aliceFok; contraCids = [bobAsk]
+
+  -- NOTHING moved: Bob still has his offer, Alice has no asset, and the FOK is
+  -- still there for the venue to kill.
+  aliceAsset <- ownedAmount alice ceth
+  aliceAsset === 0.0
+  venueOrders <- query @RestingOrder venue
+  length venueOrders === 2
+
+-- A FOK that IS fully covered trades normally — the instruction is a constraint,
+-- not a handicap.
+testFokFillsWhenFullyCovered : Script ()
+testFokFillsWhenFullyCovered = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  bobAsset <- mint issuer ceth bob 5.0
+  (book1, bobAsk) <- placeLimit book0 bob Ask 5.0 100.0 bobAsset
+
+  aliceCash <- mint issuer usdc alice 550.0
+  (book2, aliceFok) <- place book1 alice Bid 5.0 (Some 110.0) FOK aliceCash
+
+  r <- runMatch venue book2 aliceFok [bobAsk]
+  (head r.executions).quantity === 5.0
+  -- Filled at the MAKER's 100, not the taker's 110.
+  (head r.executions).price === 100.0
+  isNone r.residualAggressor === True
+  aliceAsset <- ownedAmount alice ceth
+  aliceAsset === 5.0
+
+-- ---------------------------------------------------------------------------
+-- AON — all or none, but it may WAIT.
+-- ---------------------------------------------------------------------------
+-- FOK is "all of it, now, or never"; AON is "all of it, whenever". An AON that
+-- cannot be filled in full does not trade, and — unlike a FOK — is left resting for
+-- enough size to arrive.
+testAonRestsRatherThanFillPartially : Script ()
+testAonRestsRatherThanFillPartially = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  bobAsset <- mint issuer ceth bob 3.0
+  (book1, bobAsk) <- placeLimit book0 bob Ask 3.0 100.0 bobAsset
+
+  aliceCash <- mint issuer usdc alice 550.0
+  (book2, aliceAon) <- place book1 alice Bid 5.0 (Some 110.0) AON aliceCash
+
+  submitMustFail venue do
+    exerciseCmd book2 MatchOrder with
+      aggressorCid = aliceAon; contraCids = [bobAsk]
+
+  -- The AON is STILL ON THE BOOK — that is the whole difference from FOK.
+  aliceOrders <- query @RestingOrder alice
+  length aliceOrders === 1
+  (snd (head aliceOrders)).timeInForce === AON
+  (snd (head aliceOrders)).quantity === 5.0
+
+-- The other half of "all or none": a RESTING AON may not be nibbled either. An
+-- aggressor smaller than the AON would take a piece of it, which is exactly what the
+-- instruction forbids — so the book protects it as a contra, not just as an aggressor.
+testRestingAonCannotBeNibbled : Script ()
+testRestingAonCannotBeNibbled = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+
+  -- Bob rests 5, all-or-none.
+  bobAsset <- mint issuer ceth bob 5.0
+  (book1, bobAon) <- place book0 bob Ask 5.0 (Some 100.0) AON bobAsset
+
+  -- Alice wants only 2 of them.
+  aliceCash <- mint issuer usdc alice 220.0
+  (book2, aliceBid) <- placeLimit book1 alice Bid 2.0 110.0 aliceCash
+
+  submitMustFail venue do
+    exerciseCmd book2 MatchOrder with
+      aggressorCid = aliceBid; contraCids = [bobAon]
+
+  -- Bob's 5 are intact.
+  bobOrders <- query @RestingOrder bob
+  length bobOrders === 1
+  (snd (head bobOrders)).quantity === 5.0
+
+-- An unpriced order must be IMMEDIATE whatever its instruction: GTC and AON would
+-- both leave a standing promise to trade at any price at any future time, which is
+-- the free option this module refuses to write.
+testUnpricedAonIsRejected : Script ()
+testUnpricedAonIsRejected = script do
+  Desk{..} <- deskSetup
+  book0 <- openBook venue auditor [alice, bob, carol]
+  aliceCash <- mint issuer usdc alice 550.0
+  submitMustFail alice do
+    exerciseCmd book0 PlaceOrder with
+      trader = alice; side = Bid; quantity = 5.0
+      limitPrice = None; timeInForce = AON; holdingCid = aliceCash

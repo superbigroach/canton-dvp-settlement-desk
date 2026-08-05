@@ -25,7 +25,7 @@ import java.util.Map;
 import java.util.Objects;
 
 public class MatchSettleInstruction extends DamlRecord<MatchSettleInstruction> {
-  public static final String _packageId = "147ddae1818ea7e3662c51714525ac4d6de9c853914d723962bb7ed563ad363d";
+  public static final String _packageId = "16b1d7198cf7c7ec9373fe2d1bdb48ab1770fe7ffcb7281ad87048ebecd45ab4";
 
   public final MatchSettlement.ContractId matchCid;
 
