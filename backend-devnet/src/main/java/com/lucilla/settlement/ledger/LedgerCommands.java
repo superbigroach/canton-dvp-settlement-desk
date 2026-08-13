@@ -603,20 +603,56 @@ public final class LedgerCommands {
         return new Component(instrumentId, unitsPerShare);
     }
 
-    /** Define a basket (ETF): its creation unit and authorised participants. */
+    /**
+     * Define a basket (ETF): its creation unit and authorised participants, with NO
+     * creation/redemption fee. Kept as an overload so every existing caller compiles
+     * unchanged against crossdesk 2.1.0, which added the fee fields.
+     */
     public static Update<?> createBasket(
             String administrator, String auditor, String basketId, String description,
             String cashInstrument, List<Component> components, List<String> participants) {
-        return new BasketDefinition(administrator, auditor, basketId, description,
-                cashInstrument, components, participants).create();
+        return createBasket(administrator, auditor, basketId, description, cashInstrument,
+                components, participants, null, null, null);
     }
 
-    /** AP requests to create {@code shares} units, delivering the underlyings. */
+    /**
+     * Define a fee-bearing basket. {@code feeReceiver} is the party paid the flat fee on
+     * each creation and redemption — the venue operator, who need not be the fund
+     * administrator. Pass nulls for any of the three to define a fee-free basket.
+     *
+     * <p>A chargeable fee with no receiver is rejected on-ledger by the template's
+     * {@code ensure}, as is a negative fee; this method does not second-guess that.
+     */
+    public static Update<?> createBasket(
+            String administrator, String auditor, String basketId, String description,
+            String cashInstrument, List<Component> components, List<String> participants,
+            String feeReceiver, BigDecimal creationFee, BigDecimal redemptionFee) {
+        return new BasketDefinition(administrator, auditor, basketId, description,
+                cashInstrument, components, participants,
+                Optional.ofNullable(feeReceiver),
+                Optional.ofNullable(creationFee),
+                Optional.ofNullable(redemptionFee)).create();
+    }
+
+    /** AP requests to create {@code shares} units, delivering the underlyings. No fee. */
     public static Update<?> requestCreation(
             String basketCid, String ap, BigDecimal shares, List<String> componentHoldingCids) {
+        return requestCreation(basketCid, ap, shares, componentHoldingCids, null);
+    }
+
+    /**
+     * AP requests to create {@code shares} units, delivering the underlyings and — when the
+     * basket charges one — the cash holding the creation fee is paid from. The fee moves
+     * inside the same atomic transaction as the creation, so an unpayable fee settles
+     * nothing at all. {@code feeHoldingCid} may be null for a fee-free basket.
+     */
+    public static Update<?> requestCreation(
+            String basketCid, String ap, BigDecimal shares, List<String> componentHoldingCids,
+            String feeHoldingCid) {
         List<Holding.ContractId> cids = componentHoldingCids.stream()
                 .map(Holding.ContractId::new).toList();
-        return new BasketDefinition.ContractId(basketCid).exerciseRequestCreation(ap, shares, cids);
+        return new BasketDefinition.ContractId(basketCid).exerciseRequestCreation(ap, shares, cids,
+                Optional.ofNullable(feeHoldingCid).map(Holding.ContractId::new));
     }
 
     /** Administrator approves a creation request → a bilaterally-signed agreement. */
@@ -629,11 +665,24 @@ public final class LedgerCommands {
         return new CreationAgreement.ContractId(agreementCid).exerciseProcessCreation();
     }
 
-    /** AP requests to redeem {@code shares}, returning its basket-token holding. */
+    /** AP requests to redeem {@code shares}, returning its basket-token holding. No fee. */
     public static Update<?> requestRedemption(
             String basketCid, String ap, BigDecimal shares, String basketHoldingCid) {
+        return requestRedemption(basketCid, ap, shares, basketHoldingCid, null);
+    }
+
+    /**
+     * AP requests to redeem {@code shares}, returning its basket-token holding and — when
+     * the basket charges one — the cash the redemption fee is paid from. Redemption is
+     * where the arbitrage that closes a discount actually lands, so this is the leg the
+     * operator earns on most often. {@code feeHoldingCid} may be null.
+     */
+    public static Update<?> requestRedemption(
+            String basketCid, String ap, BigDecimal shares, String basketHoldingCid,
+            String feeHoldingCid) {
         return new BasketDefinition.ContractId(basketCid)
-                .exerciseRequestRedemption(ap, shares, new Holding.ContractId(basketHoldingCid));
+                .exerciseRequestRedemption(ap, shares, new Holding.ContractId(basketHoldingCid),
+                        Optional.ofNullable(feeHoldingCid).map(Holding.ContractId::new));
     }
 
     /** Administrator approves a redemption, supplying the custody underlyings to return. */

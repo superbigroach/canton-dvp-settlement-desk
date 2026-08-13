@@ -51,13 +51,13 @@ import java.util.Set;
 public final class RestingOrder extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#crossdesk", "ContinuousBook", "RestingOrder");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("d81a41bb2e1aa776f0aa94408776a420c484ef52e52923ccb232d86139f082be", "ContinuousBook", "RestingOrder");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("87c24b9a3ade1253eebbb4ea1feef8f4b9963f33c7cc6272efb5f79afdef1bb0", "ContinuousBook", "RestingOrder");
 
-  public static final String PACKAGE_ID = "d81a41bb2e1aa776f0aa94408776a420c484ef52e52923ccb232d86139f082be";
+  public static final String PACKAGE_ID = "87c24b9a3ade1253eebbb4ea1feef8f4b9963f33c7cc6272efb5f79afdef1bb0";
 
   public static final String PACKAGE_NAME = "crossdesk";
 
-  public static final PackageVersion PACKAGE_VERSION = new PackageVersion(new int[] {2, 0, 0});
+  public static final PackageVersion PACKAGE_VERSION = new PackageVersion(new int[] {2, 1, 0});
 
   public static final Choice<RestingOrder, Fill, Tuple2<Holding.ContractId, Optional<ContractId>>> CHOICE_Fill = 
       Choice.create("Fill", value$ -> value$.toValue(), value$ -> Fill.valueDecoder()

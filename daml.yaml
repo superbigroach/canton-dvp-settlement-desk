@@ -17,7 +17,13 @@
 sdk-version: 3.4.11
 
 name: crossdesk                          # package name (appears in the DAR)
-version: 2.0.0                           # package version (semver)
+version: 2.1.0                           # package version (semver)
+# 2.1.0 adds creation/redemption fees to Basket. Every new field is Optional and
+# appended at the END of its record, which is what makes this a LEGAL Daml smart
+# contract upgrade of 2.0.0 rather than a package rename: `templateIdScope` is
+# `#crossdesk` (package-NAME scoping), so a version bump keeps every contract
+# already on a participant. Inserting a field mid-record, or adding a
+# non-Optional one, fails NOT_VALID_UPGRADE_PACKAGE and orphans the ledger.
 source: daml                             # directory holding the .daml sources
 
 # All modules under `source: daml` are auto-discovered — no per-file listing:
@@ -75,7 +81,7 @@ data-dependencies:
 
 # Compiled DAR output location.
 build-options:
-  - --output=.daml/dist/crossdesk-2.0.0.dar
+  - --output=.daml/dist/crossdesk-2.1.0.dar
 
 # ---------------------------------------------------------------------------
 # Java codegen — generates the strongly-typed Java bindings for every template

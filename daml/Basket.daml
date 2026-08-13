@@ -48,6 +48,7 @@ module Basket where
 
 import Holding
 import DA.List (dedup)
+import DA.Optional (isNone)
 
 -- ---------------------------------------------------------------------------
 -- Component — one leg of the creation unit: `unitsPerShare` units of an instrument
@@ -74,6 +75,20 @@ template BasketDefinition
     cashInstrument : Text         -- unit the NAV is quoted in, e.g. "USDC"
     components     : [Component]  -- the creation unit: units of each underlying per share
     participants   : [Party]      -- authorised participants (APs) who may create/redeem
+    -- FEES. Optional, and appended at the END of the record on purpose: adding
+    -- non-optional fields (or inserting anywhere but the end) breaks Daml smart
+    -- contract upgrades with NOT_VALID_UPGRADE_PACKAGE, which would force a
+    -- package rename and orphan every contract already on the node.
+    --
+    -- WHY A FLAT FEE PER ORDER, not basis points of the creation: this is the
+    -- ETF convention. An issuer charges the AP a flat creation/redemption fee per
+    -- creation unit to cover the cost of processing, precisely because it must not
+    -- scale with the size of the trade — that would tax the arbitrage that keeps
+    -- the fund glued to its NAV. The toll is on the turnstile, not on the flow.
+    feeReceiver    : Optional Party    -- who is paid; the venue operator, who need
+                                       -- not be the fund administrator
+    creationFee    : Optional Decimal  -- flat fee per creation, in cashInstrument
+    redemptionFee  : Optional Decimal  -- flat fee per redemption, in cashInstrument
   where
     signatory administrator
     observer (auditor :: participants)
@@ -82,6 +97,12 @@ template BasketDefinition
         && all (\c -> c.unitsPerShare > 0.0) components
         -- an instrument appears at most once in the creation unit
         && length (dedup (map (.instrumentId) components)) == length components
+        -- a fee may be zero or absent, never negative
+        && optional True (>= 0.0) creationFee
+        && optional True (>= 0.0) redemptionFee
+        -- a chargeable fee must have somewhere to go
+        && not (optional False (> 0.0) creationFee   && isNone feeReceiver)
+        && not (optional False (> 0.0) redemptionFee && isNone feeReceiver)
 
     -- REQUEST CREATION — an AP asks to create `shares` new units. It pre-commits the
     -- underlying basket (unitsPerShare × shares of EACH component) by disclosing the
@@ -93,12 +114,19 @@ template BasketDefinition
         ap                   : Party
         shares               : Decimal
         componentHoldingCids : [ContractId Holding]
+        -- Optional and last, for the upgrade reason given on the fee fields above.
+        feeHoldingCid        : Optional (ContractId Holding)
       controller ap
       do
         assertMsg "AP must be an authorised participant" (ap `elem` participants)
         assertMsg "shares must be positive" (shares > 0.0)
         assertMsg "must supply exactly one delivering holding per component"
           (length componentHoldingCids == length components)
+        -- The fee holding must be disclosed to the administrator for the same
+        -- reason the components are: ProcessCreation fetches it, and a contract
+        -- that is merely divulged is not legitimately visible to a later fetch.
+        disclosedFee <- prepareFee creationFee feeReceiver feeHoldingCid
+                          ap cashInstrument administrator
         -- Validate every delivered underlying against its component, and DISCLOSE it
         -- to the administrator (honest visibility, never divulgence) so processing
         -- can read/move it. Returns the disclosed cids, aligned to components.
@@ -112,6 +140,7 @@ template BasketDefinition
         create CreationOrder with
           administrator; ap; auditor; basketId; cashInstrument
           components; shares; componentHoldingCids = disclosed
+          feeReceiver; fee = creationFee; feeHoldingCid = disclosedFee
 
     -- REQUEST REDEMPTION — an AP returns `shares` of the basket token to get the
     -- underlying basket back. It pre-commits (discloses) its basket-share holding.
@@ -120,6 +149,8 @@ template BasketDefinition
         ap               : Party
         shares           : Decimal
         basketHoldingCid : ContractId Holding
+        -- Optional and last, for the upgrade reason given on the fee fields above.
+        feeHoldingCid    : Optional (ContractId Holding)
       controller ap
       do
         assertMsg "AP must be an authorised participant" (ap `elem` participants)
@@ -129,9 +160,12 @@ template BasketDefinition
         assertMsg "returned holding must be the basket token"       (h.instrumentId == basketId)
         assertMsg "returned holding is smaller than the redemption" (h.amount >= shares)
         disclosed <- exercise basketHoldingCid Disclose with newObserver = administrator
+        disclosedFee <- prepareFee redemptionFee feeReceiver feeHoldingCid
+                          ap cashInstrument administrator
         create RedemptionOrder with
           administrator; ap; auditor; basketId; cashInstrument
           components; shares; basketHoldingCid = disclosed
+          feeReceiver; fee = redemptionFee; feeHoldingCid = disclosedFee
 
 -- ---------------------------------------------------------------------------
 -- CreationOrder — an AP's committed request, awaiting the administrator's approval.
@@ -148,6 +182,9 @@ template CreationOrder
     components           : [Component]
     shares               : Decimal
     componentHoldingCids : [ContractId Holding]   -- disclosed underlyings, aligned to components
+    feeReceiver          : Optional Party         -- carried from the definition
+    fee                  : Optional Decimal       -- the fee this order will pay
+    feeHoldingCid        : Optional (ContractId Holding)  -- disclosed cash for the fee
   where
     signatory ap
     observer administrator, auditor
@@ -161,6 +198,7 @@ template CreationOrder
         create CreationAgreement with
           administrator; ap; auditor; basketId; cashInstrument
           components; shares; componentHoldingCids
+          feeReceiver; fee; feeHoldingCid
 
     -- REJECT — the administrator declines (e.g. the AP is no longer eligible).
     choice RejectCreation : ()
@@ -186,6 +224,9 @@ template CreationAgreement
     components           : [Component]
     shares               : Decimal
     componentHoldingCids : [ContractId Holding]
+    feeReceiver          : Optional Party
+    fee                  : Optional Decimal
+    feeHoldingCid        : Optional (ContractId Holding)
   where
     signatory administrator, ap
     observer auditor
@@ -211,12 +252,19 @@ template CreationAgreement
           issuer = administrator; instrumentId = basketId
           owner = ap; amount = shares; disclosedTo = []
 
-        -- 3) Immutable audit receipt of the creation.
+        -- 3) CHARGE THE FEE. The AP pays the operator a flat fee out of the cash
+        --    holding it disclosed at request time. The AP's authority is in scope
+        --    (it signs this agreement), and the cash issuer's authority is
+        --    delegated through the Holding being exercised — so the fee receiver
+        --    does not have to co-sign. No fee configured: no-op.
+        charged <- chargeFee fee feeReceiver feeHoldingCid ap cashInstrument
+
+        -- 4) Immutable audit receipt of the creation.
         now <- getTime
         r <- create BasketReceipt with
           administrator; ap; auditor; basketId
           action = "Creation"; shares; components; cashInstrument
-          settledAt = now
+          settledAt = now; fee = charged
         pure CreationResult with mintedShares = mintedCid; receipt = r
 
 -- Result of a successful creation (named fields, not a bare tuple).
@@ -241,6 +289,9 @@ template RedemptionOrder
     components        : [Component]
     shares           : Decimal
     basketHoldingCid : ContractId Holding    -- the AP's disclosed basket-share holding
+    feeReceiver      : Optional Party
+    fee              : Optional Decimal
+    feeHoldingCid    : Optional (ContractId Holding)
   where
     signatory ap
     observer administrator, auditor
@@ -257,6 +308,7 @@ template RedemptionOrder
         create RedemptionAgreement with
           administrator; ap; auditor; basketId; cashInstrument
           components; shares; basketHoldingCid; custodyHoldingCids
+          feeReceiver; fee; feeHoldingCid
 
     choice RejectRedemption : ()
       controller administrator
@@ -280,6 +332,9 @@ template RedemptionAgreement
     shares             : Decimal
     basketHoldingCid   : ContractId Holding
     custodyHoldingCids : [ContractId Holding]
+    feeReceiver        : Optional Party
+    fee                : Optional Decimal
+    feeHoldingCid      : Optional (ContractId Holding)
   where
     signatory administrator, ap
     observer auditor
@@ -307,12 +362,17 @@ template RedemptionAgreement
             (h.amount >= c.unitsPerShare * shares)
           deliverExact hCid (c.unitsPerShare * shares) ap)
 
-        -- 3) Immutable audit receipt of the redemption.
+        -- 3) CHARGE THE FEE — see ProcessCreation. Redemption is where the arbitrage
+        --    that closes a discount actually lands, so this is the leg that earns
+        --    most often. No fee configured: no-op.
+        charged <- chargeFee fee feeReceiver feeHoldingCid ap cashInstrument
+
+        -- 4) Immutable audit receipt of the redemption.
         now <- getTime
         r <- create BasketReceipt with
           administrator; ap; auditor; basketId
           action = "Redemption"; shares; components; cashInstrument
-          settledAt = now
+          settledAt = now; fee = charged
         pure RedemptionResult with returnedUnderlyings = returned; receipt = r
 
 -- Result of a successful redemption.
@@ -336,6 +396,7 @@ template BasketReceipt
     components     : [Component]
     cashInstrument : Text
     settledAt      : Time
+    fee            : Optional Decimal   -- what was actually charged, None if no fee
   where
     signatory administrator
     observer ap, auditor
@@ -355,3 +416,57 @@ navPerShare comps priceOf = foldl step (Some 0.0) comps
       running <- acc
       p       <- priceOf c.instrumentId
       pure (running + c.unitsPerShare * p)
+
+-- ---------------------------------------------------------------------------
+-- FEES — the two halves of charging for a creation or a redemption.
+--
+-- `prepareFee` runs at REQUEST time (the AP's authority): it validates the cash
+-- the AP is putting up and discloses it to the administrator, so that the atomic
+-- process choice can fetch it later. `chargeFee` runs at PROCESS time and moves
+-- it. Splitting them is what keeps the fee inside the same all-or-nothing
+-- transaction as the creation: if the fee cannot be paid, nothing settles.
+-- ---------------------------------------------------------------------------
+
+-- prepareFee — validate and disclose the AP's fee cash. Returns the disclosed
+-- holding, or None when no fee is payable. Called where the payer is controller.
+prepareFee : Optional Decimal -> Optional Party -> Optional (ContractId Holding)
+          -> Party -> Text -> Party -> Update (Optional (ContractId Holding))
+prepareFee mFee mReceiver mHoldingCid payer cashInstrument administrator =
+  if not (optional False (> 0.0) mFee)
+    then pure None       -- no fee, or a zero fee: nothing to prepare
+    else do
+      fee <- optional (abort "a fee is payable but none is configured") pure mFee
+      assertMsg "a fee is payable but no feeReceiver is configured" (not (isNone mReceiver))
+      hCid <- optional
+        (abort "this basket charges a fee — supply a cash holding to pay it")
+        pure mHoldingCid
+      h <- fetch hCid
+      assertMsg "fee holding must belong to the AP"          (h.owner == payer)
+      assertMsg "fee holding must be the basket's cash instrument"
+        (h.instrumentId == cashInstrument)
+      assertMsg "fee holding is too small to pay the fee"    (h.amount >= fee)
+      Some <$> exercise hCid Disclose with newObserver = administrator
+
+-- chargeFee — move the flat fee from the payer's disclosed cash to the receiver.
+-- Returns what was actually charged. Called inside a choice whose contract has
+-- the payer as a signatory, so the payer's authority is in scope; the cash
+-- issuer's authority is delegated through the Holding being exercised, so the
+-- receiver never has to co-sign.
+chargeFee : Optional Decimal -> Optional Party -> Optional (ContractId Holding)
+         -> Party -> Text -> Update (Optional Decimal)
+chargeFee mFee mReceiver mHoldingCid payer cashInstrument =
+  if not (optional False (> 0.0) mFee)
+    then pure None
+    else do
+      fee      <- optional (abort "a fee is payable but none is configured") pure mFee
+      receiver <- optional (abort "a fee is payable but no feeReceiver is configured")
+                    pure mReceiver
+      hCid     <- optional (abort "a fee is payable but no fee holding was supplied")
+                    pure mHoldingCid
+      h <- fetch hCid
+      assertMsg "fee holding must belong to the payer"       (h.owner == payer)
+      assertMsg "fee holding must be the basket's cash instrument"
+        (h.instrumentId == cashInstrument)
+      assertMsg "fee holding is too small to pay the fee"    (h.amount >= fee)
+      _ <- deliverExact hCid fee receiver
+      pure (Some fee)

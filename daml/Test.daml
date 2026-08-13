@@ -2417,6 +2417,7 @@ testCreateThenRedeem = do
       administrator = bank; auditor; basketId = "LX1"
       description = "Lucilla Crypto Index (cETH + CBTC)"; cashInstrument = usdc
       components = comps; participants = [alice, bob]
+      feeReceiver = None; creationFee = None; redemptionFee = None
 
   -- Alice holds the exact creation basket for 10 shares: 1.0 cETH + 0.1 CBTC.
   aliceCeth <- mint issuer ceth alice 1.0
@@ -2426,6 +2427,7 @@ testCreateThenRedeem = do
   orderCid <- submit alice do
     exerciseCmd basketCid RequestCreation with
       ap = alice; shares = 10.0; componentHoldingCids = [aliceCeth, aliceCbtc]
+      feeHoldingCid = None
   agreeCid <- submit bank do exerciseCmd orderCid ApproveCreation
   cRes     <- submit bank do exerciseCmd agreeCid ProcessCreation
 
@@ -2455,6 +2457,7 @@ testCreateThenRedeem = do
   redOrder <- submit alice do
     exerciseCmd basketCid RequestRedemption with
       ap = alice; shares = 4.0; basketHoldingCid = cRes.mintedShares
+      feeHoldingCid = None
   redAgree <- submit bank do
     exerciseCmd redOrder ApproveRedemption with custodyHoldingCids = [bankCethCid, bankCbtcCid]
   _redRes  <- submit bank do exerciseCmd redAgree ProcessRedemption
@@ -2486,6 +2489,7 @@ testCreationAtomicRollback = do
       administrator = bank; auditor; basketId = "LX1"
       description = "idx"; cashInstrument = usdc
       components = comps; participants = [alice]
+      feeReceiver = None; creationFee = None; redemptionFee = None
 
   -- Enough cETH (needs 1.0) but SHORT CBTC (needs 0.1, has 0.05) for 10 shares.
   aliceCeth <- mint issuer ceth alice 1.0
@@ -2493,6 +2497,7 @@ testCreationAtomicRollback = do
   submitMustFail alice do
     exerciseCmd basketCid RequestCreation with
       ap = alice; shares = 10.0; componentHoldingCids = [aliceCeth, aliceCbtc]
+      feeHoldingCid = None
 
   -- Alice keeps everything; no shares exist.
   aliceCethBal <- ownedAmount alice ceth
@@ -2501,6 +2506,144 @@ testCreationAtomicRollback = do
   aliceCethBal === 1.0
   aliceCbtcBal === 0.05
   aliceLx      === 0.0
+
+-- ---------------------------------------------------------------------------
+-- TEST 11c — THE TURNSTILE. A basket may charge the AP a flat fee per creation and
+-- per redemption, paid to the VENUE OPERATOR — who is neither the fund
+-- administrator nor the AP. That separation is the whole point: the operator of
+-- the mechanism is paid for the mechanism. It is the only place this design earns
+-- from arbitrage, and it earns without ever taking a position in it.
+--
+-- Flat per order, never basis points of the creation: a proportional fee would tax
+-- the arbitrage that keeps the fund glued to its NAV, which is the one activity a
+-- fund most wants to encourage.
+-- ---------------------------------------------------------------------------
+testCreationAndRedemptionFeesArePaidToTheOperator : Script ()
+testCreationAndRedemptionFeesArePaidToTheOperator = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  let comps = [Component ceth 0.10, Component cbtc 0.01]
+  basketCid <- submit bank do
+    createCmd BasketDefinition with
+      administrator = bank; auditor; basketId = "LX1"
+      description = "fee-bearing index"; cashInstrument = usdc
+      components = comps; participants = [alice]
+      feeReceiver = Some venue; creationFee = Some 25.0; redemptionFee = Some 10.0
+
+  aliceCeth <- mint issuer ceth alice 1.0
+  aliceCbtc <- mint issuer cbtc alice 0.1
+  aliceCash <- mint issuer usdc alice 100.0
+
+  venue0 <- ownedAmount venue usdc
+  bank0  <- ownedAmount bank  usdc
+
+  -- CREATE 10 shares, funding the 25 USDC creation fee from Alice's cash.
+  orderCid <- submit alice do
+    exerciseCmd basketCid RequestCreation with
+      ap = alice; shares = 10.0; componentHoldingCids = [aliceCeth, aliceCbtc]
+      feeHoldingCid = Some aliceCash
+  agreeCid <- submit bank do exerciseCmd orderCid ApproveCreation
+  cRes     <- submit bank do exerciseCmd agreeCid ProcessCreation
+
+  -- The operator was paid, the AP paid, and the administrator took none of it.
+  venue1 <- ownedAmount venue usdc
+  alice1 <- ownedAmount alice usdc
+  bank1  <- ownedAmount bank  usdc
+  venue1 === venue0 + 25.0
+  alice1 === 75.0
+  bank1  === bank0
+
+  -- The receipt records what was actually charged — the auditor can read it.
+  Some cRec <- queryContractId auditor cRes.receipt
+  cRec.fee === Some 25.0
+
+  -- REDEEM 4 shares, funding the 10 USDC redemption fee from Alice's change.
+  bankCethCid <- head . map fst
+    . filter (\(_, h) -> h.owner == bank && h.instrumentId == ceth) <$> query @Holding bank
+  bankCbtcCid <- head . map fst
+    . filter (\(_, h) -> h.owner == bank && h.instrumentId == cbtc) <$> query @Holding bank
+  aliceCashCid <- head . map fst
+    . filter (\(_, h) -> h.owner == alice && h.instrumentId == usdc) <$> query @Holding alice
+  redOrder <- submit alice do
+    exerciseCmd basketCid RequestRedemption with
+      ap = alice; shares = 4.0; basketHoldingCid = cRes.mintedShares
+      feeHoldingCid = Some aliceCashCid
+  redAgree <- submit bank do
+    exerciseCmd redOrder ApproveRedemption with custodyHoldingCids = [bankCethCid, bankCbtcCid]
+  rRes <- submit bank do exerciseCmd redAgree ProcessRedemption
+
+  venue2 <- ownedAmount venue usdc
+  alice2 <- ownedAmount alice usdc
+  venue2 === venue0 + 35.0     -- 25 on the creation + 10 on the redemption
+  alice2 === 65.0
+  Some rRec <- queryContractId auditor rRes.receipt
+  rRec.fee === Some 10.0
+
+-- ---------------------------------------------------------------------------
+-- TEST 11d — a fee-bearing basket refuses a creation that does not fund the fee,
+-- and refuses one that funds it short. The fee is inside the same all-or-nothing
+-- transaction as the creation, so an unpayable fee settles nothing at all.
+-- ---------------------------------------------------------------------------
+testUnfundedFeeRefusesTheCreation : Script ()
+testUnfundedFeeRefusesTheCreation = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  let comps = [Component ceth 0.10, Component cbtc 0.01]
+  basketCid <- submit bank do
+    createCmd BasketDefinition with
+      administrator = bank; auditor; basketId = "LX1"
+      description = "fee-bearing index"; cashInstrument = usdc
+      components = comps; participants = [alice]
+      feeReceiver = Some venue; creationFee = Some 25.0; redemptionFee = None
+
+  aliceCeth <- mint issuer ceth alice 1.0
+  aliceCbtc <- mint issuer cbtc alice 0.1
+
+  -- No cash offered at all.
+  submitMustFail alice do
+    exerciseCmd basketCid RequestCreation with
+      ap = alice; shares = 10.0; componentHoldingCids = [aliceCeth, aliceCbtc]
+      feeHoldingCid = None
+
+  -- Cash offered, but 5 USDC against a 25 USDC fee.
+  aliceShort <- mint issuer usdc alice 5.0
+  submitMustFail alice do
+    exerciseCmd basketCid RequestCreation with
+      ap = alice; shares = 10.0; componentHoldingCids = [aliceCeth, aliceCbtc]
+      feeHoldingCid = Some aliceShort
+
+  -- Nothing moved: no shares exist and the operator was paid nothing.
+  aliceLx <- ownedAmount alice "LX1"
+  venueCash <- ownedAmount venue usdc
+  aliceLx   === 0.0
+  venueCash === 0.0
+
+-- ---------------------------------------------------------------------------
+-- TEST 11e — a basket cannot be defined with a chargeable fee and nowhere to send
+-- it, and cannot be defined with a negative fee.
+-- ---------------------------------------------------------------------------
+testFeeConfigurationIsValidated : Script ()
+testFeeConfigurationIsValidated = do
+  Parties{..} <- setup
+  let comps = [Component ceth 0.10]
+
+  -- A fee with no receiver.
+  submitMustFail bank do
+    createCmd BasketDefinition with
+      administrator = bank; auditor; basketId = "LX9"
+      description = "no receiver"; cashInstrument = usdc
+      components = comps; participants = [alice]
+      feeReceiver = None; creationFee = Some 25.0; redemptionFee = None
+
+  -- A negative fee.
+  submitMustFail bank do
+    createCmd BasketDefinition with
+      administrator = bank; auditor; basketId = "LX9"
+      description = "negative fee"; cashInstrument = usdc
+      components = comps; participants = [alice]
+      feeReceiver = Some venue; creationFee = Some (-1.0); redemptionFee = None
 
 -- ---------------------------------------------------------------------------
 -- TEST 12 — NAV per share = Σ (unitsPerShare × price). With cETH @ 2,400 and CBTC

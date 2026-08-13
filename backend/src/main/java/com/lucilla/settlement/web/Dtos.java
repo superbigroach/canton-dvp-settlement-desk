@@ -525,7 +525,14 @@ public final class Dtos {
             @NotNull @Positive BigDecimal unitsPerShare) {
     }
 
-    /** Define a basket (ETF): its creation unit and authorised participants. */
+    /**
+     * Define a basket (ETF): its creation unit, its authorised participants and — optionally
+     * — the flat fee charged on each creation and redemption.
+     *
+     * <p>The three fee fields are all optional. Omit them for a fee-free basket. A
+     * chargeable fee with no {@code feeReceiver}, or a negative fee, is refused on-ledger
+     * by the template's {@code ensure} — the API does not duplicate that rule.
+     */
     public record DefineBasketRequest(
             @NotBlank String administrator,
             String auditor,                  // defaults to "Auditor"
@@ -533,7 +540,10 @@ public final class Dtos {
             String description,
             String cashInstrument,           // defaults to "USDC"
             @NotNull List<ComponentDto> components,
-            @NotNull List<@NotBlank String> participants) {
+            @NotNull List<@NotBlank String> participants,
+            String feeReceiver,              // party paid the fee; the venue operator
+            BigDecimal creationFee,          // flat, per creation, in cashInstrument
+            BigDecimal redemptionFee) {      // flat, per redemption, in cashInstrument
     }
 
     public record BasketResponse(

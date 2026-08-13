@@ -1478,8 +1478,13 @@ public class SettlementController {
                 .map(c -> LedgerCommands.basketComponent(c.instrumentId(), c.unitsPerShare()))
                 .toList();
         List<String> parts = req.participants().stream().map(ledger::resolveParty).toList();
+        // The fee receiver is a party label like any other, so resolve it the same way.
+        // Null stays null: no receiver configured means a fee-free basket.
+        String feeReceiver = (req.feeReceiver() == null || req.feeReceiver().isBlank())
+                ? null : ledger.resolveParty(req.feeReceiver());
         var cmd = LedgerCommands.createBasket(admin, auditor, req.basketId(),
-                blankTo(req.description(), req.basketId()), cash, comps, parts);
+                blankTo(req.description(), req.basketId()), cash, comps, parts,
+                feeReceiver, req.creationFee(), req.redemptionFee());
         String cid = ledger.submitForCreated(admin, cmd, LedgerCommands.basketDefinitionTemplateId());
         return created(new Dtos.BasketResponse(cid, req.basketId(), req.administrator(), cash,
                 req.components(), req.participants()));

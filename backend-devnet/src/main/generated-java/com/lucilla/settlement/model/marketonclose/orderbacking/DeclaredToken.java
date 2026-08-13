@@ -12,7 +12,7 @@ import java.lang.String;
 import java.util.Objects;
 
 public class DeclaredToken extends OrderBacking {
-  public static final String _packageId = "d81a41bb2e1aa776f0aa94408776a420c484ef52e52923ccb232d86139f082be";
+  public static final String _packageId = "87c24b9a3ade1253eebbb4ea1feef8f4b9963f33c7cc6272efb5f79afdef1bb0";
 
   public final InstrumentId instrumentIdValue;
 

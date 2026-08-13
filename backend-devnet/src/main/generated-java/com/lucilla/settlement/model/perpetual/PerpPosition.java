@@ -49,13 +49,13 @@ import java.util.Set;
 public final class PerpPosition extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#crossdesk", "Perpetual", "PerpPosition");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("d81a41bb2e1aa776f0aa94408776a420c484ef52e52923ccb232d86139f082be", "Perpetual", "PerpPosition");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("87c24b9a3ade1253eebbb4ea1feef8f4b9963f33c7cc6272efb5f79afdef1bb0", "Perpetual", "PerpPosition");
 
-  public static final String PACKAGE_ID = "d81a41bb2e1aa776f0aa94408776a420c484ef52e52923ccb232d86139f082be";
+  public static final String PACKAGE_ID = "87c24b9a3ade1253eebbb4ea1feef8f4b9963f33c7cc6272efb5f79afdef1bb0";
 
   public static final String PACKAGE_NAME = "crossdesk";
 
-  public static final PackageVersion PACKAGE_VERSION = new PackageVersion(new int[] {2, 0, 0});
+  public static final PackageVersion PACKAGE_VERSION = new PackageVersion(new int[] {2, 1, 0});
 
   public static final Choice<PerpPosition, ClosePosition, Tuple2<PerpMarket.ContractId, BigDecimal>> CHOICE_ClosePosition = 
       Choice.create("ClosePosition", value$ -> value$.toValue(), value$ ->

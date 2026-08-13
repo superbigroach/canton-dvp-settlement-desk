@@ -7,6 +7,7 @@ import com.daml.ledger.javaapi.data.CreateAndExerciseCommand;
 import com.daml.ledger.javaapi.data.CreateCommand;
 import com.daml.ledger.javaapi.data.CreatedEvent;
 import com.daml.ledger.javaapi.data.DamlCollectors;
+import com.daml.ledger.javaapi.data.DamlOptional;
 import com.daml.ledger.javaapi.data.DamlRecord;
 import com.daml.ledger.javaapi.data.ExerciseCommand;
 import com.daml.ledger.javaapi.data.Identifier;
@@ -42,18 +43,19 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 public final class RedemptionOrder extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#crossdesk", "Basket", "RedemptionOrder");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("d81a41bb2e1aa776f0aa94408776a420c484ef52e52923ccb232d86139f082be", "Basket", "RedemptionOrder");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("87c24b9a3ade1253eebbb4ea1feef8f4b9963f33c7cc6272efb5f79afdef1bb0", "Basket", "RedemptionOrder");
 
-  public static final String PACKAGE_ID = "d81a41bb2e1aa776f0aa94408776a420c484ef52e52923ccb232d86139f082be";
+  public static final String PACKAGE_ID = "87c24b9a3ade1253eebbb4ea1feef8f4b9963f33c7cc6272efb5f79afdef1bb0";
 
   public static final String PACKAGE_NAME = "crossdesk";
 
-  public static final PackageVersion PACKAGE_VERSION = new PackageVersion(new int[] {2, 0, 0});
+  public static final PackageVersion PACKAGE_VERSION = new PackageVersion(new int[] {2, 1, 0});
 
   public static final Choice<RedemptionOrder, Archive, Unit> CHOICE_Archive = 
       Choice.create("Archive", value$ -> value$.toValue(), value$ -> Archive.valueDecoder()
@@ -104,9 +106,16 @@ public final class RedemptionOrder extends Template {
 
   public final Holding.ContractId basketHoldingCid;
 
+  public final Optional<String> feeReceiver;
+
+  public final Optional<BigDecimal> fee;
+
+  public final Optional<Holding.ContractId> feeHoldingCid;
+
   public RedemptionOrder(String administrator, String ap, String auditor, String basketId,
       String cashInstrument, List<Component> components, BigDecimal shares,
-      Holding.ContractId basketHoldingCid) {
+      Holding.ContractId basketHoldingCid, Optional<String> feeReceiver, Optional<BigDecimal> fee,
+      Optional<Holding.ContractId> feeHoldingCid) {
     this.administrator = administrator;
     this.ap = ap;
     this.auditor = auditor;
@@ -115,6 +124,9 @@ public final class RedemptionOrder extends Template {
     this.components = components;
     this.shares = shares;
     this.basketHoldingCid = basketHoldingCid;
+    this.feeReceiver = feeReceiver;
+    this.fee = fee;
+    this.feeHoldingCid = feeHoldingCid;
   }
 
   @Override
@@ -190,9 +202,10 @@ public final class RedemptionOrder extends Template {
 
   public static Update<Created<ContractId>> create(String administrator, String ap, String auditor,
       String basketId, String cashInstrument, List<Component> components, BigDecimal shares,
-      Holding.ContractId basketHoldingCid) {
+      Holding.ContractId basketHoldingCid, Optional<String> feeReceiver, Optional<BigDecimal> fee,
+      Optional<Holding.ContractId> feeHoldingCid) {
     return new RedemptionOrder(administrator, ap, auditor, basketId, cashInstrument, components,
-        shares, basketHoldingCid).create();
+        shares, basketHoldingCid, feeReceiver, fee, feeHoldingCid).create();
   }
 
   @Override
@@ -210,7 +223,7 @@ public final class RedemptionOrder extends Template {
   }
 
   public DamlRecord toValue() {
-    ArrayList<DamlRecord.Field> fields = new ArrayList<DamlRecord.Field>(8);
+    ArrayList<DamlRecord.Field> fields = new ArrayList<DamlRecord.Field>(11);
     fields.add(new DamlRecord.Field("administrator", new Party(this.administrator)));
     fields.add(new DamlRecord.Field("ap", new Party(this.ap)));
     fields.add(new DamlRecord.Field("auditor", new Party(this.auditor)));
@@ -219,6 +232,9 @@ public final class RedemptionOrder extends Template {
     fields.add(new DamlRecord.Field("components", this.components.stream().collect(DamlCollectors.toDamlList(v$0 -> v$0.toValue()))));
     fields.add(new DamlRecord.Field("shares", new Numeric(this.shares)));
     fields.add(new DamlRecord.Field("basketHoldingCid", this.basketHoldingCid.toValue()));
+    fields.add(new DamlRecord.Field("feeReceiver", DamlOptional.of(this.feeReceiver.map(v$0 -> new Party(v$0)))));
+    fields.add(new DamlRecord.Field("fee", DamlOptional.of(this.fee.map(v$0 -> new Numeric(v$0)))));
+    fields.add(new DamlRecord.Field("feeHoldingCid", DamlOptional.of(this.feeHoldingCid.map(v$0 -> v$0.toValue()))));
     return new DamlRecord(fields);
   }
 
@@ -226,7 +242,7 @@ public final class RedemptionOrder extends Template {
       IllegalArgumentException {
     return value$ -> {
       Value recordValue$ = value$;
-      List<DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(8,0, recordValue$);
+      List<DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(11,3, recordValue$);
       String administrator = PrimitiveValueDecoders.fromParty.decode(fields$.get(0).getValue());
       String ap = PrimitiveValueDecoders.fromParty.decode(fields$.get(1).getValue());
       String auditor = PrimitiveValueDecoders.fromParty.decode(fields$.get(2).getValue());
@@ -237,13 +253,20 @@ public final class RedemptionOrder extends Template {
       BigDecimal shares = PrimitiveValueDecoders.fromNumeric.decode(fields$.get(6).getValue());
       Holding.ContractId basketHoldingCid =
           new Holding.ContractId(fields$.get(7).getValue().asContractId().orElseThrow(() -> new IllegalArgumentException("Expected basketHoldingCid to be of type com.daml.ledger.javaapi.data.ContractId")).getValue());
+      Optional<String> feeReceiver = PrimitiveValueDecoders.fromOptional(
+            PrimitiveValueDecoders.fromParty).decode(fields$.get(8).getValue());
+      Optional<BigDecimal> fee = PrimitiveValueDecoders.fromOptional(
+            PrimitiveValueDecoders.fromNumeric).decode(fields$.get(9).getValue());
+      Optional<Holding.ContractId> feeHoldingCid = PrimitiveValueDecoders.fromOptional(v$0 ->
+              new Holding.ContractId(v$0.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected feeHoldingCid to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()))
+          .decode(fields$.get(10).getValue());
       return new RedemptionOrder(administrator, ap, auditor, basketId, cashInstrument, components,
-          shares, basketHoldingCid);
+          shares, basketHoldingCid, feeReceiver, fee, feeHoldingCid);
     } ;
   }
 
   public static JsonLfDecoder<RedemptionOrder> jsonDecoder() {
-    return JsonLfDecoders.record(Arrays.asList("administrator", "ap", "auditor", "basketId", "cashInstrument", "components", "shares", "basketHoldingCid"), name -> {
+    return JsonLfDecoders.record(Arrays.asList("administrator", "ap", "auditor", "basketId", "cashInstrument", "components", "shares", "basketHoldingCid", "feeReceiver", "fee", "feeHoldingCid"), name -> {
           switch (name) {
             case "administrator": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
             case "ap": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(1, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
@@ -253,10 +276,13 @@ public final class RedemptionOrder extends Template {
             case "components": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(5, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.list(new com.lucilla.settlement.model.basket.Component.JsonDecoder$().get()));
             case "shares": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(6, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10));
             case "basketHoldingCid": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(7, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.contractId(com.lucilla.settlement.model.holding.Holding.ContractId::new));
+            case "feeReceiver": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(8, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party), java.util.Optional.empty());
+            case "fee": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(9, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10)), java.util.Optional.empty());
+            case "feeHoldingCid": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(10, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.contractId(com.lucilla.settlement.model.holding.Holding.ContractId::new)), java.util.Optional.empty());
             default: return null;
           }
         }
-        , (Object[] args) -> new RedemptionOrder(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6]), JsonLfDecoders.cast(args[7])));
+        , (Object[] args) -> new RedemptionOrder(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6]), JsonLfDecoders.cast(args[7]), JsonLfDecoders.cast(args[8]), JsonLfDecoders.cast(args[9]), JsonLfDecoders.cast(args[10])));
   }
 
   public static RedemptionOrder fromJson(String json) throws JsonLfDecoder.Error {
@@ -272,7 +298,10 @@ public final class RedemptionOrder extends Template {
         JsonLfEncoders.Field.of("cashInstrument", apply(JsonLfEncoders::text, cashInstrument)),
         JsonLfEncoders.Field.of("components", apply(JsonLfEncoders.list(Component::jsonEncoder), components)),
         JsonLfEncoders.Field.of("shares", apply(JsonLfEncoders::numeric, shares)),
-        JsonLfEncoders.Field.of("basketHoldingCid", apply(JsonLfEncoders::contractId, basketHoldingCid)));
+        JsonLfEncoders.Field.of("basketHoldingCid", apply(JsonLfEncoders::contractId, basketHoldingCid)),
+        JsonLfEncoders.Field.of("feeReceiver", apply(JsonLfEncoders.optional(JsonLfEncoders::party), feeReceiver)),
+        JsonLfEncoders.Field.of("fee", apply(JsonLfEncoders.optional(JsonLfEncoders::numeric), fee)),
+        JsonLfEncoders.Field.of("feeHoldingCid", apply(JsonLfEncoders.optional(JsonLfEncoders::contractId), feeHoldingCid)));
   }
 
   public static ContractFilter<Contract> contractFilter() {
@@ -297,20 +326,25 @@ public final class RedemptionOrder extends Template {
         Objects.equals(this.cashInstrument, other.cashInstrument) &&
         Objects.equals(this.components, other.components) &&
         Objects.equals(this.shares, other.shares) &&
-        Objects.equals(this.basketHoldingCid, other.basketHoldingCid);
+        Objects.equals(this.basketHoldingCid, other.basketHoldingCid) &&
+        Objects.equals(this.feeReceiver, other.feeReceiver) &&
+        Objects.equals(this.fee, other.fee) &&
+        Objects.equals(this.feeHoldingCid, other.feeHoldingCid);
   }
 
   @Override
   public int hashCode() {
     return Objects.hash(this.administrator, this.ap, this.auditor, this.basketId,
-        this.cashInstrument, this.components, this.shares, this.basketHoldingCid);
+        this.cashInstrument, this.components, this.shares, this.basketHoldingCid, this.feeReceiver,
+        this.fee, this.feeHoldingCid);
   }
 
   @Override
   public String toString() {
-    return String.format("com.lucilla.settlement.model.basket.RedemptionOrder(%s, %s, %s, %s, %s, %s, %s, %s)",
+    return String.format("com.lucilla.settlement.model.basket.RedemptionOrder(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         this.administrator, this.ap, this.auditor, this.basketId, this.cashInstrument,
-        this.components, this.shares, this.basketHoldingCid);
+        this.components, this.shares, this.basketHoldingCid, this.feeReceiver, this.fee,
+        this.feeHoldingCid);
   }
 
   public static final class ContractId extends com.daml.ledger.javaapi.data.codegen.ContractId<RedemptionOrder> implements Exercises<ExerciseCommand> {
