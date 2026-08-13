@@ -98,10 +98,11 @@ they need a live participant and that registrar's `ChoiceContext`, per `docs/ASS
 | 17 | `myMandate` | ✅ | | CORE |
 | 18 | `acceptMandate` | ✅ | | CORE |
 
-🔴 **`mocState` takes `actingAs`, while `bookState` takes `as`.** Passing `as` to the MOC endpoint
-is silently ignored and falls back to the Venue — which makes the book look fully transparent when
-it is not. This caused a false alarm once already. **When demonstrating the dark book, verify the
-parameter name before believing the output.**
+✅ **`mocState` reads `actingAs` and `bookState` reads `as` — and since `ActingPartyAliasFilter`
+both names now work on both.** They did not: passing `as` to a `/moc/*` endpoint was silently
+ignored and fell back to the Venue, so a genuinely private book came back looking completely
+transparent, with a 200. That caused a false alarm about the central privacy claim once already.
+Verified fixed in a running app on 13 August 2026 — `?as=Auditor` returns 0 orders (§12, step 17).
 
 **The money shot:** query one auction with two resting orders as four parties — Venue sees 2,
 each trader sees only its own, **the auditor sees 0**.
