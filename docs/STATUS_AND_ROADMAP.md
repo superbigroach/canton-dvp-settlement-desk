@@ -124,7 +124,9 @@ on BitSafe's templates, and that is a separate holding. The demo fund's own cBTC
 | 4 | **Fixing lookup by identifier and date.** `GET /fixings` returns contracts; a benchmark needs "the fixing for `CDX-CBTC-D` on 2026-08-12" | nothing | hours |
 | 5 | **Scheduled strike.** ⚠️ Decide first: a K-of-N quorum **cannot** be automated. A cron can file the proposal or open the session; it cannot make K members act. Those are different products | a decision | hours |
 | 6 | **Correlation id per request**, echoed into every log line. `updateId`/`offset` are already logged on every write, which is the important half | nothing | half a day |
-| 7 | **CIP-56 adapter (Gap A)** — teach the basket to accept `HoldingV1` holdings so a fund can hold real cBTC, pinning the registrar via `expectedIssuer` | **task 2** — unprovable without a real registrar | days |
+| 7 | **CIP-56 adapter (Gap A)** — teach the basket to accept token-standard holdings so a fund can hold real cBTC, pinning the registrar via `expectedIssuer`. ⚠️ **Target V2 allocations, not V1** — see `docs/ECOSYSTEM_ALIGNMENT.md` §1 | **task 2**, and worth waiting for the funded Bit Dynamics reference | days |
+| 7a | **Publish the fixing over the Kaiko Data Standard** once it lands in Splice — the ecosystem's interface for reference rates, so consumers read us by default instead of integrating bespoke. Also our strongest grant angle. See `ECOSYSTEM_ALIGNMENT.md` §2 | the Standard landing in Splice | small, high reach |
+| 7b | **Operator as a Decentralized Party** — closes "one party, one key" on the venue itself. No template changes; the open question is what threshold coordination does to write latency. See `ECOSYSTEM_ALIGNMENT.md` §3 | **task 2** | design done |
 | 8 | **Minimum-quality flag on the published fixing** — record *which tier* produced it and whether it was carried forward (methodology §3, §10) | nothing | hours |
 | 9 | **Cessation process** (methodology §8) — a notice period, not code | nothing | policy |
 
