@@ -1,0 +1,62 @@
+CrossDesk — Proprietary Licence
+Copyright (c) 2026 Sebastian Borjas. All rights reserved.
+
+This repository is published so that it can be READ. It is not open source, and
+no open-source licence applies to it.
+
+1. OWNERSHIP
+   All content of this repository authored by the copyright holder — including
+   the Daml packages, the Java/Spring backend, the TypeScript frontend, the
+   deployment configuration and the documentation — is the property of the
+   copyright holder and is protected by copyright. All rights are reserved.
+
+2. WHAT YOU MAY DO
+   a. View, read and study this repository.
+   b. Fork it through the GitHub interface, and clone it locally, for the sole
+      purpose of evaluating, reviewing or discussing the work — for example a
+      prospective customer, partner, employer, investor, grant reviewer or
+      immigration authority assessing it.
+   c. Quote short excerpts with attribution, for review, commentary, teaching or
+      journalism.
+
+3. WHAT YOU MAY NOT DO WITHOUT A WRITTEN LICENCE
+   a. Use it, or any part of it, in production or in any commercial setting.
+   b. Operate it, or any part of it, as or within a service offered to others.
+   c. Modify it, or create derivative works from it, other than transiently for
+      the evaluation permitted in 2(b).
+   d. Redistribute, publish, sublicense, sell or otherwise convey it, in source
+      or compiled form, other than a fork on GitHub as permitted in 2(b).
+   e. Remove or alter any copyright, licence or attribution notice.
+
+4. THIRD-PARTY COMPONENTS
+   This repository redistributes third-party components that are NOT covered by
+   this licence and remain under their own terms. They are listed in NOTICE, with
+   their licence text in `licenses/`. Nothing in this licence limits, or purports
+   to limit, the rights granted to you by those licences.
+
+5. NO TRADEMARK RIGHTS
+   No right is granted to use the name "CrossDesk", any associated mark, or the
+   name of the copyright holder, except in factual reference to this work.
+
+6. COMMERCIAL LICENSING
+   Licences to use, deploy or embed this software are available. Enquiries:
+   s.borjas@lucilla.ca
+
+7. NO WARRANTY
+   THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+   IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+   CONNECTION WITH THIS SOFTWARE OR ITS USE.
+   In particular: nothing in this repository is a price, a valuation, a benchmark,
+   investment advice, or an offer of any financial product or service.
+
+8. NOTHING ABOVE OVERRIDES YOUR STATUTORY RIGHTS
+   Where applicable law grants you rights that this licence purports to restrict
+   — fair dealing, fair use, or a mandatory exception — those rights are
+   unaffected.
+
+---
+This is a plain-language proprietary licence, not legal advice. Have counsel
+review it before relying on it in a commercial agreement.

@@ -1,0 +1,53 @@
+CrossDesk
+Copyright (c) 2026 Sebastian Borjas.
+
+This product includes third-party components that are redistributed in this
+repository under their own licences. Those components are NOT covered by the
+CrossDesk proprietary licence in LICENSE.
+
+===============================================================================
+Canton Network Token Standard (CIP-56) — Splice API packages
+===============================================================================
+
+Six compiled Daml archives are vendored, unmodified, in `deps/`:
+
+  deps/splice-api-token-metadata-v1-1.0.0.dar
+  deps/splice-api-token-holding-v1-1.0.0.dar
+  deps/splice-api-token-transfer-instruction-v1-1.0.0.dar
+  deps/splice-api-token-allocation-v1-1.0.0.dar
+  deps/splice-api-token-allocation-instruction-v1-1.0.0.dar
+  deps/splice-api-token-allocation-request-v1-1.0.0.dar
+
+  Project:  Splice — https://github.com/canton-network/splice
+  Licence:  Apache License, Version 2.0
+  Text:     licenses/Apache-2.0.txt
+
+They are redistributed byte-for-byte from the Splice release, with no
+modification, so that this project builds reproducibly without a network fetch
+(see the `data-dependencies` block in daml.yaml for why they are vendored).
+
+Copyright of these packages remains with their respective authors and
+contributors. Their inclusion here is redistribution under Apache-2.0 section 4;
+it implies no endorsement of CrossDesk by the Splice project, the Canton
+Foundation, Digital Asset, or any contributor.
+
+===============================================================================
+Build- and run-time dependencies NOT redistributed here
+===============================================================================
+
+These are resolved by the build from their own registries and are not included in
+this repository. Each remains under its own licence:
+
+  * Daml SDK, Daml stdlib, Daml Script  (Digital Asset)
+  * Spring Boot, and its transitive dependencies  (Apache-2.0 and others)
+  * React, Vite, TypeScript, and the npm dependency tree  (MIT and others)
+
+Run `./gradlew dependencies` and `npm ls --all` for the resolved sets.
+
+===============================================================================
+Names and marks
+===============================================================================
+
+"Canton", "Canton Network" and "Daml" are marks of Digital Asset. "CBTC" and
+"BitSafe" are marks of DLC-Link, Inc. dba BitSafe. "cETH" is a mark of onRails.
+Used here in factual reference only; no affiliation or endorsement is claimed.
