@@ -49,9 +49,9 @@ import java.util.Set;
 public final class BasketDefinition extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#crossdesk", "Basket", "BasketDefinition");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("87c24b9a3ade1253eebbb4ea1feef8f4b9963f33c7cc6272efb5f79afdef1bb0", "Basket", "BasketDefinition");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("7eca29e115ad24f98fd4190f21ac6d7440ce8f3211675421f555856febed4e5c", "Basket", "BasketDefinition");
 
-  public static final String PACKAGE_ID = "87c24b9a3ade1253eebbb4ea1feef8f4b9963f33c7cc6272efb5f79afdef1bb0";
+  public static final String PACKAGE_ID = "7eca29e115ad24f98fd4190f21ac6d7440ce8f3211675421f555856febed4e5c";
 
   public static final String PACKAGE_NAME = "crossdesk";
 

@@ -58,6 +58,23 @@ data Component = Component
   with
     instrumentId  : Text
     unitsPerShare : Decimal
+    -- WHICH issuer's version of that instrument. Optional and last, for the upgrade
+    -- reason given on the fee fields below.
+    --
+    -- WHY THIS EXISTS. `instrumentId` is a plain string, so without this field the
+    -- creation check is "does the delivered holding's text field say CBTC?" — and
+    -- ANY issuer can mint a holding labelled CBTC. A `Holding` is signed by its
+    -- issuer, so a balance cannot be forged; but nothing said WHICH issuer the fund
+    -- accepts, so a self-issued impostor satisfied a basket exactly as well as the
+    -- real thing. Pinning the issuer is what makes "this fund holds cBTC" a claim
+    -- rather than a label.
+    --
+    -- None means "any issuer", which is what the demo baskets use. For a fund that
+    -- means to hold a named issuer's asset, set it. When the CIP-56 path lands this
+    -- is the field that carries the registrar party — `instrumentId.admin` in the
+    -- token standard's view — and a Canton party id is `hint::fingerprint` where the
+    -- fingerprint hashes the namespace key, so it cannot be impersonated.
+    expectedIssuer : Optional Party
   deriving (Eq, Show, Ord)
 
 -- ---------------------------------------------------------------------------
@@ -134,6 +151,10 @@ template BasketDefinition
           h <- fetch hCid
           assertMsg "delivered holding must belong to the AP"        (h.owner == ap)
           assertMsg "delivered holding is the wrong instrument"      (h.instrumentId == c.instrumentId)
+          -- The instrument NAME is not the instrument. Where the basket pins an
+          -- issuer, a same-named holding from anyone else is refused.
+          assertMsg "delivered holding is from the wrong issuer for this component"
+            (optional True (== h.issuer) c.expectedIssuer)
           assertMsg "delivered holding is too small for the creation unit"
             (h.amount >= c.unitsPerShare * shares)
           exercise hCid Disclose with newObserver = administrator)
@@ -358,6 +379,10 @@ template RedemptionAgreement
           h <- fetch hCid
           assertMsg "custody holding must belong to the administrator" (h.owner == administrator)
           assertMsg "custody holding is the wrong instrument"          (h.instrumentId == c.instrumentId)
+          -- Symmetric with creation: an AP that delivered a pinned issuer's asset must
+          -- not be handed back a same-named substitute from somewhere else.
+          assertMsg "custody holding is from the wrong issuer for this component"
+            (optional True (== h.issuer) c.expectedIssuer)
           assertMsg "custody holding is too small to redeem the basket"
             (h.amount >= c.unitsPerShare * shares)
           deliverExact hCid (c.unitsPerShare * shares) ap)

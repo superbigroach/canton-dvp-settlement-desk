@@ -582,7 +582,8 @@ public class LedgerService {
                             BasketDefinition b = c.data;
                             List<ComponentView> comps = new ArrayList<>();
                             for (Component comp : b.components) {
-                                comps.add(new ComponentView(comp.instrumentId, comp.unitsPerShare));
+                                comps.add(new ComponentView(comp.instrumentId, comp.unitsPerShare,
+                                        comp.expectedIssuer));
                             }
                             out.add(new BasketView(c.id.contractId, b.administrator, b.basketId,
                                     b.description, b.cashInstrument, comps, b.participants));
@@ -1217,8 +1218,19 @@ public class LedgerService {
             String id, String kind, String description, java.math.BigDecimal referencePrice) {
     }
 
-    /** One component leg of a basket's creation unit. */
-    public record ComponentView(String instrumentId, java.math.BigDecimal unitsPerShare) {
+    /**
+     * One leg of a basket's creation unit. {@code expectedIssuer} is the party whose
+     * version of the instrument the fund accepts — empty means any issuer. Carried here
+     * because the instrument NAME is not the instrument: a caller needs to see WHOSE
+     * asset a fund holds, not just what it is called.
+     */
+    public record ComponentView(String instrumentId, java.math.BigDecimal unitsPerShare,
+                                java.util.Optional<String> expectedIssuer) {
+
+        /** A leg with no issuer pin. */
+        public ComponentView(String instrumentId, java.math.BigDecimal unitsPerShare) {
+            this(instrumentId, unitsPerShare, java.util.Optional.empty());
+        }
     }
 
     /** Flat, JSON-friendly view of a BasketDefinition (an ETF/fund). */

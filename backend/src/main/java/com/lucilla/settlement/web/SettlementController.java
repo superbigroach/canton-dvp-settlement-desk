@@ -1484,7 +1484,11 @@ public class SettlementController {
         String auditor = ledger.resolveParty(blankTo(req.auditor(), "Auditor"));
         String cash = blankTo(req.cashInstrument(), "USDC");
         var comps = req.components().stream()
-                .map(c -> LedgerCommands.basketComponent(c.instrumentId(), c.unitsPerShare()))
+                .map(c -> LedgerCommands.basketComponent(c.instrumentId(), c.unitsPerShare(),
+                        // A pinned issuer is a party like any other, so it accepts either a
+                        // label or a full party id. Blank stays null: no pin, any issuer.
+                        (c.expectedIssuer() == null || c.expectedIssuer().isBlank())
+                                ? null : ledger.resolveParty(c.expectedIssuer())))
                 .toList();
         List<String> parts = req.participants().stream().map(ledger::resolveParty).toList();
         // The fee receiver is a party label like any other, so resolve it the same way.
@@ -1508,7 +1512,10 @@ public class SettlementController {
                 .map(b -> new Dtos.BasketResponse(b.contractId(), b.basketId(),
                         LedgerService.labelOf(b.administrator()), b.cashInstrument(),
                         b.components().stream()
-                                .map(c -> new Dtos.ComponentDto(c.instrumentId(), c.unitsPerShare()))
+                                .map(c -> new Dtos.ComponentDto(c.instrumentId(), c.unitsPerShare(),
+                                        // Echo the pin back as a readable label, so a caller can
+                                        // see WHOSE asset the fund accepts, not just its name.
+                                        c.expectedIssuer().map(LedgerService::labelOf).orElse(null)))
                                 .toList(),
                         b.participants().stream().map(LedgerService::labelOf).toList()))
                 .toList();

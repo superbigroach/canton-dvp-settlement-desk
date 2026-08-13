@@ -2,7 +2,9 @@ package com.lucilla.settlement.model.basket;
 
 import static com.daml.ledger.javaapi.data.codegen.json.JsonLfEncoders.apply;
 
+import com.daml.ledger.javaapi.data.DamlOptional;
 import com.daml.ledger.javaapi.data.Numeric;
+import com.daml.ledger.javaapi.data.Party;
 import com.daml.ledger.javaapi.data.Text;
 import com.daml.ledger.javaapi.data.Value;
 import com.daml.ledger.javaapi.data.codegen.DamlRecord;
@@ -22,47 +24,55 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 public class Component extends DamlRecord<Component> {
-  public static final String _packageId = "87c24b9a3ade1253eebbb4ea1feef8f4b9963f33c7cc6272efb5f79afdef1bb0";
+  public static final String _packageId = "7eca29e115ad24f98fd4190f21ac6d7440ce8f3211675421f555856febed4e5c";
 
   public final String instrumentId;
 
   public final BigDecimal unitsPerShare;
 
-  public Component(String instrumentId, BigDecimal unitsPerShare) {
+  public final Optional<String> expectedIssuer;
+
+  public Component(String instrumentId, BigDecimal unitsPerShare, Optional<String> expectedIssuer) {
     this.instrumentId = instrumentId;
     this.unitsPerShare = unitsPerShare;
+    this.expectedIssuer = expectedIssuer;
   }
 
   public static ValueDecoder<Component> valueDecoder() throws IllegalArgumentException {
     return value$ -> {
       Value recordValue$ = value$;
-      List<com.daml.ledger.javaapi.data.DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(2,0,
+      List<com.daml.ledger.javaapi.data.DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(3,1,
           recordValue$);
       String instrumentId = PrimitiveValueDecoders.fromText.decode(fields$.get(0).getValue());
       BigDecimal unitsPerShare = PrimitiveValueDecoders.fromNumeric
           .decode(fields$.get(1).getValue());
-      return new Component(instrumentId, unitsPerShare);
+      Optional<String> expectedIssuer = PrimitiveValueDecoders.fromOptional(
+            PrimitiveValueDecoders.fromParty).decode(fields$.get(2).getValue());
+      return new Component(instrumentId, unitsPerShare, expectedIssuer);
     } ;
   }
 
   public com.daml.ledger.javaapi.data.DamlRecord toValue() {
-    ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field> fields = new ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field>(2);
+    ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field> fields = new ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field>(3);
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("instrumentId", new Text(this.instrumentId)));
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("unitsPerShare", new Numeric(this.unitsPerShare)));
+    fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("expectedIssuer", DamlOptional.of(this.expectedIssuer.map(v$0 -> new Party(v$0)))));
     return new com.daml.ledger.javaapi.data.DamlRecord(fields);
   }
 
   public static JsonLfDecoder<Component> jsonDecoder() {
-    return JsonLfDecoders.record(Arrays.asList("instrumentId", "unitsPerShare"), name -> {
+    return JsonLfDecoders.record(Arrays.asList("instrumentId", "unitsPerShare", "expectedIssuer"), name -> {
           switch (name) {
             case "instrumentId": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text);
             case "unitsPerShare": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(1, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10));
+            case "expectedIssuer": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(2, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party), java.util.Optional.empty());
             default: return null;
           }
         }
-        , (Object[] args) -> new Component(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1])));
+        , (Object[] args) -> new Component(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2])));
   }
 
   public static Component fromJson(String json) throws JsonLfDecoder.Error {
@@ -72,7 +82,8 @@ public class Component extends DamlRecord<Component> {
   public JsonLfEncoder jsonEncoder() {
     return JsonLfEncoders.record(
         JsonLfEncoders.Field.of("instrumentId", apply(JsonLfEncoders::text, instrumentId)),
-        JsonLfEncoders.Field.of("unitsPerShare", apply(JsonLfEncoders::numeric, unitsPerShare)));
+        JsonLfEncoders.Field.of("unitsPerShare", apply(JsonLfEncoders::numeric, unitsPerShare)),
+        JsonLfEncoders.Field.of("expectedIssuer", apply(JsonLfEncoders.optional(JsonLfEncoders::party), expectedIssuer)));
   }
 
   @Override
@@ -88,18 +99,19 @@ public class Component extends DamlRecord<Component> {
     }
     Component other = (Component) object;
     return Objects.equals(this.instrumentId, other.instrumentId) &&
-        Objects.equals(this.unitsPerShare, other.unitsPerShare);
+        Objects.equals(this.unitsPerShare, other.unitsPerShare) &&
+        Objects.equals(this.expectedIssuer, other.expectedIssuer);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(this.instrumentId, this.unitsPerShare);
+    return Objects.hash(this.instrumentId, this.unitsPerShare, this.expectedIssuer);
   }
 
   @Override
   public String toString() {
-    return String.format("com.lucilla.settlement.model.basket.Component(%s, %s)", this.instrumentId,
-        this.unitsPerShare);
+    return String.format("com.lucilla.settlement.model.basket.Component(%s, %s, %s)",
+        this.instrumentId, this.unitsPerShare, this.expectedIssuer);
   }
 
   /**

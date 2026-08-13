@@ -2411,7 +2411,7 @@ testCreateThenRedeem = do
 
   -- The fund administrator/custodian is `bank`; the AP is Alice. The underlying
   -- instruments are still issued by `issuer` (onRails-style), kept distinct.
-  let comps = [Component ceth 0.10, Component cbtc 0.01]
+  let comps = [Component ceth 0.10 None, Component cbtc 0.01 None]
   basketCid <- submit bank do
     createCmd BasketDefinition with
       administrator = bank; auditor; basketId = "LX1"
@@ -2483,7 +2483,7 @@ testCreationAtomicRollback = do
   Parties{..} <- setup
   setupInstruments issuer
 
-  let comps = [Component ceth 0.10, Component cbtc 0.01]
+  let comps = [Component ceth 0.10 None, Component cbtc 0.01 None]
   basketCid <- submit bank do
     createCmd BasketDefinition with
       administrator = bank; auditor; basketId = "LX1"
@@ -2523,7 +2523,7 @@ testCreationAndRedemptionFeesArePaidToTheOperator = do
   Parties{..} <- setup
   setupInstruments issuer
 
-  let comps = [Component ceth 0.10, Component cbtc 0.01]
+  let comps = [Component ceth 0.10 None, Component cbtc 0.01 None]
   basketCid <- submit bank do
     createCmd BasketDefinition with
       administrator = bank; auditor; basketId = "LX1"
@@ -2590,7 +2590,7 @@ testUnfundedFeeRefusesTheCreation = do
   Parties{..} <- setup
   setupInstruments issuer
 
-  let comps = [Component ceth 0.10, Component cbtc 0.01]
+  let comps = [Component ceth 0.10 None, Component cbtc 0.01 None]
   basketCid <- submit bank do
     createCmd BasketDefinition with
       administrator = bank; auditor; basketId = "LX1"
@@ -2627,7 +2627,7 @@ testUnfundedFeeRefusesTheCreation = do
 testFeeConfigurationIsValidated : Script ()
 testFeeConfigurationIsValidated = do
   Parties{..} <- setup
-  let comps = [Component ceth 0.10]
+  let comps = [Component ceth 0.10 None]
 
   -- A fee with no receiver.
   submitMustFail bank do
@@ -2646,12 +2646,67 @@ testFeeConfigurationIsValidated = do
       feeReceiver = Some venue; creationFee = Some (-1.0); redemptionFee = None
 
 -- ---------------------------------------------------------------------------
+-- TEST 11f — THE INSTRUMENT NAME IS NOT THE INSTRUMENT. A basket that pins an
+-- issuer per component refuses a same-named token minted by anybody else.
+--
+-- Without the pin, the creation check is a string comparison against a text field,
+-- and any party can mint a holding labelled CBTC. A Holding is signed by its
+-- issuer, so a balance cannot be forged — but that only proves SOMEONE issued it,
+-- not that the right someone did. This is the difference between a fund that holds
+-- an asset and a fund that holds a label.
+-- ---------------------------------------------------------------------------
+testPinnedIssuerRefusesALookalikeToken : Script ()
+testPinnedIssuerRefusesALookalikeToken = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  -- Only `issuer`'s cETH and CBTC count for this fund.
+  let comps = [Component ceth 0.10 (Some issuer), Component cbtc 0.01 (Some issuer)]
+  basketCid <- submit bank do
+    createCmd BasketDefinition with
+      administrator = bank; auditor; basketId = "LX1"
+      description = "issuer-pinned index"; cashInstrument = usdc
+      components = comps; participants = [alice]
+      feeReceiver = None; creationFee = None; redemptionFee = None
+
+  -- Alice's cETH is genuine. Her CBTC was minted by Eve: same instrument name,
+  -- same quantity, different issuer. This is precisely the impersonation the pin
+  -- exists to catch, and nothing else in the flow would notice it.
+  aliceCeth <- mint issuer ceth alice 1.0
+  aliceFake <- mint eve    cbtc alice 0.1
+  submitMustFail alice do
+    exerciseCmd basketCid RequestCreation with
+      ap = alice; shares = 10.0; componentHoldingCids = [aliceCeth, aliceFake]
+      feeHoldingCid = None
+
+  -- No shares were minted against the impostor.
+  aliceLx0 <- ownedAmount alice "LX1"
+  aliceLx0 === 0.0
+
+  -- The genuine article walks the same path and settles.
+  aliceReal <- mint issuer cbtc alice 0.1
+  orderCid <- submit alice do
+    exerciseCmd basketCid RequestCreation with
+      ap = alice; shares = 10.0; componentHoldingCids = [aliceCeth, aliceReal]
+      feeHoldingCid = None
+  agreeCid <- submit bank do exerciseCmd orderCid ApproveCreation
+  cRes     <- submit bank do exerciseCmd agreeCid ProcessCreation
+  Some sh <- queryContractId alice cRes.mintedShares
+  sh.amount       === 10.0
+  sh.instrumentId === "LX1"
+
+  -- Eve's lookalike is still sitting in Alice's wallet, untouched and worthless
+  -- to this fund. The pin did not confiscate it; it simply refused to price it.
+  Some fake <- queryContractId alice aliceFake
+  fake.issuer === eve
+
+-- ---------------------------------------------------------------------------
 -- TEST 12 — NAV per share = Σ (unitsPerShare × price). With cETH @ 2,400 and CBTC
 -- @ 65,000: 0.10×2,400 + 0.01×65,000 = 240 + 650 = 890. A missing mark = no NAV.
 -- ---------------------------------------------------------------------------
 testNavPerShare : Script ()
 testNavPerShare = do
-  let comps = [Component ceth 0.10, Component cbtc 0.01]
+  let comps = [Component ceth 0.10 None, Component cbtc 0.01 None]
   let priceOf t
         | t == ceth = Some 2400.0
         | t == cbtc = Some 65000.0

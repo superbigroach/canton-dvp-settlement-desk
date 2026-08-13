@@ -22,7 +22,7 @@ import java.util.List;
 import java.util.Objects;
 
 public class SettleResult extends DamlRecord<SettleResult> {
-  public static final String _packageId = "87c24b9a3ade1253eebbb4ea1feef8f4b9963f33c7cc6272efb5f79afdef1bb0";
+  public static final String _packageId = "7eca29e115ad24f98fd4190f21ac6d7440ce8f3211675421f555856febed4e5c";
 
   public final Holding.ContractId deliveredAsset;
 

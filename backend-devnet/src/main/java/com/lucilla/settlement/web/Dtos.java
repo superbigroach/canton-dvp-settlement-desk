@@ -519,10 +519,24 @@ public final class Dtos {
 
     // ---- Basket / ETF builder --------------------------------------------
 
-    /** One component leg of a basket's creation unit. */
+    /**
+     * One component leg of a basket's creation unit.
+     *
+     * <p>{@code expectedIssuer} pins WHOSE version of the instrument the fund accepts.
+     * It is optional; omit it for "any issuer", which is what the demo baskets use. Set
+     * it — to a party label or a full party id — for a fund that means to hold a named
+     * issuer's asset, because {@code instrumentId} alone is just a string and any party
+     * can mint a holding wearing that name.
+     */
     public record ComponentDto(
             @NotBlank String instrumentId,
-            @NotNull @Positive BigDecimal unitsPerShare) {
+            @NotNull @Positive BigDecimal unitsPerShare,
+            String expectedIssuer) {
+
+        /** A leg with no issuer constraint. */
+        public ComponentDto(String instrumentId, BigDecimal unitsPerShare) {
+            this(instrumentId, unitsPerShare, null);
+        }
     }
 
     /**

@@ -598,9 +598,26 @@ public final class LedgerCommands {
 
     // ---- Basket / ETF builder: in-kind creation & redemption ---------------
 
-    /** A component leg of the creation unit: {@code unitsPerShare} of an instrument. */
+    /**
+     * A component leg of the creation unit: {@code unitsPerShare} of an instrument, from
+     * ANY issuer. Kept as an overload so existing callers compile unchanged.
+     */
     public static Component basketComponent(String instrumentId, BigDecimal unitsPerShare) {
-        return new Component(instrumentId, unitsPerShare);
+        return basketComponent(instrumentId, unitsPerShare, null);
+    }
+
+    /**
+     * A component leg pinned to a specific issuer. The instrument NAME is not the
+     * instrument: {@code instrumentId} is a plain string, so without a pin any party can
+     * mint a holding labelled "CBTC" and the fund would accept it. Pass the issuer's
+     * full party id — including the {@code ::1220…} fingerprint, which hashes that
+     * namespace's public key and therefore cannot be impersonated.
+     *
+     * <p>Null means "any issuer", which is what the demo baskets use.
+     */
+    public static Component basketComponent(
+            String instrumentId, BigDecimal unitsPerShare, String expectedIssuer) {
+        return new Component(instrumentId, unitsPerShare, Optional.ofNullable(expectedIssuer));
     }
 
     /**
