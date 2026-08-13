@@ -1,5 +1,20 @@
 # CrossDesk — a sealed closing auction that discovers its own price, on Canton
 
+> **Source-available, not open source.** This is a commercial product, published so it can be read.
+> You may read, fork and evaluate it; you may **not** run it in production, operate it as a service,
+> build a derivative product from it, or redistribute it without a written licence. See
+> [`LICENSE`](LICENSE), and [`NOTICE`](NOTICE) for the Apache-2.0 packages vendored in `deps/`.
+> Licensing enquiries: **s.borjas@lucilla.ca**
+>
+> **Start here:** [`docs/STATUS_AND_ROADMAP.md`](docs/STATUS_AND_ROADMAP.md) — what this is for,
+> what is verified, what is not, and what happens next.
+> Won **Best Financial Application**, HackCanton Season 2 Grand Final, 5 August 2026.
+>
+> ⚠️ Two things this repository does **not** claim: that anything here has been run end to end in its
+> current state (the test suites pass; no sandbox has been driven), and that the demo fund holds real
+> cBTC (4.16 real cBTC was claimed through the CIP-56 registry flow and is held **separately**; the
+> fund's own cBTC and cETH legs are self-issued test assets).
+
 **Traders lodge sealed orders nobody else can see. At the close the venue uncrosses
 the whole book in one atomic transaction: it *discovers* a single clearing price
 from the orders themselves, allocates by price priority, moves every leg, and
