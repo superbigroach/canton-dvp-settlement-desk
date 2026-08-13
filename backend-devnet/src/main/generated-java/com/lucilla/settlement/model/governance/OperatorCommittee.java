@@ -48,13 +48,21 @@ import java.util.Set;
 public final class OperatorCommittee extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#crossdesk", "Governance", "OperatorCommittee");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("504d21e4573fdcb737242ee9149b3e88f1ec7d6bd5a76b5701f4762c36fd8ae4", "Governance", "OperatorCommittee");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("abbcb556af749c83f1afa7694d9aef2854b73e4e26080ad1d301b6b1789b47d1", "Governance", "OperatorCommittee");
 
-  public static final String PACKAGE_ID = "504d21e4573fdcb737242ee9149b3e88f1ec7d6bd5a76b5701f4762c36fd8ae4";
+  public static final String PACKAGE_ID = "abbcb556af749c83f1afa7694d9aef2854b73e4e26080ad1d301b6b1789b47d1";
 
   public static final String PACKAGE_NAME = "crossdesk";
 
   public static final PackageVersion PACKAGE_VERSION = new PackageVersion(new int[] {2, 1, 0});
+
+  public static final Choice<OperatorCommittee, ProposeRestatement, RestatementProposal.ContractId> CHOICE_ProposeRestatement = 
+      Choice.create("ProposeRestatement", value$ -> value$.toValue(), value$ ->
+        ProposeRestatement.valueDecoder().decode(value$), value$ ->
+        new RestatementProposal.ContractId(value$.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected value$ to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()),
+        new ProposeRestatement.JsonDecoder$().get(),
+        JsonLfDecoders.contractId(RestatementProposal.ContractId::new),
+        ProposeRestatement::jsonEncoder, JsonLfEncoders::contractId);
 
   public static final Choice<OperatorCommittee, ProposeAccruingFixing, FixingProposal.ContractId> CHOICE_ProposeAccruingFixing = 
       Choice.create("ProposeAccruingFixing", value$ -> value$.toValue(), value$ ->
@@ -82,7 +90,8 @@ public final class OperatorCommittee extends Template {
       new ContractCompanion.WithoutKey<>(new ContractTypeCompanion.Package(OperatorCommittee.PACKAGE_ID, OperatorCommittee.PACKAGE_NAME, OperatorCommittee.PACKAGE_VERSION),
         "com.lucilla.settlement.model.governance.OperatorCommittee", TEMPLATE_ID, ContractId::new,
         v -> OperatorCommittee.templateValueDecoder().decode(v), OperatorCommittee::fromJson,
-        Contract::new, List.of(CHOICE_ProposeAccruingFixing, CHOICE_ProposeFixing, CHOICE_Archive));
+        Contract::new, List.of(CHOICE_ProposeRestatement, CHOICE_ProposeAccruingFixing,
+        CHOICE_ProposeFixing, CHOICE_Archive));
 
   public final String admin;
 
@@ -106,6 +115,26 @@ public final class OperatorCommittee extends Template {
   @Override
   public Update<Created<ContractId>> create() {
     return new Update.CreateUpdate<ContractId, Created<ContractId>>(new CreateCommand(OperatorCommittee.TEMPLATE_ID, this.toValue()), x -> x, ContractId::new);
+  }
+
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseProposeRestatement} instead
+   */
+  @Deprecated
+  public Update<Exercised<RestatementProposal.ContractId>> createAndExerciseProposeRestatement(
+      ProposeRestatement arg) {
+    return createAnd().exerciseProposeRestatement(arg);
+  }
+
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseProposeRestatement} instead
+   */
+  @Deprecated
+  public Update<Exercised<RestatementProposal.ContractId>> createAndExerciseProposeRestatement(
+      String proposer, NavFixing.ContractId supersedes, BigDecimal price, String rationale,
+      String reason, BigDecimal ratePerAnnum, String dayCount, Instant accrualFrom) {
+    return createAndExerciseProposeRestatement(new ProposeRestatement(proposer, supersedes, price,
+        rationale, reason, ratePerAnnum, dayCount, accrualFrom));
   }
 
   /**
@@ -306,6 +335,18 @@ public final class OperatorCommittee extends Template {
   }
 
   public interface Exercises<Cmd> extends com.daml.ledger.javaapi.data.codegen.Exercises.Archivable<Cmd> {
+    default Update<Exercised<RestatementProposal.ContractId>> exerciseProposeRestatement(
+        ProposeRestatement arg) {
+      return makeExerciseCmd(CHOICE_ProposeRestatement, arg);
+    }
+
+    default Update<Exercised<RestatementProposal.ContractId>> exerciseProposeRestatement(
+        String proposer, NavFixing.ContractId supersedes, BigDecimal price, String rationale,
+        String reason, BigDecimal ratePerAnnum, String dayCount, Instant accrualFrom) {
+      return exerciseProposeRestatement(new ProposeRestatement(proposer, supersedes, price,
+          rationale, reason, ratePerAnnum, dayCount, accrualFrom));
+    }
+
     default Update<Exercised<FixingProposal.ContractId>> exerciseProposeAccruingFixing(
         ProposeAccruingFixing arg) {
       return makeExerciseCmd(CHOICE_ProposeAccruingFixing, arg);

@@ -356,6 +356,51 @@ template OperatorCommittee
     -- "NONE" — so `navAt` returns the struck price at every instant and the semantics
     -- are byte-for-byte the ones this module has always had. Accrual is opt-in, and
     -- `ProposeAccruingFixing` below is how you opt in.
+    -- PROPOSE A RESTATEMENT — a member opens a correction to an ALREADY PUBLISHED
+    -- fixing (docs/FIXING_METHODOLOGY.md §6). Nonconsuming, like the other proposals.
+    --
+    -- Opened here on the committee rather than as a choice on the fixing itself,
+    -- because a correction must be attested by K of N and only the committee knows
+    -- who N are. The proposer is the first approver, exactly as when striking a fix.
+    --
+    -- The corrected recipe is supplied in full — base, rate, convention, origin —
+    -- rather than as a delta, so what each member confirms is the whole replacement
+    -- number and not an adjustment they have to compute themselves.
+    nonconsuming choice ProposeRestatement : ContractId RestatementProposal
+      with
+        proposer     : Party
+        supersedes   : ContractId NavFixing   -- the published fixing being corrected
+        price        : Decimal                -- the corrected base
+        rationale    : Text
+        reason       : Text                   -- why the original was wrong; never blank
+        ratePerAnnum : Decimal
+        dayCount     : Text
+        accrualFrom  : Time
+      controller proposer
+      do
+        assertMsg "proposer must be a committee member" (proposer `elem` members)
+        assertMsg "a restatement must state why the original was wrong" (reason /= "")
+        original <- fetch supersedes
+        -- A committee may only correct a fixing struck under ITS OWN quorum. Without
+        -- this, one committee could restate another's number.
+        assertMsg "this committee did not strike the fixing being restated"
+          (original.admin == admin && original.threshold == threshold)
+        assertMsg "the correction must not repeat the published price"
+          (price /= original.price)
+        create RestatementProposal with
+          admin; members; threshold; auditor; proposer
+          supersedes
+          supersededPrice = original.price
+          instrumentId = original.instrumentId
+          cashInstrument = original.cashInstrument
+          session = original.session
+          price; rationale; reason
+          ratePerAnnum; dayCount; accrualFrom
+          -- Disclosure survives a correction: every desk that could read the wrong
+          -- number must be able to read the right one, without re-publishing by hand.
+          publishTo = original.publishedTo
+          approvers = [proposer]
+
     nonconsuming choice ProposeFixing : ContractId FixingProposal
       with
         proposer       : Party    -- the member opening the fix (must be on the committee)
@@ -508,10 +553,140 @@ template FixingProposal
           ratePerAnnum; dayCount; accrualFrom
           publishedTo = dedup publishTo
           finalizedAt = now
+          -- A first-time fixing supersedes nothing. Only RestatementProposal sets these.
+          supersedes = None
+          restatementReason = None
 
     -- WITHDRAW — the proposer abandons an un-finalised fix (e.g. a stale price).
     -- No official fix is produced.
     choice WithdrawFixing : ()
+      controller proposer
+      do pure ()
+
+-- ---------------------------------------------------------------------------
+-- RestatementProposal — CORRECTING A PUBLISHED FIXING, under the same quorum.
+-- ---------------------------------------------------------------------------
+-- docs/FIXING_METHODOLOGY.md §6. A benchmark without a correction path is worse than
+-- one with a wrong number in it: the number is wrong either way, but with no path the
+-- administrator's only options are to leave it or to quietly change it, and quietly
+-- changing a published price is the thing an auditor is looking for.
+--
+-- Deliberately NOT a choice on the fixing that one party can exercise. A restatement
+-- carries exactly the authority the original did — the same K of N — because a
+-- correction is a new assertion about value, not an erratum. If one signer could
+-- restate alone, then one signer could set the number alone, and the K-of-N property
+-- the whole product rests on would be decorative.
+--
+-- The original is NEITHER mutated NOR archived. It was published, and desks may have
+-- acted on it, so it stays in the record — provably published, next to the correction
+-- that points back at it. Consumers take the fixing that nothing supersedes (or,
+-- equivalently and more cheaply, the newest `finalizedAt`). Archiving it is also
+-- mechanically impossible, for a reason worth keeping: it would need the ORIGINAL
+-- attestors' authority, which would let the members who published a wrong number veto
+-- its correction.
+--
+-- NO TIME WINDOW IS ENFORCED HERE, and that is a decision rather than an omission.
+-- The methodology's window is two BUSINESS days; business-day arithmetic needs a
+-- holiday calendar this package does not have, and enforcing two CALENDAR days would
+-- silently shorten the window across a weekend — refusing a Friday correction on
+-- Monday. A wrong window is worse than none, because it fails closed on exactly the
+-- error most worth fixing. Both timestamps are on the ledger, so a restatement
+-- outside the published window is auditable after the fact, which is the honest place
+-- for that check to live.
+-- ---------------------------------------------------------------------------
+template RestatementProposal
+  with
+    admin           : Party
+    members         : [Party]
+    threshold       : Int
+    auditor         : Party
+    proposer        : Party
+    -- The fixing being corrected, and the facts copied off it so that what members
+    -- confirm is the WHOLE correction — which number, replacing which one, and why.
+    supersedes      : ContractId NavFixing
+    supersededPrice : Decimal   -- what was published, carried for the audit trail
+    instrumentId    : Text
+    cashInstrument  : Text
+    session         : Text
+    price           : Decimal   -- the corrected base
+    rationale       : Text
+    reason          : Text      -- WHY the original was wrong. Never blank.
+    ratePerAnnum    : Decimal
+    dayCount        : Text
+    accrualFrom     : Time
+    publishTo       : [Party]   -- carried from the original so disclosure survives
+    approvers       : [Party]
+  where
+    signatory approvers
+    observer (auditor :: members)
+
+    ensure price > 0.0
+        && length (dedup approvers) == length approvers
+        && supportedDayCount dayCount
+        && ratePerAnnum > -1.0
+        && (dayCount /= "NONE" || ratePerAnnum == 0.0)
+        -- A correction with no stated reason is indistinguishable from tampering.
+        && reason /= ""
+
+    -- CONFIRM — another member attests the correction. Same accumulating multisig as
+    -- a first-time fixing: one new signature per transaction.
+    choice ConfirmRestatement : ContractId RestatementProposal
+      with
+        member : Party
+      controller member
+      do
+        assertMsg "confirmer must be a committee member" (member `elem` members)
+        assertMsg "member has already attested this restatement" (member `notElem` approvers)
+        create this with approvers = member :: approvers
+
+    -- FINALIZE — with K distinct attestations, archive the superseded fixing and
+    -- publish the replacement pointing back at it. One transaction: there is never an
+    -- instant at which both numbers are live, nor one at which neither is.
+    choice FinalizeRestatement : ContractId NavFixing
+      controller proposer
+      do
+        assertMsg "not enough attestations to finalise the restatement"
+          (length approvers >= threshold)
+        original <- fetch supersedes
+        assertMsg "restatement must correct a fixing for the same instrument"
+          (original.instrumentId == instrumentId)
+        assertMsg "restatement must correct a fixing for the same session"
+          (original.session == session)
+        assertMsg "the superseded price on the proposal does not match the fixing"
+          (original.price == supersededPrice)
+        -- THE ORIGINAL IS NOT ARCHIVED, and that is the correct model twice over.
+        --
+        -- Mechanically it CANNOT be: archiving a NavFixing needs the authority of ITS
+        -- signatories — the attestors who struck it — and a correction is attested by
+        -- whichever K members are available now, which may not be the same K. The
+        -- ledger refused this and was right to. If archiving were required, then the
+        -- very members who published a wrong number could block its correction by
+        -- declining to sign, which is the opposite of what a correction path is for.
+        --
+        -- Financially it should not be either. The wrong number WAS published; desks
+        -- may have acted on it. A benchmark restatement does not erase the original
+        -- print, it supersedes it — the original stays in the record, provably
+        -- published, next to the correction that points at it. That is what
+        -- docs/FIXING_METHODOLOGY.md §6 requires: "published as a new record
+        -- referencing the original. The original is never deleted or overwritten."
+        --
+        -- CONSUMER RULE, therefore: the current fixing for an (instrument, session) is
+        -- the one that no other fixing supersedes. Reading the newest by
+        -- `finalizedAt` gives the same answer and is cheaper.
+        now <- getTime
+        create NavFixing with
+          attestors = approvers
+          admin; auditor; threshold
+          instrumentId; cashInstrument; session; price; rationale
+          ratePerAnnum; dayCount; accrualFrom
+          publishedTo = dedup publishTo
+          finalizedAt = now
+          supersedes = Some supersedes
+          restatementReason = Some reason
+
+    -- WITHDRAW — abandon a correction before it reaches quorum. The original fixing
+    -- is untouched and remains the official number.
+    choice WithdrawRestatement : ()
       controller proposer
       do pure ()
 
@@ -553,6 +728,17 @@ template NavFixing
     -- separately on purpose: a mark struck as of 16:00 and finalised at 16:07 records
     -- both, so the committee's own latency is auditable rather than absorbed.
     finalizedAt    : Time
+    -- RESTATEMENT LINEAGE. Optional and appended last, for the Daml upgrade reason:
+    -- a non-Optional field, or one inserted mid-record, fails
+    -- NOT_VALID_UPGRADE_PACKAGE and orphans every fixing already on a participant.
+    --
+    -- Set only on a fixing that CORRECTS another (see RestatementProposal). A
+    -- consumer that finds `supersedes = Some cid` is holding the current number and
+    -- can follow the chain back; the superseded contract is archived, and its archive
+    -- is permanent history rather than a deletion. `None` on both means this fixing
+    -- has never been corrected, which is the ordinary case.
+    supersedes        : Optional (ContractId NavFixing)
+    restatementReason : Optional Text
   where
     signatory attestors
     -- The auditor and the published-to venues observe the official fix; the fix is

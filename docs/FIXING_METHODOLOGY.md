@@ -6,10 +6,12 @@ This document is the rulebook for a CrossDesk fixing. It exists because a number
 audit is not a benchmark: a benchmark is a **rule, a clock and a record**. Anyone referencing a
 CrossDesk fixing in a contract is referencing this document.
 
-> **Status.** §§2–5, 7 and 9 describe behaviour that is implemented and tested in
-> `Governance.daml`, `MarketOnClose.daml` and `Basket.daml`. §6 (restatement) and §8 (cessation)
-> are **specified here but not yet implemented** — see §12. Nothing in this document should be
-> read as a claim that a fixing is currently in production.
+> **Status.** §§2–7 and 9 describe behaviour that is implemented and tested in `Governance.daml`,
+> `MarketOnClose.daml` and `Basket.daml` — including §3's minimum quality conditions and §6's
+> restatement quorum. **§8 (cessation) is a process, not code**, and §4's scheduled strike is not
+> built; see §12 for the per-section state. Nothing here should be read as a claim that a fixing is
+> currently in production: no fixing has been published, and the participant the desk ran on is
+> offline.
 
 ---
 
@@ -104,7 +106,7 @@ consecutive carried-forward strikes trigger a review under §8.
 - **Incomplete inputs:** if a required component has no current fixing, the dependent fixing is
   **not published**. A gap is published as a gap. A fixing is never estimated to fill one.
 
-## 6. Errors, corrections and restatement — *specified, not yet implemented*
+## 6. Errors, corrections and restatement
 
 - A fixing found to be **materially wrong** is restated. Materiality threshold: **1 basis point**
   of the published value, or any error that changes a settlement obligation.
@@ -113,8 +115,25 @@ consecutive carried-forward strikes trigger a review under §8.
   that is the point.
 - **Restatement window: two business days** from publication. After that the fixing stands, and a
   dispute is a matter for the contract that referenced it, not for the administrator.
-- Anyone may report a suspected error to the administrator. Corrections require the same `K`-of-`N`
-  quorum as a fixing.
+  ⚠️ **This window is policy, not code.** It is deliberately *not* enforced on-ledger: business-day
+  arithmetic needs a holiday calendar the package does not carry, and enforcing two *calendar* days
+  would silently shorten the window across a weekend — refusing a Friday correction on Monday, which
+  fails closed on exactly the error most worth fixing. Both the original and the restatement carry
+  their own `finalizedAt`, so a correction made outside the window is auditable after the fact.
+- Anyone may report a suspected error to the administrator. **Corrections require the same
+  `K`-of-`N` quorum as a fixing** — enforced by `RestatementProposal`, which accumulates
+  attestations exactly as a first-time fixing does. One signer cannot correct the record alone.
+- **The corrected fixing must differ from the published one**, and must carry a non-empty reason. A
+  restatement with no stated reason is indistinguishable from tampering, and both are refused
+  on-ledger.
+- **The superseded fixing is not archived.** It stays on the record, provably published, with the
+  correction pointing back at it via `supersedes`. This is not laxity: archiving it would require
+  the *original* attestors' authority, which would let the members who published a wrong number
+  veto its correction.
+- **Consumer rule:** the current fixing for an (instrument, session) is the one that no other
+  fixing supersedes — equivalently, and more cheaply, the newest `finalizedAt`.
+- Disclosure survives a correction: every party disclosed the original is disclosed the
+  replacement, so nobody is left holding only the wrong number.
 
 ## 7. Oversight and governance
 
@@ -167,13 +186,13 @@ route must be resolved first.
 | Section | Status |
 |---|---|
 | §3 Tier 1 auction, uniform price, pro-rata rationing | implemented, tested |
-| §3 Tier 1 minimum quality conditions (≥2 orders, ≥2 parties) | **not implemented** — no minimum is enforced today |
+| §3 Tier 1 minimum quality conditions (≥2 orders, ≥2 parties) | implemented, tested — enforced in `uncrossSealedBook`, shared by both closes, as module constants an operator cannot lower |
 | §3 Tier 2 committee attestation of a recipe | implemented, tested |
 | §3 Tier 2 basket summation | implemented, tested |
 | §3 Tier 3 carry-forward flagging | derivation works; **the flag and age are not published** |
 | §4 Scheduled strike at a fixed time | **not implemented** — strikes are triggered manually |
 | §5 Gap-rather-than-estimate | implemented (`navPerShare` returns `None` on a missing mark) |
-| §6 Restatement | **not implemented** — no `RestatedFixing` template |
+| §6 Restatement | implemented, tested — `RestatementProposal`, same K-of-N as a fixing. The two-business-day window is policy, not code (see §6) |
 | §8 Cessation notice | **not implemented** — process only |
 | §10 Lookup by identifier and date | **not implemented** — `GET /fixings` returns contracts, not a dated series |
 

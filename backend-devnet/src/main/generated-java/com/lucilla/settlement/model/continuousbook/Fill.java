@@ -23,7 +23,7 @@ import java.util.List;
 import java.util.Objects;
 
 public class Fill extends DamlRecord<Fill> {
-  public static final String _packageId = "504d21e4573fdcb737242ee9149b3e88f1ec7d6bd5a76b5701f4762c36fd8ae4";
+  public static final String _packageId = "abbcb556af749c83f1afa7694d9aef2854b73e4e26080ad1d301b6b1789b47d1";
 
   public final BigDecimal fillQty;
 

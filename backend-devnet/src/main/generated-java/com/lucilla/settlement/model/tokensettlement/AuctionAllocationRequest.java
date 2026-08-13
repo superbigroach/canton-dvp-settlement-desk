@@ -49,9 +49,9 @@ import java.util.Set;
 public final class AuctionAllocationRequest extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#crossdesk", "TokenSettlement", "AuctionAllocationRequest");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("504d21e4573fdcb737242ee9149b3e88f1ec7d6bd5a76b5701f4762c36fd8ae4", "TokenSettlement", "AuctionAllocationRequest");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("abbcb556af749c83f1afa7694d9aef2854b73e4e26080ad1d301b6b1789b47d1", "TokenSettlement", "AuctionAllocationRequest");
 
-  public static final String PACKAGE_ID = "504d21e4573fdcb737242ee9149b3e88f1ec7d6bd5a76b5701f4762c36fd8ae4";
+  public static final String PACKAGE_ID = "abbcb556af749c83f1afa7694d9aef2854b73e4e26080ad1d301b6b1789b47d1";
 
   public static final String PACKAGE_NAME = "crossdesk";
 

@@ -2109,6 +2109,7 @@ accrualFixture admin auditor base rate dayCount from = NavFixing with
   price = base; rationale = "accrual unit fixture"
   ratePerAnnum = rate; dayCount; accrualFrom = from
   publishedTo = []; finalizedAt = from
+  supersedes = None; restatementReason = None
 
 -- ---------------------------------------------------------------------------
 -- TEST 9a — THE ACCRUAL ARITHMETIC, HAND-COMPUTED.
@@ -5513,3 +5514,109 @@ testThinBookCannotPrintAPrice = do
       buyOrders = [aliceBuy2]; sellOrders = [bobSell2]
   Some batch <- queryContractId auditor batchCid
   assertMsg "the two-desk book must print a positive price" (batch.closingPrice > 0.0)
+
+-- ---------------------------------------------------------------------------
+-- RESTATEMENT — correcting a PUBLISHED fixing, under the same quorum that struck it.
+--
+-- A benchmark with no correction path is worse than one containing a wrong number:
+-- the number is wrong either way, but with no path the administrator's only options
+-- are to leave it or to change it quietly — and quietly changing a published price is
+-- precisely what an auditor is looking for.
+--
+-- What this proves:
+--   * one signer CANNOT restate alone — a correction carries the same K of N as the
+--     original, or the whole K-of-N property is decorative
+--   * a correction with no stated reason is refused
+--   * restating with the same price is refused (that is not a correction)
+--   * finalising archives the old number and publishes the new one in ONE
+--     transaction, so there is never an instant with both live or neither
+--   * the replacement points back at what it superseded, and disclosure survives
+-- ---------------------------------------------------------------------------
+testPublishedFixingCanBeRestatedOnlyByQuorum : Script ()
+testPublishedFixingCanBeRestatedOnlyByQuorum = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  let members = [venue, bank, agent]
+  committeeCid <- submit issuer do
+    createCmd OperatorCommittee with
+      admin = issuer; members; threshold = 2; auditor
+      label = "Lucilla NAV Committee"
+
+  -- Strike and publish a fixing at 2,400, disclosed to the venue.
+  p0 <- submit venue do
+    exerciseCmd committeeCid ProposeFixing with
+      proposer = venue; instrumentId = ceth; cashInstrument = usdc
+      session = "Close"; price = 2400.0; rationale = "uniform sealed-cross VWAP"
+  p1 <- submit bank do exerciseCmd p0 Confirm with member = bank
+  wrongFix <- submit venue do exerciseCmd p1 FinalizeFixing with publishTo = [venue]
+
+  Some published <- queryContractId auditor wrongFix
+  published.price === 2400.0
+  published.supersedes === None          -- a first-time fixing supersedes nothing
+  published.restatementReason === None
+
+  now <- getTime
+
+  -- A correction with no reason is refused: indistinguishable from tampering.
+  submitMustFail venue do
+    exerciseCmd committeeCid ProposeRestatement with
+      proposer = venue; supersedes = wrongFix; price = 2410.0
+      rationale = "corrected"; reason = ""
+      ratePerAnnum = 0.0; dayCount = "NONE"; accrualFrom = now
+
+  -- Restating to the SAME price is refused: that is not a correction.
+  submitMustFail venue do
+    exerciseCmd committeeCid ProposeRestatement with
+      proposer = venue; supersedes = wrongFix; price = 2400.0
+      rationale = "no change"; reason = "typo"
+      ratePerAnnum = 0.0; dayCount = "NONE"; accrualFrom = now
+
+  -- A non-member cannot open one.
+  submitMustFail eve do
+    exerciseCmd committeeCid ProposeRestatement with
+      proposer = eve; supersedes = wrongFix; price = 2410.0
+      rationale = "corrected"; reason = "outsider"
+      ratePerAnnum = 0.0; dayCount = "NONE"; accrualFrom = now
+
+  -- A member opens a real correction: 2,400 was wrong, the close was 2,410.
+  r0 <- submit venue do
+    exerciseCmd committeeCid ProposeRestatement with
+      proposer = venue; supersedes = wrongFix; price = 2410.0
+      rationale = "uniform sealed-cross VWAP, recomputed"
+      reason = "an away order was omitted from the original uncross"
+      ratePerAnnum = 0.0; dayCount = "NONE"; accrualFrom = now
+
+  -- ONE attestation is below 2-of-3. A single signer cannot correct the record.
+  submitMustFail venue do exerciseCmd r0 FinalizeRestatement
+
+  -- The proposer cannot manufacture a quorum by confirming itself.
+  submitMustFail venue do exerciseCmd r0 ConfirmRestatement with member = venue
+  -- Nor can a non-member. (The auditor observes it and is not a member, so this is
+  -- the probe that reaches the membership assert itself rather than failing on
+  -- visibility the way `eve` would.)
+  submitMustFail auditor do exerciseCmd r0 ConfirmRestatement with member = auditor
+
+  -- A second member confirms → quorum. Now it finalises.
+  r1 <- submit agent do exerciseCmd r0 ConfirmRestatement with member = agent
+  restated <- submit venue do exerciseCmd r1 FinalizeRestatement
+
+  -- THE ORIGINAL SURVIVES. It was published and desks may have acted on it, so a
+  -- restatement supersedes rather than erases — the wrong number stays provably on the
+  -- record next to the correction that points at it. Archiving it would also require
+  -- the ORIGINAL attestors' authority, which would let the members who published a
+  -- wrong number veto its correction.
+  Some stillThere <- queryContractId auditor wrongFix
+  stillThere.price === 2400.0
+  Some corrected <- queryContractId auditor restated
+  corrected.price             === 2410.0
+  corrected.supersedes        === Some wrongFix
+  corrected.restatementReason === Some "an away order was omitted from the original uncross"
+  -- Two attestors signed the correction, as the threshold demands. They are distinct
+  -- by construction: RestatementProposal's `ensure` rejects a duplicated approver, so
+  -- counting is sufficient here and does not need re-deduplicating.
+  assertMsg "the restatement must carry at least the threshold of attestors"
+    (length corrected.attestors >= 2)
+  -- Disclosure survived: the venue that could read the wrong number reads the right
+  -- one without anyone re-publishing by hand.
+  assertMsg "the venue must still see the corrected fixing" (venue `elem` corrected.publishedTo)

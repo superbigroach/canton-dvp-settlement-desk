@@ -7,6 +7,7 @@ import com.daml.ledger.javaapi.data.CreateAndExerciseCommand;
 import com.daml.ledger.javaapi.data.CreateCommand;
 import com.daml.ledger.javaapi.data.CreatedEvent;
 import com.daml.ledger.javaapi.data.DamlCollectors;
+import com.daml.ledger.javaapi.data.DamlOptional;
 import com.daml.ledger.javaapi.data.DamlRecord;
 import com.daml.ledger.javaapi.data.ExerciseCommand;
 import com.daml.ledger.javaapi.data.Identifier;
@@ -45,14 +46,15 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 public final class NavFixing extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#crossdesk", "Governance", "NavFixing");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("504d21e4573fdcb737242ee9149b3e88f1ec7d6bd5a76b5701f4762c36fd8ae4", "Governance", "NavFixing");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("abbcb556af749c83f1afa7694d9aef2854b73e4e26080ad1d301b6b1789b47d1", "Governance", "NavFixing");
 
-  public static final String PACKAGE_ID = "504d21e4573fdcb737242ee9149b3e88f1ec7d6bd5a76b5701f4762c36fd8ae4";
+  public static final String PACKAGE_ID = "abbcb556af749c83f1afa7694d9aef2854b73e4e26080ad1d301b6b1789b47d1";
 
   public static final String PACKAGE_NAME = "crossdesk";
 
@@ -105,10 +107,15 @@ public final class NavFixing extends Template {
 
   public final Instant finalizedAt;
 
+  public final Optional<ContractId> supersedes;
+
+  public final Optional<String> restatementReason;
+
   public NavFixing(List<String> attestors, String admin, String auditor, Long threshold,
       String instrumentId, String cashInstrument, String session, BigDecimal price,
       String rationale, BigDecimal ratePerAnnum, String dayCount, Instant accrualFrom,
-      List<String> publishedTo, Instant finalizedAt) {
+      List<String> publishedTo, Instant finalizedAt, Optional<ContractId> supersedes,
+      Optional<String> restatementReason) {
     this.attestors = attestors;
     this.admin = admin;
     this.auditor = auditor;
@@ -123,6 +130,8 @@ public final class NavFixing extends Template {
     this.accrualFrom = accrualFrom;
     this.publishedTo = publishedTo;
     this.finalizedAt = finalizedAt;
+    this.supersedes = supersedes;
+    this.restatementReason = restatementReason;
   }
 
   @Override
@@ -165,10 +174,11 @@ public final class NavFixing extends Template {
   public static Update<Created<ContractId>> create(List<String> attestors, String admin,
       String auditor, Long threshold, String instrumentId, String cashInstrument, String session,
       BigDecimal price, String rationale, BigDecimal ratePerAnnum, String dayCount,
-      Instant accrualFrom, List<String> publishedTo, Instant finalizedAt) {
+      Instant accrualFrom, List<String> publishedTo, Instant finalizedAt,
+      Optional<ContractId> supersedes, Optional<String> restatementReason) {
     return new NavFixing(attestors, admin, auditor, threshold, instrumentId, cashInstrument,
-        session, price, rationale, ratePerAnnum, dayCount, accrualFrom, publishedTo,
-        finalizedAt).create();
+        session, price, rationale, ratePerAnnum, dayCount, accrualFrom, publishedTo, finalizedAt,
+        supersedes, restatementReason).create();
   }
 
   @Override
@@ -186,7 +196,7 @@ public final class NavFixing extends Template {
   }
 
   public DamlRecord toValue() {
-    ArrayList<DamlRecord.Field> fields = new ArrayList<DamlRecord.Field>(14);
+    ArrayList<DamlRecord.Field> fields = new ArrayList<DamlRecord.Field>(16);
     fields.add(new DamlRecord.Field("attestors", this.attestors.stream().collect(DamlCollectors.toDamlList(v$0 -> new Party(v$0)))));
     fields.add(new DamlRecord.Field("admin", new Party(this.admin)));
     fields.add(new DamlRecord.Field("auditor", new Party(this.auditor)));
@@ -201,13 +211,15 @@ public final class NavFixing extends Template {
     fields.add(new DamlRecord.Field("accrualFrom", Timestamp.fromInstant(this.accrualFrom)));
     fields.add(new DamlRecord.Field("publishedTo", this.publishedTo.stream().collect(DamlCollectors.toDamlList(v$0 -> new Party(v$0)))));
     fields.add(new DamlRecord.Field("finalizedAt", Timestamp.fromInstant(this.finalizedAt)));
+    fields.add(new DamlRecord.Field("supersedes", DamlOptional.of(this.supersedes.map(v$0 -> v$0.toValue()))));
+    fields.add(new DamlRecord.Field("restatementReason", DamlOptional.of(this.restatementReason.map(v$0 -> new Text(v$0)))));
     return new DamlRecord(fields);
   }
 
   private static ValueDecoder<NavFixing> templateValueDecoder() throws IllegalArgumentException {
     return value$ -> {
       Value recordValue$ = value$;
-      List<DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(14,0, recordValue$);
+      List<DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(16,2, recordValue$);
       List<String> attestors = PrimitiveValueDecoders.fromList(PrimitiveValueDecoders.fromParty)
           .decode(fields$.get(0).getValue());
       String admin = PrimitiveValueDecoders.fromParty.decode(fields$.get(1).getValue());
@@ -225,13 +237,19 @@ public final class NavFixing extends Template {
       List<String> publishedTo = PrimitiveValueDecoders.fromList(PrimitiveValueDecoders.fromParty)
           .decode(fields$.get(12).getValue());
       Instant finalizedAt = PrimitiveValueDecoders.fromTimestamp.decode(fields$.get(13).getValue());
+      Optional<ContractId> supersedes = PrimitiveValueDecoders.fromOptional(v$0 ->
+              new ContractId(v$0.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected supersedes to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()))
+          .decode(fields$.get(14).getValue());
+      Optional<String> restatementReason = PrimitiveValueDecoders.fromOptional(
+            PrimitiveValueDecoders.fromText).decode(fields$.get(15).getValue());
       return new NavFixing(attestors, admin, auditor, threshold, instrumentId, cashInstrument,
-          session, price, rationale, ratePerAnnum, dayCount, accrualFrom, publishedTo, finalizedAt);
+          session, price, rationale, ratePerAnnum, dayCount, accrualFrom, publishedTo, finalizedAt,
+          supersedes, restatementReason);
     } ;
   }
 
   public static JsonLfDecoder<NavFixing> jsonDecoder() {
-    return JsonLfDecoders.record(Arrays.asList("attestors", "admin", "auditor", "threshold", "instrumentId", "cashInstrument", "session", "price", "rationale", "ratePerAnnum", "dayCount", "accrualFrom", "publishedTo", "finalizedAt"), name -> {
+    return JsonLfDecoders.record(Arrays.asList("attestors", "admin", "auditor", "threshold", "instrumentId", "cashInstrument", "session", "price", "rationale", "ratePerAnnum", "dayCount", "accrualFrom", "publishedTo", "finalizedAt", "supersedes", "restatementReason"), name -> {
           switch (name) {
             case "attestors": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.list(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party));
             case "admin": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(1, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
@@ -247,10 +265,12 @@ public final class NavFixing extends Template {
             case "accrualFrom": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(11, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.timestamp);
             case "publishedTo": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(12, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.list(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party));
             case "finalizedAt": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(13, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.timestamp);
+            case "supersedes": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(14, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.contractId(com.lucilla.settlement.model.governance.NavFixing.ContractId::new)), java.util.Optional.empty());
+            case "restatementReason": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(15, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text), java.util.Optional.empty());
             default: return null;
           }
         }
-        , (Object[] args) -> new NavFixing(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6]), JsonLfDecoders.cast(args[7]), JsonLfDecoders.cast(args[8]), JsonLfDecoders.cast(args[9]), JsonLfDecoders.cast(args[10]), JsonLfDecoders.cast(args[11]), JsonLfDecoders.cast(args[12]), JsonLfDecoders.cast(args[13])));
+        , (Object[] args) -> new NavFixing(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6]), JsonLfDecoders.cast(args[7]), JsonLfDecoders.cast(args[8]), JsonLfDecoders.cast(args[9]), JsonLfDecoders.cast(args[10]), JsonLfDecoders.cast(args[11]), JsonLfDecoders.cast(args[12]), JsonLfDecoders.cast(args[13]), JsonLfDecoders.cast(args[14]), JsonLfDecoders.cast(args[15])));
   }
 
   public static NavFixing fromJson(String json) throws JsonLfDecoder.Error {
@@ -272,7 +292,9 @@ public final class NavFixing extends Template {
         JsonLfEncoders.Field.of("dayCount", apply(JsonLfEncoders::text, dayCount)),
         JsonLfEncoders.Field.of("accrualFrom", apply(JsonLfEncoders::timestamp, accrualFrom)),
         JsonLfEncoders.Field.of("publishedTo", apply(JsonLfEncoders.list(JsonLfEncoders::party), publishedTo)),
-        JsonLfEncoders.Field.of("finalizedAt", apply(JsonLfEncoders::timestamp, finalizedAt)));
+        JsonLfEncoders.Field.of("finalizedAt", apply(JsonLfEncoders::timestamp, finalizedAt)),
+        JsonLfEncoders.Field.of("supersedes", apply(JsonLfEncoders.optional(JsonLfEncoders::contractId), supersedes)),
+        JsonLfEncoders.Field.of("restatementReason", apply(JsonLfEncoders.optional(JsonLfEncoders::text), restatementReason)));
   }
 
   public static ContractFilter<Contract> contractFilter() {
@@ -302,22 +324,26 @@ public final class NavFixing extends Template {
         Objects.equals(this.dayCount, other.dayCount) &&
         Objects.equals(this.accrualFrom, other.accrualFrom) &&
         Objects.equals(this.publishedTo, other.publishedTo) &&
-        Objects.equals(this.finalizedAt, other.finalizedAt);
+        Objects.equals(this.finalizedAt, other.finalizedAt) &&
+        Objects.equals(this.supersedes, other.supersedes) &&
+        Objects.equals(this.restatementReason, other.restatementReason);
   }
 
   @Override
   public int hashCode() {
     return Objects.hash(this.attestors, this.admin, this.auditor, this.threshold, this.instrumentId,
         this.cashInstrument, this.session, this.price, this.rationale, this.ratePerAnnum,
-        this.dayCount, this.accrualFrom, this.publishedTo, this.finalizedAt);
+        this.dayCount, this.accrualFrom, this.publishedTo, this.finalizedAt, this.supersedes,
+        this.restatementReason);
   }
 
   @Override
   public String toString() {
-    return String.format("com.lucilla.settlement.model.governance.NavFixing(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+    return String.format("com.lucilla.settlement.model.governance.NavFixing(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         this.attestors, this.admin, this.auditor, this.threshold, this.instrumentId,
         this.cashInstrument, this.session, this.price, this.rationale, this.ratePerAnnum,
-        this.dayCount, this.accrualFrom, this.publishedTo, this.finalizedAt);
+        this.dayCount, this.accrualFrom, this.publishedTo, this.finalizedAt, this.supersedes,
+        this.restatementReason);
   }
 
   public static final class ContractId extends com.daml.ledger.javaapi.data.codegen.ContractId<NavFixing> implements Exercises<ExerciseCommand> {
