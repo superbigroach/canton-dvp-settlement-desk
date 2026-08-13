@@ -1,6 +1,6 @@
 # Status, aim, and what happens next
 
-Updated **12 August 2026**. This is the page to read first if you are deciding whether to use,
+Updated **13 August 2026**. This is the page to read first if you are deciding whether to use,
 buy, fund, or work on CrossDesk.
 
 ---
@@ -69,7 +69,7 @@ pilot easy to agree to. At contract time they take the chart in-house.
 against a signed licence. Source access is not part of the product and should not be offered as a
 convenience.
 
-## 4. Verified state — 12 August 2026
+## 4. Verified state — 13 August 2026
 
 | Check | Result |
 |---|---|
@@ -91,9 +91,12 @@ mid-record, or a non-`Optional` one, fails `NOT_VALID_UPGRADE_PACKAGE` and orpha
 
 ### Two things that must not be misread
 
-🔴 **Nothing here has been run end to end.** The figures above are compile-time, unit and script
-level. No sandbox has been booted and no button clicked in this state. `docs/PRODUCTION_CHECKLIST.md`
-is a plan, not a result.
+✅ **It has now been run end to end**, 13 August 2026 — `docs/PRODUCTION_CHECKLIST.md` §12 records
+eighteen operations driven over HTTP against a live sandbox, with the numbers. Highlights: a
+committee-attested fixing at 1885 feeding a basket NAV of **838.50**; create-then-redeem exact to the
+unit; the sealed book returning **2 orders to the venue and 0 to the auditor**; and the operator's fee
+landing at exactly 25 then 10. What is still unexercised is the desk **UI** — the walkthrough drove
+the API, not buttons.
 
 🔴 **The fund does not hold real cBTC.** 4.16 real cBTC was claimed through the CIP-56 registry flow
 on BitSafe's templates, and that is a separate holding. The demo fund's own cBTC and cETH legs are
@@ -118,9 +121,9 @@ on BitSafe's templates, and that is a separate holding. The demo fund's own cBTC
 
 | # | Task | Blocked on | Size |
 |---|---|---|---|
-| 1 | **Walk `docs/PRODUCTION_CHECKLIST.md` on a local sandbox.** 47 of 51 operations need no node. This is the gap between "tests pass" and "I have seen it work" | nothing | hours |
+| ~~1~~ | ~~Walk the checklist on a local sandbox~~ — ✅ **done**, §12 of the checklist. ⚠️ Remaining: drive the **UI** rather than the API, and note `LEDGER_PARTIES` is mandatory on a sandbox | — | mostly done |
 | 2 | **Get a participant.** Ask NODERS (node-as-a-service, hosted the hackathon) or BitSafe (their services arm does node-operator matching) | someone else's yes | a message |
-| 3 | **Fee auto-funding** at `/basket/create` and `/basket/redeem` — defining a fee-bearing basket works over REST; those two endpoints do not yet provision the fee cash | nothing | hours |
+| ~~3~~ | ~~Fee auto-funding at `/basket/create` and `/basket/redeem`~~ — ✅ **done and proven live**: operator USDC `2600 → 2625 → 2635`, exact | — | done |
 | 4 | **Fixing lookup by identifier and date.** `GET /fixings` returns contracts; a benchmark needs "the fixing for `CDX-CBTC-D` on 2026-08-12" | nothing | hours |
 | 5 | **Scheduled strike.** ⚠️ Decide first: a K-of-N quorum **cannot** be automated. A cron can file the proposal or open the session; it cannot make K members act. Those are different products | a decision | hours |
 | 6 | **Correlation id per request**, echoed into every log line. `updateId`/`offset` are already logged on every write, which is the important half | nothing | half a day |
