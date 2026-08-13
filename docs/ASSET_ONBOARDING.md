@@ -56,6 +56,39 @@ and pinned on the basket leg:
 | **USDC on Canton** | Circle | All four. The `USDC` used in the demo baskets is self-issued and is cash-of-account only, not Circle's asset |
 | **Canton Coin (Amulet)** | the network | ⚠️ **Different shape — do not assume the Utility Registry pattern.** Amulet is the network's own token with its own registry served by the Splice/scan APIs, and its admin is the DSO party rather than a Utility registrar. Its four facts come from the validator's scan endpoints, not from `api.utilities.*` |
 
+## 3a. Corroboration — the issuer's own public API collection
+
+BitSafe publish API collections at `github.com/DLC-link/api-collections-public` (Yaak format).
+Checked 13 August 2026. Two things worth knowing:
+
+**It confirms the endpoint in §1, path for path**, which was worked out here without their docs:
+
+```
+POST /api/token-standard/v0/registrars/{registrar}/registry/transfer-instruction/v1/{contractId}/choice-contexts/accept
+```
+
+It also documents an app-side surface this project has only partly seen —
+`POST /app/get-account-contract-rules`, `POST /app/get-token-standard-contracts` and, for the mint
+flow, `POST /app/get-bitcoin-address`. Note the paths differ from the
+`/cbtc/v1/token-standard-contracts` observed on `api.devnet.bitsafe.finance`, so at least one of the
+two has moved. Ask which is current rather than guessing.
+
+**It does not give the four facts.** The concrete hosts, registrar party ids and instrument ids live
+in the collection's environment section, which the public repository does not expose — their README
+says those fields are "encrypted, as they are sensitive and specific to your setup". So §1 stands:
+the four facts come from the issuer.
+
+⚠️ **The collection carries no licence, so it is all rights reserved.** Read it; do not copy it into
+this repository. Endpoint paths are facts and are recorded above in our own words. The collection
+file itself is theirs.
+
+## 3b. Not a route to a participant
+
+`github.com/DLC-link/canton-onboarding-testnet` looks like it should solve the node problem. It does
+not, on two counts: it is **archived (October 2025)** and pinned to **Canton 3.3.0**, and it is a
+guide to joining **their attestor network** — becoming a cBTC attestor — rather than to obtaining a
+participant of your own. Also unlicensed. Read for context; do not depend on it.
+
 ## 4. Finding a registry base URL without asking
 
 A hosted registry SPA keeps its backend URL in a **runtime config file**. This is how the devnet
@@ -105,3 +138,37 @@ without the participant hosting it confirming.
 It does **not** prove the asset is backed. Whether a wrapped asset's reserves exist is an
 off-ledger custody question answered by the issuer's attestor network and any proof of reserve
 they publish. Those are two different claims and only the first is provable here.
+
+---
+
+## 8. Using someone else's code — the three ways, and only one involves copying
+
+Checked 13 August 2026 against `github.com/DLC-link` (14 public repos).
+
+| How | When it applies | What lands in this repository |
+|---|---|---|
+| **Vendor** — copy it in | Only when we **compile against** it and need a reproducible build | The artifact, plus its licence text and a `NOTICE` entry |
+| **Depend** — fetched at build time | A package manager resolves it | A version in a manifest. Nothing else |
+| **Run alongside** | It is a separate service we deploy and talk to over an API | Configuration and a paragraph of documentation |
+
+**We already do the first one correctly, once:** the six `splice-api-token-*` DARs in `deps/`, because
+the Daml compiles against those interfaces. `NOTICE` credits them and `licenses/Apache-2.0.txt`
+carries the terms, as Apache-2.0 §4 requires. That is the *only* case here where copying is right.
+
+### Per repository
+
+| Repository | Licence | What to do |
+|---|---|---|
+| `decentralization-manager` | Apache-2.0 | **Run alongside.** Rust service + React UI for managing Canton *Decentralized Parties* — threshold key custody at the identity layer. Do not vendor. If its Daml governance templates are ever needed they arrive as a DAR data-dependency, exactly like Splice |
+| `cbtc-por-tools` | Apache-2.0 | Read or run. Proof-of-reserve tooling — relevant to the reserve-attestation direction in `FIXING_METHODOLOGY.md` §7. Vendor only if we import it |
+| `cantcost` | MIT | Run it if we want Canton cost telemetry. Not a dependency |
+| `cbtc-lib`, `canton-lib` | MIT | **Skip.** Rust libraries; this project has no Rust. Reference reading only |
+| `zed-daml-lsp` | Apache-2.0 | Local editor tooling. Nothing to do with this repository |
+| `api-collections-public` | **none** | Read, never copy — see §3a |
+| `canton-onboarding-testnet` | **none** | Archived, wrong problem — see §3b |
+
+🔴 **Two of those have no licence, which means all rights reserved — not "free to take".** It is the
+same rule this repository applies to itself: absence of a licence withholds permission rather than
+granting it. Copying an unlicensed file into a repository we then licence commercially is the kind of
+thing a buyer's counsel finds. Facts extracted from reading them (an endpoint path, a prerequisite)
+are ours to write down; their files are not ours to ship.
