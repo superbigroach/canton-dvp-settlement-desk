@@ -29,8 +29,11 @@ daml ledger upload-dar --host localhost --port 6900 .daml/dist/crossdesk-2.1.0.d
 daml script --ledger-host localhost --ledger-port 6900 \
   --dar .daml/dist/crossdesk-2.1.0.dar --script-name Test:initialize
 
-# 3) backend
-cd backend-devnet && LEDGER_HOST=localhost LEDGER_PORT=6900 LEDGER_TLS=false SERVER_PORT=8080 \
+# 3) backend  — LEDGER_PARTIES IS REQUIRED LOCALLY. See the note below.
+daml ledger list-parties --host localhost --port 6900     # copy the ::1220… suffix
+cd backend-devnet && S="::122065c2…"   # the suffix from the line above
+LEDGER_HOST=localhost LEDGER_PORT=6900 LEDGER_TLS=false SERVER_PORT=8080 \
+  LEDGER_PARTIES="Issuer=Issuer$S,Venue=Venue$S,Alice=Alice$S,Bob=Bob$S,Bank=Bank$S,Auditor=Auditor$S,Agent=Agent$S,Eve=Eve$S" \
   java -jar build/libs/canton-dvp-desk-1.0.0.jar
 
 # 4) desk
@@ -38,6 +41,16 @@ cd frontend && npx vite preview --port 5173     # proxies /api -> :8080
 ```
 
 Vite runs on the Windows side and still reaches WSL's `:8080` through localhost forwarding.
+
+🔴 **`LEDGER_PARTIES` is not optional on a sandbox, and forgetting it looks like a broken app.**
+`LedgerService.listParties()` reads a configured roster rather than querying the ledger — deliberate,
+because the Daml 3.x bindings drop the party-management admin service and the shared devnet's parties
+are fixed. A fresh sandbox allocates parties under a *new* namespace fingerprint every time, so with
+no roster configured `/api/parties` returns `[]` and every other call fails with
+`no known party matches 'Issuer'`. The parties exist; the desk simply cannot name them.
+Get the suffix from `daml ledger list-parties` and pass the roster as above.
+
+**Verified end to end on a local sandbox, 13 August 2026** — see §12.
 
 **Seed balances to know before clicking:** Bob holds the only `DEMO:AAPL` besides Bank (500) and
 the Issuer; Alice holds USDC + cETH + CBTC but **no AAPL** — so use Bank for asks. A reserved order
@@ -185,3 +198,39 @@ That **real cBTC settles into a fund**. The basket consumes `ContractId Holding`
 behind `HoldingV1` on BitSafe's templates. No local run proves that, because a sandbox has no
 BitSafe registrar. It needs a live participant holding the real asset — and that is the only item
 on this page that money and a Telegram message can fix but code cannot.
+
+---
+
+## 12. Sandbox walkthrough — actually run, 13 August 2026
+
+Not a plan. Sandbox booted, `crossdesk-2.1.0` uploaded, `Test:initialize` seeded, backend attached,
+every call below made over HTTP against a live ledger.
+
+| # | Action | Result |
+|---|---|---|
+| 1 | `GET /api/diag` | `UP` · ledger reachable · **`crossdesk 2.1.0` = `PACKAGE_STATUS_REGISTERED`** |
+| 2 | `parties` | 8 resolved after `LEDGER_PARTIES` was set — **`[]` before it, which is the trap above** |
+| 3 | `instruments` | 4 — `DEMO:AAPL`, `USDC`, `cETH`, `CBTC` |
+| 4 | `liveMarks` | live Coinbase spot: ETH `1885.205`, BTC `63590.415`, timestamped seconds old |
+| 5 | `createCommittee` 2-of-3 | contract created |
+| 6 | `proposeAccruingFixing` cETH @ 1885, 3.6% ACT/360 | proposal created, accrual recipe on it |
+| 7 | `confirmFixing` (Bank) | second attestation |
+| 8 | `finalizeFixing` | **published; `markUpdated: true`**; attestors `[Bank, Venue]`, threshold 2 |
+| 9 | `fixings` | 1 fixing, base `1885.0000000000` |
+| 10 | `defineBasket` **with fee + issuer pin** | `LX1F`; read back as `[('cETH',0.1,'Issuer'),('CBTC',0.01,'Issuer')]` — **the pin round-trips** |
+| 11 | `basketCreate` on the fee-bearing basket | **409, refused cleanly:** *"this basket charges a fee — supply a cash holding to pay it"*. The documented gap, behaving as documented |
+| 12 | `basketNav` | **`838.50`** = `0.1 × 1885` **(the fixing struck at step 8)** + `0.01 × 65000` |
+| 13 | `basketCreate` 10 shares (fee-free) | receipt + minted shares, NAV `838.50` |
+| 14 | `basketRedeem` 4 shares | LX1 `10 → 6`; cETH `4.0 → 4.4` (+0.4 = 4×0.1); CBTC `0.9 → 0.94` (+0.04 = 4×0.01) — **exact** |
+| 15 | `mocOrder` ×2, two different desks | both rest |
+| 16 | **`mocState` as five parties** | Venue **2** · Alice **1** (her own) · Bank **1** (its own) · **Auditor 0** · Eve **0** |
+| 17 | **`?as=Auditor` on a `/moc/*` endpoint** | **0 orders.** Before the alias filter this returned the Venue's 2 and made a private book look transparent |
+| 18 | `mocClose` | `{"cleared": 2}` — two orders from two distinct traders, so the participation gate passed |
+
+**What this establishes:** the committee-attested mark feeds the NAV (step 8 → 12), in-kind
+create/redeem is arithmetically exact (14), the dark book is dark including to the auditor (16), the
+parameter trap is fixed in a running app and not merely in a unit test (17), and the fee gate refuses
+rather than misbehaves (11).
+
+**What it does not establish:** anything about real third-party assets. Every instrument here is
+seed data issued by `Issuer` on this project's own templates. Real cBTC is unaffected by all of it.
