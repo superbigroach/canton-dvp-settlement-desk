@@ -22,7 +22,7 @@ import java.util.List;
 import java.util.Objects;
 
 public class Disclose extends DamlRecord<Disclose> {
-  public static final String _packageId = "7eca29e115ad24f98fd4190f21ac6d7440ce8f3211675421f555856febed4e5c";
+  public static final String _packageId = "504d21e4573fdcb737242ee9149b3e88f1ec7d6bd5a76b5701f4762c36fd8ae4";
 
   public final String newObserver;
 

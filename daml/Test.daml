@@ -5431,3 +5431,85 @@ testTokenStandardAbortReturnsEveryAllocation = do
   tokenLocked  alice cUSD >>= (=== 0.0)
   tokenBalance venue cETH >>= (=== 0.0)
   tokenBalance venue cUSD >>= (=== 0.0)
+
+-- ---------------------------------------------------------------------------
+-- MINIMUM PARTICIPATION — a fixing one participant can set alone is not a fixing.
+--
+-- The gate lives in `uncrossSealedBook`, the one function both closes share, and its
+-- thresholds are module constants rather than auction fields: were they per-auction
+-- settings a venue could set minParties = 1 for a single print and nobody downstream
+-- could tell. Below either threshold the book is UNCROSSED — no price, close aborts,
+-- and the fixing waterfall falls through to a committee attestation.
+--
+-- Two ways to be too thin, and both are refused:
+--   * one order — nothing to cross against
+--   * two orders from ONE desk — two orders, one opinion
+-- ---------------------------------------------------------------------------
+testThinBookCannotPrintAPrice : Script ()
+testThinBookCannotPrintAPrice = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  bobAsset  <- mint issuer aapl bob   10.0
+  aliceCash <- mint issuer usdc alice 2600.0
+
+  -- ONE ORDER. There is nothing to cross against, and the gate says so before any
+  -- price arithmetic runs.
+  soloCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"
+      referencePrice = 255.0
+      participants = [alice, bob]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+  (s1, bobOnly) <- submitOrder soloCid bob Sell 10.0 250.0 bobAsset
+  sealedSolo <- submit venue do exerciseCmd s1 CloseBidding
+  submitMustFail venue do
+    exerciseCmd sealedSolo RunClose with
+      buyOrders = []; sellOrders = [bobOnly]
+
+  -- TWO ORDERS, ONE DESK. Alice sits on both sides of her own book. It crosses
+  -- arithmetically — which is exactly why counting orders is not enough, and why the
+  -- gate counts distinct TRADERS.
+  aliceAsset <- mint issuer aapl alice 10.0
+  aliceCash2 <- mint issuer usdc alice 2600.0
+  selfCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"
+      referencePrice = 255.0
+      participants = [alice, bob]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+  (f1, aliceSell) <- submitOrder selfCid alice Sell 10.0 250.0 aliceAsset
+  (f2, aliceBuy)  <- submitOrder f1      alice Buy  10.0 260.0 aliceCash2
+  sealedSelf <- submit venue do exerciseCmd f2 CloseBidding
+  submitMustFail venue do
+    exerciseCmd sealedSelf RunClose with
+      buyOrders = [aliceBuy]; sellOrders = [aliceSell]
+
+  -- No settlement batch exists for either attempt, and nobody's balance moved:
+  -- Alice still holds the cash and the asset she committed.
+  aliceLeftCash <- ownedAmount alice usdc
+  bobLeftAsset  <- ownedAmount bob  aapl
+  assertMsg "Alice must not have paid for an unprinted close" (aliceLeftCash > 0.0)
+  assertMsg "Bob must not have delivered into an unprinted close" (bobLeftAsset > 0.0)
+
+  -- And the control: the SAME book with a second desk in it prints normally, so the
+  -- gate refuses thin books rather than breaking the close.
+  bobAsset2 <- mint issuer aapl bob   10.0
+  aliceCash3 <- mint issuer usdc alice 2600.0
+  okCid <- submit venue do
+    createCmd ClosingAuction with
+      operator = venue; auditor; instrumentId = aapl; cashInstrument = usdc
+      session = "Close"
+      referencePrice = 255.0
+      participants = [alice, bob]; liquidityProvider = None; fixingRef = None
+      submittedCount = 0; cancelledCount = 0; isOpen = True
+  (o1, bobSell2)  <- submitOrder okCid bob   Sell 10.0 250.0 bobAsset2
+  (o2, aliceBuy2) <- submitOrder o1    alice Buy  10.0 260.0 aliceCash3
+  sealedOk <- submit venue do exerciseCmd o2 CloseBidding
+  batchCid <- submit venue do
+    exerciseCmd sealedOk RunClose with
+      buyOrders = [aliceBuy2]; sellOrders = [bobSell2]
+  Some batch <- queryContractId auditor batchCid
+  assertMsg "the two-desk book must print a positive price" (batch.closingPrice > 0.0)

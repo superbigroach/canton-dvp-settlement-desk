@@ -2533,6 +2533,27 @@ data CrossOutcome = CrossOutcome
       -- ^ the WHOLE book, as validated. Used by each close to check that the book's
       -- backing model is the one it can actually settle.
 
+-- ---------------------------------------------------------------------------
+-- MINIMUM QUALITY CONDITIONS for a printed price — docs/FIXING_METHODOLOGY.md §3.
+--
+-- These are CONSTANTS, not auction fields, and that is the whole point. A price this
+-- venue prints is referenced by contracts, so its minimum conditions belong to the
+-- published methodology rather than to the operator. Were they per-auction settings,
+-- a venue could quietly set `minParties = 1` for a single print and nobody
+-- downstream would be able to tell that it had.
+--
+-- Below either threshold the auction is UNCROSSED: no price is printed, the close
+-- aborts, and the fixing waterfall falls through to a committee attestation. A
+-- fixing that one participant can set alone is not a fixing — it is that
+-- participant's opinion wearing an official label, and that is precisely the shape
+-- of every benchmark manipulation case ever brought.
+-- ---------------------------------------------------------------------------
+minCrossOrders : Int
+minCrossOrders = 2
+
+minCrossParties : Int
+minCrossParties = 2
+
 uncrossSealedBook
   :  ClosingAuction
   -> [ContractId SealedOrder]
@@ -2588,6 +2609,20 @@ uncrossSealedBook auction buyOrders sellOrders = do
           assertMsg "sell order uses a different cash instrument"  (o.cashInstrument == cashInstrument)
           assertMsg "sell order rests in a different session"      (o.session == session)
           pure (cid, o))
+
+        -- ------------------------------------------------------------------
+        -- MINIMUM PARTICIPATION — before any price is computed.
+        -- ------------------------------------------------------------------
+        -- Checked here, in the one function both closes share, so `RunClose` and
+        -- `RunCloseTokenStandard` cannot diverge on what counts as a printable book.
+        -- Distinct TRADERS, not distinct orders: two orders from one desk are one
+        -- opinion, and a book it can set alone is a book it can move alone.
+        let fetched         = buys ++ sells
+            distinctTraders = dedup (map (\(_, o) -> o.trader) fetched)
+        assertMsg "too few orders to print a price: this book is uncrossed"
+          (length fetched >= minCrossOrders)
+        assertMsg "too few distinct participants to print a price: this book is uncrossed"
+          (length distinctTraders >= minCrossParties)
 
         -- ------------------------------------------------------------------
         -- THE UNCROSS — price discovery. This is where the close gets its price.

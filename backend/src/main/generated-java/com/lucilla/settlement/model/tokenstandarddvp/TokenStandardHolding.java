@@ -49,9 +49,9 @@ import java.util.Set;
 public final class TokenStandardHolding extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#crossdesk", "TokenStandardDvp", "TokenStandardHolding");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("7eca29e115ad24f98fd4190f21ac6d7440ce8f3211675421f555856febed4e5c", "TokenStandardDvp", "TokenStandardHolding");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("504d21e4573fdcb737242ee9149b3e88f1ec7d6bd5a76b5701f4762c36fd8ae4", "TokenStandardDvp", "TokenStandardHolding");
 
-  public static final String PACKAGE_ID = "7eca29e115ad24f98fd4190f21ac6d7440ce8f3211675421f555856febed4e5c";
+  public static final String PACKAGE_ID = "504d21e4573fdcb737242ee9149b3e88f1ec7d6bd5a76b5701f4762c36fd8ae4";
 
   public static final String PACKAGE_NAME = "crossdesk";
 
