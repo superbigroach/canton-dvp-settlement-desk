@@ -45,13 +45,6 @@ import java.util.Optional;
  *   POST /api/moc/mandate/terms           post that offer (actAs operator)
  *   POST /api/moc/mandate/accept          take up the seat (actAs provider)
  *   GET  /api/moc/mandate                 your own live obligation over a book
- *   POST /api/committee                   stand up a K-of-N NAV committee
- *   POST /api/committee/{cid}/propose             propose a SNAPSHOT fix (non-accruing)
- *   POST /api/committee/{cid}/propose-accruing    propose an ACCRUING fix (rate + day count)
- *   POST /api/fixing/{cid}/confirm        another member attests (accumulating multisig)
- *   POST /api/fixing/{cid}/finalize       promote to an official NavFixing
- *   GET  /api/fixings                     official fixes + the value now
- *   GET  /api/fixing/{cid}/nav            THE ACCRUED NAV, with its working shown
  * </pre>
  */
 @RestController
@@ -128,13 +121,11 @@ public class SettlementController {
     @PostMapping("/instruments")
     public ResponseEntity<Dtos.CidResponse> issueInstrument(
             @Valid @RequestBody Dtos.IssueInstrumentRequest req) {
-        // RESOLVE THE LABELS. A party id carries a per-run Canton namespace suffix, so
-        // "Issuer" is not a party — submitting it raw fails UNKNOWN_SUBMITTERS ("the
-        // participant is not connected to any synchronizer where the given submitters
-        // are known"), which reads like a node problem and is not one. Every other
-        // endpoint resolves; these two did not.
+        // Resolve labels ("Issuer") to full party ids ("issuer-crossdesk::1220…") —
+        // on a real node, actAs claims only match the FULL id.
         String issuer = ledger.resolveParty(req.issuer());
-        String depository = ledger.resolveParty(blankTo(req.depository(), req.issuer()));
+        String depository = blankTo(req.depository(), "").isBlank()
+                ? issuer : ledger.resolveParty(req.depository());
         String version = blankTo(req.version(), "1");
         String description = req.description() == null ? "" : req.description();
         var cmd = LedgerCommands.createInstrument(
@@ -149,7 +140,7 @@ public class SettlementController {
     @PostMapping("/holdings")
     public ResponseEntity<Dtos.CidResponse> issueHolding(
             @Valid @RequestBody Dtos.IssueHoldingRequest req) {
-        // Same label-resolution rule as POST /instruments above.
+        // Resolve labels to full party ids (actAs claims match the full id only).
         String issuer = ledger.resolveParty(req.issuer());
         String owner = ledger.resolveParty(req.owner());
         var cmd = LedgerCommands.createHolding(
@@ -1545,8 +1536,15 @@ public class SettlementController {
                     ap, c.instrumentId(), c.unitsPerShare().multiply(shares)));
         }
 
+        // FUND THE CREATION FEE, if this basket charges one. The AP pays it out of a cash
+        // holding disclosed at request time, and the fee moves inside the same atomic
+        // transaction as the creation — so an unfunded fee settles nothing rather than
+        // half-creating. Provisioned "at least" rather than "exact" because the fee is a
+        // flat amount and the change returns to the AP as its own holding.
+        String feeCid = feeHoldingFor(basket, ap, basket.creationFee(), "creation");
         String orderCid = ledger.submitForCreated(ap,
-                LedgerCommands.requestCreation(basket.contractId(), ap, shares, componentCids),
+                LedgerCommands.requestCreation(basket.contractId(), ap, shares, componentCids,
+                        feeCid),
                 LedgerCommands.creationOrderTemplateId());
         String agreementCid = ledger.submitForCreated(admin,
                 LedgerCommands.approveCreation(orderCid),
@@ -1583,8 +1581,12 @@ public class SettlementController {
                 req.basketId(), ap, admin, shares);
 
         String basketHoldingCid = ledger.provisionAtLeastHolding(ap, req.basketId(), shares);
+        // Redemption is where the arbitrage that closes a discount actually lands, so this
+        // is the leg the operator earns on most often. Same all-or-nothing property.
+        String feeCid = feeHoldingFor(basket, ap, basket.redemptionFee(), "redemption");
         String orderCid = ledger.submitForCreated(ap,
-                LedgerCommands.requestRedemption(basket.contractId(), ap, shares, basketHoldingCid),
+                LedgerCommands.requestRedemption(basket.contractId(), ap, shares, basketHoldingCid,
+                        feeCid),
                 LedgerCommands.redemptionOrderTemplateId());
 
         // The administrator provides the exact custody underlyings to return.
@@ -1800,6 +1802,32 @@ public class SettlementController {
 
     private static <T> ResponseEntity<T> created(T body) {
         return ResponseEntity.status(HttpStatus.CREATED).body(body);
+    }
+
+    /**
+     * The AP's cash holding for a creation or redemption fee, or {@code null} when the
+     * basket charges none.
+     *
+     * <p>Returns null for an absent or zero fee rather than provisioning a zero holding: a
+     * {@code Holding} must have a positive amount, so asking for zero would fail with a
+     * confusing error on a basket that simply has no fee.
+     *
+     * <p>The on-ledger rules are NOT duplicated here — the template refuses a fee with no
+     * receiver, a negative fee, and cash of the wrong instrument or too small. This only
+     * has to put the right holding in front of it.
+     *
+     * @param leg "creation" or "redemption", used only to make a failure legible
+     */
+    private String feeHoldingFor(LedgerService.BasketView basket, String ap,
+            java.util.Optional<BigDecimal> fee, String leg) {
+        if (fee.isEmpty() || fee.get().signum() <= 0) {
+            return null;
+        }
+        BigDecimal amount = fee.get();
+        log.info("BASKET {} fee basket={} ap={} fee={} {} receiver={}", leg.toUpperCase(),
+                basket.basketId(), ap, amount, basket.cashInstrument(),
+                basket.feeReceiver().orElse("UNSET"));
+        return ledger.provisionAtLeastHolding(ap, basket.cashInstrument(), amount);
     }
 
     private static String blankTo(String value, String fallback) {

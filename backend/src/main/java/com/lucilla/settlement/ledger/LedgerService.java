@@ -580,7 +580,8 @@ public class LedgerService {
                                         comp.expectedIssuer));
                             }
                             out.add(new BasketView(c.id.contractId, b.administrator, b.basketId,
-                                    b.description, b.cashInstrument, comps, b.participants));
+                                    b.description, b.cashInstrument, comps, b.participants,
+                                    b.feeReceiver, b.creationFee, b.redemptionFee));
                         }
                     });
             return out;
@@ -1225,9 +1226,27 @@ public class LedgerService {
     }
 
     /** Flat, JSON-friendly view of a BasketDefinition (an ETF/fund). */
+    /**
+     * Flat view of a BasketDefinition. The three fee fields are carried because the
+     * create and redeem endpoints have to KNOW the fee before they can fund it: the AP
+     * pays it from a cash holding supplied at request time, and a caller should not have
+     * to read the basket itself to discover what to bring.
+     */
     public record BasketView(
             String contractId, String administrator, String basketId, String description,
-            String cashInstrument, List<ComponentView> components, List<String> participants) {
+            String cashInstrument, List<ComponentView> components, List<String> participants,
+            java.util.Optional<String> feeReceiver,
+            java.util.Optional<java.math.BigDecimal> creationFee,
+            java.util.Optional<java.math.BigDecimal> redemptionFee) {
+
+        /** A fee-free basket. */
+        public BasketView(String contractId, String administrator, String basketId,
+                String description, String cashInstrument, List<ComponentView> components,
+                List<String> participants) {
+            this(contractId, administrator, basketId, description, cashInstrument, components,
+                    participants, java.util.Optional.empty(), java.util.Optional.empty(),
+                    java.util.Optional.empty());
+        }
     }
 
     /**
