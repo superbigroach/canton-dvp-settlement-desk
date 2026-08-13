@@ -136,9 +136,11 @@ product. Everything else is upside.
 a creation, and confirm the receiver's cash increased and the receipt records the amount. Then
 define one with a fee and *no* funding cash and confirm the creation is refused with nothing moved.
 
-⚠️ **Not yet wired:** `basketCreate` / `basketRedeem` do not auto-provision the fee cash. Defining
-a fee-bearing basket works over REST; funding the fee from those two endpoints is the remaining
-piece. Until then, exercise the fee from Daml or the command layer.
+✅ **Wired and proven live (13 August 2026).** `basketCreate` and `basketRedeem` now provision the
+AP's cash and fund the fee themselves. Verified on a sandbox: the operator's USDC went `2600 → 2625`
+on a creation charging 25, then `→ 2635` on a redemption charging 10 — exact, with the operator being
+neither the fund administrator nor the AP, which is the point. Before the fix the same call returned
+a 409 carrying the template's own message, which was a correct refusal of a useless feature.
 
 ## 7. Continuous order book — 10 · works, not sold
 
