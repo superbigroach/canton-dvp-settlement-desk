@@ -137,3 +137,49 @@ Not this repository, and not our DAR alone:
 | Onboarding to the **Global Synchronizer** | the network | ⚠️ Not obtainable from code. Needs an onboarding secret or sponsor — this is the standing blocker |
 | The **Daml SDK** | `digital-asset/daml` | Free for development. Match the node: build LF 2.x for a Canton 3.x participant |
 | A **secure deployment reference** | `digital-asset/ex-secure-canton-infra` | ⚠️ `NOASSERTION` licence and last pushed June 2025 — verify before relying on it |
+
+---
+
+## The recommendation — what to adopt, what to read, what to watch
+
+Checked 13 August 2026. Three buckets, and **nothing more gets copied into this repository.**
+
+### Adopt as code — two, and only when the need arises
+
+| What | Licence | When |
+|---|---|---|
+| `digital-asset/xreserve-deposits` | **0BSD** — public-domain-equivalent, attribution not even required | The moment real **USDCx** matters. It is the public route to Circle USDC on Canton |
+| `smartcontractkit/data-streams-canton` | **MIT** | To read how a price is actually delivered onto Canton. Reference, not a dependency |
+
+### Read before writing anything — `canton-foundation/canton-dev-fund`
+
+**CC0-1.0**, actively maintained (pushed 2026-08-06). The Development Fund runs on **public
+proposals and public reviews**, and CC0 puts them in the public domain.
+
+🟢 **Every funded proposal is readable, including BitSafe's $1M+ one.** Read what actually got
+funded — the shape, the milestone structure, the level of detail, the reviewers' objections —
+*before* writing a proposal, and while about to talk to the team that wrote one of them. This is the
+single highest-value link in this file and it costs nothing.
+
+### Watch releases — four things that can break this project
+
+Watch **releases only**, not all activity. Each of these can invalidate something we depend on:
+
+| Repo | The specific risk |
+|---|---|
+| **`canton-network/splice`** (pushed daily) | 🔴 **Token standard v1 → v2.** We vendor the `-v1` interface DARs because v1 is what is vetted on DevNet/MainNet. When v2 lands — it adds burn/mint, transfer events and multi-executor settlement — our CIP-56 layer needs a decision, not a surprise |
+| **`canton-foundation/cips`** | CIP-56 is the token standard itself. A change here is a change to the asset model we consume |
+| **`digital-asset/daml`** | LF and SDK versions. The node runs Canton 3.5.10 while we build SDK 3.4.11 / LF 2.2 — fine today, because 3.5 accepts LF 2.2, but that pairing is a fact to re-check, not an assumption |
+| **`digital-asset/cn-quickstart`** (0BSD, active) | The reference wiring for devnet. Changes here signal changes in onboarding |
+
+### Not useful to us
+
+`canton-foundation/binaries`, `configs`, `configs-runtime` are **Super Validator** runtime files —
+relevant to an SV operator, not to an application. `accountability` and `wallets` are governance and
+wallet listings.
+
+### The standing blocker no repository solves
+
+A **participant onboarded to the Global Synchronizer**. `splice` ships the validator software and
+`cn-quickstart` wires the app, but permission to join is granted by the network — an onboarding
+secret or a sponsor. That is a conversation with NODERS or BitSafe, not a clone.
