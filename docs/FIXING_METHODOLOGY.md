@@ -95,6 +95,88 @@ consecutive carried-forward strikes trigger a review under §8.
 - **Ledger latency is not a delay in the fixing.** The strike time is the moment the auction
   closes or the committee's quorum is reached, not the moment the transaction commits.
 
+## 4a. Strike frequency when the asset trades 24/7 — and when its market is shut
+
+The question every tokenised-fund conversation reaches: *if it trades around the clock, do you need
+an hourly NAV?* **No.** This section is the reasoning, because it is asked more often than it is
+answered well.
+
+### The rule
+
+**Strike frequency follows SETTLEMENT, not trading.**
+
+An ETF trades continuously all day and has exactly **one** official NAV. Its intraday price comes
+from the market anchored by arbitrage, not from recomputing NAV; what the exchange disseminates
+every ~15 seconds is the **indicative** value, binding on nobody. Creation and redemption settle
+once, at one struck price.
+
+The empirical answer for a 24/7 asset already exists: **Bitcoin never stops trading, and CME settles
+every future and option on ONE daily fixing.** The most sophisticated venue pricing the most
+continuously-traded asset chose once a day. Frequency is a settlement decision.
+
+### Why more strikes are worse, not better
+
+1. **Every strike costs a quorum.** Hourly is 24 K-of-N quorums a day. The `N` are parties with an
+   existing commercial interest (§7), not staff — attestation is a by-product of a position they
+   already hold, and it does not scale to hourly.
+2. **More strikes do not make the settling price more accurate.** They multiply the number of
+   published prices someone can dispute.
+3. **Manipulation surface grows with every fixing.** Benchmarks use few, well-defined strikes
+   deliberately.
+4. **A contract needs one referenceable moment.** A margin agreement names *"the 16:00 fixing"*, not
+   *"whichever of twenty-four."*
+
+**The one genuine case for more frequency:** creation and redemption that must settle intraday. Some
+money-market funds strike several times a day for exactly that reason. Follow settlement — a
+customer with three settlement windows gets three strikes, declared per §4 and fixed.
+
+### How the other 23 hours are covered — three mechanisms, not one
+
+| Between strikes | Covered by | Applies to |
+|---|---|---|
+| **Derivation from the signed recipe** | §3 Tier 2 — base, rate, day-count are attested, so the ledger derives a value at every instant | Accruing assets: T-bills, money market, anything with a yield |
+| **Indicative value** | §2 — continuous, from live market data, **binding on nobody** | Volatile assets with an open market: cBTC, cETH |
+| **Committee attestation** | §3 Tier 2 again — but as the *primary* source, not a fallback | **Assets whose market is closed** — see below |
+
+This is why the committee signs a **recipe rather than a number**. A recipe extrapolates a T-bill; it
+cannot extrapolate Bitcoin. So a fund holding money-market assets has a live value at 03:00 on a
+Sunday with no strike at all, while a fund holding volatile assets relies on the official/indicative
+split and on arbitrage to close the gap.
+
+### 🟢 The closed-market case — the strongest argument this document contains
+
+**What is the NAV of a tokenised equity fund at 03:00 on a Sunday?**
+
+If tokenised stocks and stock funds trade 24/7, their underlying market does not. Overnight, at
+weekends and on holidays there is **no price for the constituents**. Not a stale price — no price.
+
+**No oracle can solve this.** A price feed relays a number that exists; when the underlying market is
+shut there is nothing to relay. Chainlink, RedStone and any data standard are transport, and
+transport has nothing to carry.
+
+Somebody must **attest** a value instead of reporting one — a K-of-N committee signing a defensible
+mark, with the method published in advance and every signature attributable. That is not an
+adaptation of this design; it is the case the design was built for, and the one place where
+attestation is strictly better than a feed rather than merely different.
+
+It also points where the money is. Per `docs/PROJECT_CONTEXT.md` §8: the market pays **0.325 bps**
+for valuing an easy asset and **6–12 bps** where the mark is genuinely argued about. *"The market is
+closed and someone still has to settle"* is the definition of a doubted mark.
+
+### Talking points, compressed
+
+- *"Frequency follows settlement, not trading. An ETF trades all day on one NAV."*
+- *"Bitcoin trades 24/7 and CME still settles on one daily fixing. That is the answer to whether you
+  need hourly."*
+- *"We sign a recipe, not a number, so the ledger derives the value between strikes. Hourly strikes
+  solve a problem we do not have."*
+- *"Hourly would mean twenty-four quorums a day. Nobody staffs that, and every extra fixing is
+  another number to dispute and another moment to push."*
+- *"If you need to settle intraday, you get intraday strikes — declared and fixed, not ad hoc."*
+- **The closer:** *"When a tokenised stock fund trades at 3am Sunday, no oracle can price it, because
+  its market is closed and there is nothing to relay. Someone has to attest a value. That is what a
+  K-of-N committee is for, and it is the one job a price feed structurally cannot do."*
+
 ## 5. Inputs and their treatment
 
 - **Tier 1 inputs** are sealed orders on the ledger. They are visible to no other participant
