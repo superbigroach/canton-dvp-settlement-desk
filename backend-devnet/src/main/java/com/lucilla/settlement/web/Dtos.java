@@ -555,7 +555,65 @@ public final class Dtos {
             String accrued,                  // navNow - basePrice
             String asOf,                     // ISO-8601 — the desk clock this was derived at
             long asOfEpochMicros,
-            long elapsedMicros) {
+            long elapsedMicros,
+            // ---- docs/FIXING_METHODOLOGY.md §10: what every published fixing carries ----
+            String tier,                     // "auction" | "committee" | "carried-forward"
+            String referencePrice,           // the benchmark print, where the asset is wrapped
+            String wrapperFactor,            // the attested par ratio
+            String wrapperDiscountBps,       // (1 - factor) x 10000 — the number risk argues about
+            String supersedes,               // the fixing this corrects, if any (§6)
+            String restatementReason,
+            // §3 Tier 3. A fixing older than one strike interval is being CARRIED
+            // FORWARD, and the methodology requires that to be flagged with the age of
+            // the underlying strike rather than served as though freshly struck. Silence
+            // here is the failure: a stale number that looks current is worse than a gap.
+            boolean carriedForward,
+            long ageOfStrikeHours) {
+    }
+
+    /**
+     * A fixing SERIES for one identifier — docs/FIXING_METHODOLOGY.md §10.
+     *
+     * <p>{@code GET /fixings} returns live contracts, which is not the same thing as a
+     * benchmark's published record. A consumer referencing "the 16:00 CDX-CBTC-D fixing
+     * of 12 August" needs to look it up by identifier and date and get back ONE answer,
+     * with corrections already resolved.
+     *
+     * <p>{@code current} applies §6's consumer rule: the fixing that no other fixing
+     * supersedes — equivalently, and more cheaply, the newest {@code finalizedAt}. The
+     * superseded prints stay in {@code history} because they WERE published and desks
+     * may have acted on them; a restatement supersedes a number, it does not erase it.
+     */
+    public record FixingSeriesResponse(
+            String instrumentId,
+            String session,
+            FixingResponse current,          // null when the identifier has no fixing at all
+            List<FixingResponse> history,    // newest first, corrections included
+            int count,
+            /** §8: set when this identifier is scheduled to cease. */
+            CessationView cessation) {
+    }
+
+    /** A published cessation notice, as a consumer sees it (§8). */
+    public record CessationView(
+            String contractId,
+            String instrumentId, String session,
+            String publishedAt,              // ISO-8601
+            String finalStrike,              // ISO-8601 — the last strike this fixing produces
+            long daysRemaining,              // negative once the final strike has passed
+            String successor,                // recommended replacement identifier, if any
+            String reason,
+            List<String> notifiedTo) {
+    }
+
+    /** Serve a cessation notice for an identifier (§8). Sixty days is enforced on-ledger. */
+    public record PublishCessationRequest(
+            @NotBlank String instrumentId,
+            String session,                  // Open | Close (defaults to Close)
+            @NotBlank String finalStrike,    // ISO-8601; must be >= 60 days out
+            String successor,
+            @NotBlank String reason,         // never blank — a silent withdrawal is what §8 prevents
+            List<@NotBlank String> notifyTo) {
     }
 
     /**

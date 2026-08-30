@@ -14,6 +14,24 @@ for why there are two builds and everything that was ported.
 - The 5 parties exist: `issuer-crossdesk`, `bank-crossdesk`, `alice-crossdesk`,
   `bob-crossdesk`, `auditor-crossdesk` (all `::122003aa7c49…`).
 - **Your user (`sborjas`, sub `8b9dc176-…`) has `CanActAs` on those 5 parties.**
+
+🔴 **THAT LIST IS SHORT BY ONE, AND IT BREAKS THE DESK.**
+
+`resolveParty("Venue")` is called at **26 sites** — every auction and every settlement path —
+and it THROWS `no known party matches 'Venue'` when the party is absent. `Test:initialize`
+allocates **eight** parties on a sandbox (Issuer, **Venue**, Alice, Bob, Bank, Auditor, Agent,
+Eve), which is why this never shows up locally.
+
+`scripts/bootstrap-devnet.sh:93` calls `give Venue USDC 500000` to fund the venue's insurance
+pool, and that POSTs `owner=Venue` to this backend — so it has been failing on devnet, silently,
+since the 3.x port. Git history confirms `Venue=` was **never** in `run-devnet.sh`.
+
+**Ask the node operator for BOTH:**
+1. Allocate **`venue-crossdesk`** on the participant (if it does not already exist), and
+2. Grant your user **`CanActAs venue-crossdesk`** — the roster entry alone is not enough.
+
+`run-devnet.sh` and `.env.example` now list Venue. Run `python preflight.py` before the first
+submission; it fails on a roster missing Venue, Issuer, Bank or Auditor.
   Reads work with readAs alone; **writes (create/settle) need actAs** — this is
   the only grant the node operator must set. Until then, step 3 returns
   `PERMISSION_DENIED` (everything else still works).

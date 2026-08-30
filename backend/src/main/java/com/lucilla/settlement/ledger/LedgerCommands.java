@@ -621,6 +621,31 @@ public final class LedgerCommands {
         return new FixingProposal.ContractId(proposalCid).exerciseFinalizeFixing(publishTo);
     }
 
+    /**
+     * Serve a cessation notice for a fixing — docs/FIXING_METHODOLOGY.md §8.
+     *
+     * <p>Opened on the committee because that is where a fixing's identity lives (the
+     * roster and threshold it is struck under), although only the administrator signs
+     * the notice. A restatement carries the same K of N because it is a new assertion
+     * about VALUE; cessation asserts nothing about value. It is an operational promise
+     * to keep striking until a named date, and only the administrator can make it or be
+     * held to it. Requiring committee sign-off would also let members who want the
+     * fixing gone block the notice that protects its consumers.
+     *
+     * <p>The sixty-day window is enforced on the contract, not here.
+     */
+    public static Update<?> publishCessation(
+            String committeeCid, String instrumentId, String session, Instant finalStrike,
+            Optional<String> successor, String reason, List<String> notifyTo) {
+        return new OperatorCommittee.ContractId(committeeCid)
+                .exercisePublishCessation(instrumentId, session, finalStrike,
+                        successor, reason, notifyTo);
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier cessationNoticeTemplateId() {
+        return com.lucilla.settlement.model.governance.CessationNotice.TEMPLATE_ID;
+    }
+
     public static com.daml.ledger.javaapi.data.Identifier operatorCommitteeTemplateId() {
         return OperatorCommittee.TEMPLATE_ID;
     }

@@ -288,14 +288,16 @@ route must be resolved first.
 | §3 Tier 1 minimum quality conditions (≥2 orders, ≥2 parties) | implemented, tested — enforced in `uncrossSealedBook`, shared by both closes, as module constants an operator cannot lower |
 | §3 Tier 2 committee attestation of a recipe | implemented, tested |
 | §3 Tier 2 basket summation | implemented, tested |
-| §3 Tier 3 carry-forward flagging | derivation works; **the flag and age are not published** |
+| §3 Tier 3 carry-forward flagging | implemented — a fixing whose strike is more than one interval old is returned with `carriedForward` and `ageOfStrikeHours`. A stale number that looks freshly struck is worse than a gap, because a gap is visible and staleness is not |
 | §4 Scheduled strike at a fixed time | **not implemented** — strikes are triggered manually |
 | §5 Gap-rather-than-estimate | implemented (`navPerShare` returns `None` on a missing mark) |
 | §6 Restatement | implemented, tested — `RestatementProposal`, same K-of-N as a fixing. The two-business-day window is policy, not code (see §6) |
 | §5 Wrapper mark as two signed fields (`referencePrice`, `wrapperFactor`) | implemented, tested — reconciliation enforced on-ledger (`testWrapperMarkAttested`) |
 | §7 Per-signer protocol evidence on the published fixing | implemented, tested — `ConfirmWithChecks` (`testSignerProtocolEvidence`). The venue's observed range is enforced; the issuer's and lender's claims are recorded but not machine-checked (`docs/SIGNER_PROTOCOL.md` §7) |
 | §7 Fund behaviour when `K` is not reached | **not specified** — belongs to the fund's governing documents, not the administrator's |
-| §8 Cessation notice | **not implemented** — process only |
-| §10 Lookup by identifier and date | **not implemented** — `GET /fixings` returns contracts, not a dated series |
+| §8 Cessation notice | implemented, tested — `CessationNotice`, served through `POST /committee/{cid}/cessation` and readable at `GET /cessations`. The sixty days are enforced **on-ledger** (unlike §6's window, which needs a holiday calendar this package does not carry; sixty *calendar* days needs none). Extensions may only move the date later |
+| §10 Lookup by identifier and date | implemented — `GET /fixings/{instrumentId}` returns the published series with §6's consumer rule applied (`current` is the print nothing supersedes), an optional `asOf` for "which number was in force when my liquidation fired", and any cessation notice covering the identifier. Every fixing now carries its tier, wrapper mark and restatement lineage |
 
-Closing the four gaps marked in §12 is what turns the existing implementation into a benchmark.
+**One gap remains: §4's scheduled strike.** Strikes are still triggered by hand, which means the
+record depends on somebody remembering. Everything else in this table is now either implemented or
+explicitly the fund's decision rather than the administrator's.

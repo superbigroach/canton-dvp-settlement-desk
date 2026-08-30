@@ -43,14 +43,15 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 public final class OperatorCommittee extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#crossdesk", "Governance", "OperatorCommittee");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("527a2b50430ceabba40484b4518c4d390781e8db6c016ab3ec5528eea36766ea", "Governance", "OperatorCommittee");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("f442ed0a18dad43b70c730775e6991c2bb8ee6bf01385f7c5325552559cafa9b", "Governance", "OperatorCommittee");
 
-  public static final String PACKAGE_ID = "527a2b50430ceabba40484b4518c4d390781e8db6c016ab3ec5528eea36766ea";
+  public static final String PACKAGE_ID = "f442ed0a18dad43b70c730775e6991c2bb8ee6bf01385f7c5325552559cafa9b";
 
   public static final String PACKAGE_NAME = "crossdesk";
 
@@ -62,6 +63,14 @@ public final class OperatorCommittee extends Template {
         new FixingProposal.ContractId(value$.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected value$ to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()),
         new ProposeFixing.JsonDecoder$().get(),
         JsonLfDecoders.contractId(FixingProposal.ContractId::new), ProposeFixing::jsonEncoder,
+        JsonLfEncoders::contractId);
+
+  public static final Choice<OperatorCommittee, PublishCessation, CessationNotice.ContractId> CHOICE_PublishCessation = 
+      Choice.create("PublishCessation", value$ -> value$.toValue(), value$ ->
+        PublishCessation.valueDecoder().decode(value$), value$ ->
+        new CessationNotice.ContractId(value$.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected value$ to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()),
+        new PublishCessation.JsonDecoder$().get(),
+        JsonLfDecoders.contractId(CessationNotice.ContractId::new), PublishCessation::jsonEncoder,
         JsonLfEncoders::contractId);
 
   public static final Choice<OperatorCommittee, ProposeRestatement, RestatementProposal.ContractId> CHOICE_ProposeRestatement = 
@@ -99,7 +108,8 @@ public final class OperatorCommittee extends Template {
         "com.lucilla.settlement.model.governance.OperatorCommittee", TEMPLATE_ID, ContractId::new,
         v -> OperatorCommittee.templateValueDecoder().decode(v), OperatorCommittee::fromJson,
         Contract::new, List.of(CHOICE_ProposeFixing, CHOICE_ProposeAccruingFixing,
-        CHOICE_ProposeRestatement, CHOICE_ProposeWrappedFixing, CHOICE_Archive));
+        CHOICE_ProposeRestatement, CHOICE_ProposeWrappedFixing, CHOICE_Archive,
+        CHOICE_PublishCessation));
 
   public final String admin;
 
@@ -143,6 +153,26 @@ public final class OperatorCommittee extends Template {
       String rationale) {
     return createAndExerciseProposeFixing(new ProposeFixing(proposer, instrumentId, cashInstrument,
         session, price, rationale));
+  }
+
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exercisePublishCessation} instead
+   */
+  @Deprecated
+  public Update<Exercised<CessationNotice.ContractId>> createAndExercisePublishCessation(
+      PublishCessation arg) {
+    return createAnd().exercisePublishCessation(arg);
+  }
+
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exercisePublishCessation} instead
+   */
+  @Deprecated
+  public Update<Exercised<CessationNotice.ContractId>> createAndExercisePublishCessation(
+      String instrumentId, String session, Instant finalStrike, Optional<String> successor,
+      String reason, List<String> notifyTo) {
+    return createAndExercisePublishCessation(new PublishCessation(instrumentId, session,
+        finalStrike, successor, reason, notifyTo));
   }
 
   /**
@@ -372,6 +402,18 @@ public final class OperatorCommittee extends Template {
         String rationale) {
       return exerciseProposeFixing(new ProposeFixing(proposer, instrumentId, cashInstrument,
           session, price, rationale));
+    }
+
+    default Update<Exercised<CessationNotice.ContractId>> exercisePublishCessation(
+        PublishCessation arg) {
+      return makeExerciseCmd(CHOICE_PublishCessation, arg);
+    }
+
+    default Update<Exercised<CessationNotice.ContractId>> exercisePublishCessation(
+        String instrumentId, String session, Instant finalStrike, Optional<String> successor,
+        String reason, List<String> notifyTo) {
+      return exercisePublishCessation(new PublishCessation(instrumentId, session, finalStrike,
+          successor, reason, notifyTo));
     }
 
     default Update<Exercised<RestatementProposal.ContractId>> exerciseProposeRestatement(

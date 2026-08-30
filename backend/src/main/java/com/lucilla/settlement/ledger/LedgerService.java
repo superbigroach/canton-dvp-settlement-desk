@@ -108,6 +108,31 @@ public class LedgerService {
      * but not given to the user for security reasons" — so these handles are the only
      * bridge between a failure seen here and the explanation held there.
      */
+    /*
+     * THE DECENTRALIZED-PARTY SEAM. Every write in this application funnels through
+     * this one method, which is why making the venue operator a threshold-governed
+     * party is a change HERE and nowhere else.
+     *
+     * Today `actAs` is a single party holding a single key, and this submits directly.
+     * Under a Canton Decentralized Party the id is unchanged - it is still an ordinary
+     * `hint::fingerprint` - but the key behind that fingerprint is split across
+     * independent operators, so a submission must satisfy a threshold before it reaches
+     * the ledger. That is what Decentralization Manager's coordinator does: it gathers
+     * the required signatures, then submits.
+     *
+     * So the change is: route through the coordinator instead of calling
+     * submitAndWaitForTransaction directly, for the operator-controlled writes only
+     * (CloseBidding, RunClose, ProcessCreation, ProcessRedemption - note FinalizeFixing
+     * is NOT one: it is `controller proposer`, a committee member, not the operator).
+     * The Daml does not
+     * change at all - nothing in it inspects how a party's key is hosted.
+     *
+     * NOT IMPLEMENTED, and it cannot be until a participant exists: there is no party
+     * to decentralize and nothing to run the coordinator against. The open question is
+     * what threshold coordination costs in write latency when a fixing has a strike
+     * time; the `in={}ms` figure logged below is the baseline that experiment measures
+     * against. See BUSINESS/5-RUN-THE-COMMITTEE/ for the runbook.
+     */
     public Transaction submit(String actAs, HasCommands command) {
         DamlLedgerClient client = connection.get();
         // Generated up-front (rather than inline) precisely so it can be LOGGED: this
@@ -664,6 +689,40 @@ public class LedgerService {
      * value now is DERIVED from them and not stored anywhere. {@link Accrual#navAt} is
      * the derivation, and it is the same arithmetic the ledger runs.
      */
+    /**
+     * Every cessation notice this party can see — docs/FIXING_METHODOLOGY.md §8.
+     *
+     * <p>Read as the acting party, so the ledger's own disclosure rules apply: a notice
+     * reaches the administrator, the auditor and the desks it named. That is deliberate
+     * and is the whole point of the contract — a cessation notice the referencing desks
+     * cannot read is not a notice, it is a filing.
+     */
+    public List<CessationView> cessationNoticesVisibleTo(String party) {
+        return withRetry("cessation notices for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<com.lucilla.settlement.model.governance.CessationNotice.Contract> filter =
+                    ContractFilter.of(com.lucilla.settlement.model.governance.CessationNotice.COMPANION);
+            List<CessationView> out = new ArrayList<>();
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false,
+                            client.getStateClient().getLedgerEnd().blockingGet())
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (com.lucilla.settlement.model.governance.CessationNotice.Contract c
+                                : active.activeContracts) {
+                            var n = c.data;
+                            out.add(new CessationView(c.id.contractId, n.instrumentId, n.session,
+                                    n.publishedAt, n.finalStrike, n.successor.orElse(null),
+                                    n.reason, n.notifyTo));
+                        }
+                    });
+            // Soonest final strike first: the one about to bite is the one a consumer
+            // needs to see, not the one furthest away.
+            out.sort(java.util.Comparator.comparing(CessationView::finalStrike));
+            return out;
+        });
+    }
+
     public List<NavFixingView> navFixingsVisibleTo(String party) {
         return withRetry("nav fixings for " + party, () -> {
             DamlLedgerClient client = connection.get();
@@ -678,7 +737,12 @@ public class LedgerService {
                             out.add(new NavFixingView(c.id.contractId, f.attestors, f.threshold,
                                     f.instrumentId, f.cashInstrument, f.session, f.price, f.rationale,
                                     f.ratePerAnnum, f.dayCount, f.accrualFrom, f.publishedTo,
-                                    f.finalizedAt));
+                                    f.finalizedAt,
+                                    f.tier.orElse(null),
+                                    f.referencePrice.orElse(null),
+                                    f.wrapperFactor.orElse(null),
+                                    f.supersedes.map(cid -> cid.contractId).orElse(null),
+                                    f.restatementReason.orElse(null)));
                         }
                     });
             return out;
@@ -1268,12 +1332,32 @@ public class LedgerService {
             String instrumentId, String cashInstrument, String session,
             java.math.BigDecimal price, String rationale,
             java.math.BigDecimal ratePerAnnum, String dayCount, java.time.Instant accrualFrom,
-            List<String> publishedTo, java.time.Instant finalizedAt) {
+            List<String> publishedTo, java.time.Instant finalizedAt,
+            // ---- docs/FIXING_METHODOLOGY.md §10: what a published fixing must carry ----
+            // The tier used, the wrapper mark, and the restatement lineage. All optional
+            // because a fixing struck before those fields existed reads exactly as it did.
+            String tier,                                  // "auction" | "committee" | null
+            java.math.BigDecimal referencePrice,          // the benchmark print
+            java.math.BigDecimal wrapperFactor,           // the attested par ratio
+            String supersedes,                            // contract id this corrects
+            String restatementReason) {
 
         /** True when this fix's value MOVES — a zero rate is the old snapshot exactly. */
         public boolean accruing() {
             return ratePerAnnum.signum() != 0;
         }
+
+        /** True when this fixing is a correction of an earlier one (§6). */
+        public boolean isRestatement() {
+            return supersedes != null && !supersedes.isBlank();
+        }
+    }
+
+    /** A published cessation notice as the acting party sees it (§8). */
+    public record CessationView(
+            String contractId, String instrumentId, String session,
+            java.time.Instant publishedAt, java.time.Instant finalStrike,
+            String successor, String reason, List<String> notifyTo) {
     }
 
     /** A receipt as seen by the acting party, with WHO can see it (the privacy proof). */

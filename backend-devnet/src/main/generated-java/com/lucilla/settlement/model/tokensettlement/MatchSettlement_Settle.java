@@ -23,7 +23,7 @@ import java.util.List;
 import java.util.Objects;
 
 public class MatchSettlement_Settle extends DamlRecord<MatchSettlement_Settle> {
-  public static final String _packageId = "527a2b50430ceabba40484b4518c4d390781e8db6c016ab3ec5528eea36766ea";
+  public static final String _packageId = "f442ed0a18dad43b70c730775e6991c2bb8ee6bf01385f7c5325552559cafa9b";
 
   public final Allocation.ContractId assetAllocation;
 

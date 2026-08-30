@@ -36,7 +36,10 @@ export SERVER_PORT="${SERVER_PORT:-8090}"
 # suffix is identical across all five). The 3.x bindings have no party-management
 # admin service, so we supply the roster to the backend here.
 SUFFIX="122003aa7c491e00a453145c4d2cd3dbf5db8908b4e663c9944baed57fd66effa668"
-export LEDGER_PARTIES="Issuer=issuer-crossdesk::$SUFFIX,Bank=bank-crossdesk::$SUFFIX,Alice=alice-crossdesk::$SUFFIX,Bob=bob-crossdesk::$SUFFIX,Auditor=auditor-crossdesk::$SUFFIX"
+# Venue is REQUIRED: 26 call sites resolve it (every auction and settlement path) and
+# resolveParty throws "no known party matches" when it is absent. Test:initialize
+# allocates it on a sandbox; a shared node needs it listed here or the desk breaks.
+export LEDGER_PARTIES="Issuer=issuer-crossdesk::$SUFFIX,Venue=venue-crossdesk::$SUFFIX,Bank=bank-crossdesk::$SUFFIX,Alice=alice-crossdesk::$SUFFIX,Bob=bob-crossdesk::$SUFFIX,Auditor=auditor-crossdesk::$SUFFIX"
 
 echo "Starting CrossDesk backend -> DEVNET ($LEDGER_HOST:$LEDGER_PORT, TLS on, JWT set)"
 exec /usr/bin/java -jar build/libs/canton-dvp-desk-1.0.0.jar

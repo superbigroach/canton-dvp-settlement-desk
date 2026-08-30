@@ -1424,6 +1424,115 @@ public class SettlementController {
     }
 
     /**
+     * THE PUBLISHED SERIES for one identifier — docs/FIXING_METHODOLOGY.md §10.
+     *
+     * <p>{@code GET /fixings} returns live contracts, which is not a benchmark's
+     * published record. A consumer referencing "the 16:00 CDX-CBTC-D fixing" needs to
+     * look it up by identifier and get ONE answer with corrections already resolved.
+     *
+     * <p>{@code current} applies §6's consumer rule: the fixing that no other fixing
+     * supersedes — equivalently, and more cheaply, the newest {@code finalizedAt}. The
+     * superseded prints stay in {@code history} because they WERE published and desks
+     * may have acted on them. A restatement supersedes a number; it does not erase it.
+     *
+     * <p>{@code asOf} (ISO-8601, optional) asks what the record looked like at a past
+     * instant — the honest way to answer "which number was in force when my liquidation
+     * fired", which is the question a dispute actually turns on.
+     */
+    @GetMapping("/fixings/{instrumentId}")
+    public Dtos.FixingSeriesResponse fixingSeries(
+            @PathVariable String instrumentId,
+            @RequestParam(required = false) String session,
+            @RequestParam(required = false) String asOf,
+            @RequestParam(required = false) String actingAs) {
+        String acting = ledger.resolveParty(blankTo(actingAs, "Auditor"));
+        Instant now = Instant.now();
+        Instant cutoff = parseInstant(asOf, now);
+        String sess = LedgerCommands.session(session);
+
+        // Every fixing corrected by a later one, so the current print can be identified
+        // without assuming the newest is uncorrected. Both rules agree; carrying the
+        // explicit set means a consumer can see WHICH prints were superseded and by what.
+        java.util.Set<String> superseded = ledger.navFixingsVisibleTo(acting).stream()
+                .map(LedgerService.NavFixingView::supersedes)
+                .filter(cid -> cid != null && !cid.isBlank())
+                .collect(java.util.stream.Collectors.toSet());
+
+        List<Dtos.FixingResponse> series = ledger.navFixingsVisibleTo(acting).stream()
+                .filter(f -> f.instrumentId().equalsIgnoreCase(instrumentId))
+                .filter(f -> f.session().equalsIgnoreCase(sess))
+                .filter(f -> !f.finalizedAt().isAfter(cutoff))
+                .sorted(Comparator.comparing(LedgerService.NavFixingView::finalizedAt).reversed())
+                .map(f -> toFixingResponse(f, now))
+                .toList();
+
+        Dtos.FixingResponse current = series.stream()
+                .filter(f -> !superseded.contains(f.contractId()))
+                .findFirst()
+                .orElse(null);
+
+        return new Dtos.FixingSeriesResponse(instrumentId, sess, current, series, series.size(),
+                cessationFor(acting, instrumentId, sess, now));
+    }
+
+    /**
+     * Serve a cessation notice — docs/FIXING_METHODOLOGY.md §8.
+     *
+     * <p>The sixty-day window is enforced ON-LEDGER, not here: a notice served short is
+     * exactly what strands a contract that referenced the number, so it fails at the
+     * contract rather than at a validator someone can redeploy around.
+     */
+    @PostMapping("/committee/{cid}/cessation")
+    public ResponseEntity<Dtos.CidResponse> publishCessation(
+            @PathVariable String cid, @Valid @RequestBody Dtos.PublishCessationRequest req) {
+        String admin = ledger.resolveParty("Issuer");
+        List<String> notify = (req.notifyTo() == null ? List.<String>of() : req.notifyTo())
+                .stream().map(ledger::resolveParty).toList();
+        String noticeCid = ledger.submitForCreated(admin,
+                LedgerCommands.publishCessation(cid, req.instrumentId(),
+                        LedgerCommands.session(req.session()),
+                        parseInstant(req.finalStrike(), Instant.now()),
+                        Optional.ofNullable(blankToNull(req.successor())),
+                        req.reason(), notify),
+                LedgerCommands.cessationNoticeTemplateId());
+        return created(new Dtos.CidResponse(noticeCid));
+    }
+
+    /** Every cessation notice this party can see (§8). */
+    @GetMapping("/cessations")
+    public List<Dtos.CessationView> cessations(@RequestParam(required = false) String actingAs) {
+        String acting = ledger.resolveParty(blankTo(actingAs, "Auditor"));
+        Instant now = Instant.now();
+        return ledger.cessationNoticesVisibleTo(acting).stream()
+                .map(n -> toCessationView(n, now))
+                .toList();
+    }
+
+    /** The notice covering one identifier, or null when it is not scheduled to cease. */
+    private Dtos.CessationView cessationFor(String acting, String instrumentId, String sess, Instant now) {
+        return ledger.cessationNoticesVisibleTo(acting).stream()
+                .filter(n -> n.instrumentId().equalsIgnoreCase(instrumentId))
+                .filter(n -> n.session().equalsIgnoreCase(sess))
+                .findFirst()
+                .map(n -> toCessationView(n, now))
+                .orElse(null);
+    }
+
+    private static Dtos.CessationView toCessationView(LedgerService.CessationView n, Instant now) {
+        // Negative once the final strike has passed, deliberately: "how long do I still
+        // have" and "how long ago did this stop" are the same question with a sign.
+        long days = java.time.Duration.between(now, n.finalStrike()).toDays();
+        return new Dtos.CessationView(n.contractId(), n.instrumentId(), n.session(),
+                n.publishedAt().toString(), n.finalStrike().toString(), days,
+                n.successor(), n.reason(),
+                n.notifyTo().stream().map(LedgerService::labelOf).toList());
+    }
+
+    private static String blankToNull(String s) {
+        return (s == null || s.isBlank()) ? null : s;
+    }
+
+    /**
      * THE ACCRUED NAV, WITH ITS WORKING SHOWN.
      *
      * <p>The value one share is worth at {@code at} (default: now), together with every
@@ -1514,6 +1623,8 @@ public class SettlementController {
     /** Flatten a fixing + the value derived from its recipe at {@code now}. */
     private static Dtos.FixingResponse toFixingResponse(LedgerService.NavFixingView f, Instant now) {
         BigDecimal navNow = Accrual.navAt(f.price(), f.ratePerAnnum(), f.dayCount(), f.accrualFrom(), now);
+        long ageHours = java.time.Duration.between(f.accrualFrom(), now).toHours();
+        boolean carriedForward = ageHours >= CARRY_FORWARD_AFTER_HOURS;
         return new Dtos.FixingResponse(
                 f.contractId(),
                 f.attestors().stream().map(LedgerService::labelOf).toList(), f.threshold(),
@@ -1527,8 +1638,27 @@ public class SettlementController {
                 Accrual.wire(navNow),
                 Accrual.wire(Accrual.scaled(navNow).subtract(Accrual.scaled(f.price()))),
                 now.toString(), Accrual.epochMicros(now),
-                Accrual.elapsedMicrosFrom(f.accrualFrom(), now));
+                Accrual.elapsedMicrosFrom(f.accrualFrom(), now),
+                f.tier(),
+                f.referencePrice() == null ? null : Accrual.wire(f.referencePrice()),
+                f.wrapperFactor() == null ? null : Accrual.wire(f.wrapperFactor()),
+                f.wrapperFactor() == null ? null
+                        : Accrual.wire(BigDecimal.ONE.subtract(f.wrapperFactor())
+                                .multiply(BigDecimal.valueOf(10000))),
+                f.supersedes(), f.restatementReason(),
+                carriedForward, ageHours);
     }
+
+    /**
+     * How stale a strike may be before it is being CARRIED FORWARD rather than served.
+     *
+     * <p>docs/FIXING_METHODOLOGY.md §4 sets the strike frequency at daily, so a fixing
+     * whose strike is more than a day old is no longer today's number — it is yesterday's
+     * recipe still deriving a value, which §3 Tier 3 permits and requires to be FLAGGED.
+     * The flag is the whole point: a stale number that looks freshly struck is worse than
+     * a gap, because a gap is visible and staleness is not.
+     */
+    private static final long CARRY_FORWARD_AFTER_HOURS = 24;
 
     /**
      * Normalise a day-count convention for comparison, WITHOUT being helpful about it.
