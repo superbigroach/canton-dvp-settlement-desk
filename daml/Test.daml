@@ -1981,6 +1981,168 @@ testThresholdAttestation = do
     . isNone =<< queryContractId eve fixCid
 
 -- ---------------------------------------------------------------------------
+-- TEST 8b — THE WRAPPER MARK: the judgement no benchmark administrator makes.
+-- ---------------------------------------------------------------------------
+-- CF Benchmarks prices BTC. It has never priced cBTC. The gap between them is a
+-- factor somebody has to sign, and this test is the evidence that the factor is a
+-- FIELD rather than an opinion buried inside a number. It proves three things:
+--   * the struck price is the product, computed on-ledger, so the three numbers
+--     cannot disagree at birth;
+--   * a discount to par survives finalisation intact and is readable off the fixing;
+--   * an incoherent or unexplained factor cannot be proposed at all.
+testWrapperMarkAttested : Script ()
+testWrapperMarkAttested = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  let members = [venue, bank, agent]
+  committeeCid <- submit issuer do
+    createCmd OperatorCommittee with
+      admin = issuer; members; threshold = 2; auditor
+      label = "cBTC Wrapper Committee"
+
+  -- The benchmark prints 100,000. The committee is asked to attest cBTC at 0.998 of
+  -- it — a 20bp discount to par, the kind a queued redemption justifies.
+  propCid <- submit venue do
+    exerciseCmd committeeCid ProposeWrappedFixing with
+      proposer = venue; instrumentId = "CBTC"; cashInstrument = usdc
+      session = "Close"; benchmarkPrice = 100000.0; parFactor = 0.998
+      rationale = "CME CF BRR 16:00 London; 20bp for a redemption queue over 24h"
+
+  propCid2 <- submit bank do exerciseCmd propCid Confirm with member = bank
+  fixCid   <- submit venue do exerciseCmd propCid2 FinalizeFixing with publishTo = [venue]
+
+  Some fix <- queryContractId venue fixCid
+  -- The struck price IS the product. Not passed in, so it cannot contradict.
+  fix.price === 99800.0
+  fix.referencePrice === Some 100000.0
+  fix.wrapperFactor === Some 0.998
+  assertMsg "the wrapper discount must be readable off the published fixing"
+    (fix.wrapperFactor /= Some 1.0)
+
+  -- A factor of zero or above the sanity bound is a typo, not a discount.
+  submitMustFail venue do
+    exerciseCmd committeeCid ProposeWrappedFixing with
+      proposer = venue; instrumentId = "CBTC"; cashInstrument = usdc
+      session = "Close"; benchmarkPrice = 100000.0; parFactor = 0.0
+      rationale = "zero factor"
+  submitMustFail venue do
+    exerciseCmd committeeCid ProposeWrappedFixing with
+      proposer = venue; instrumentId = "CBTC"; cashInstrument = usdc
+      session = "Close"; benchmarkPrice = 100000.0; parFactor = 2.5
+      rationale = "factor above the sanity bound"
+  -- A rationale that cites nothing is refused: "because I said so" is the one thing
+  -- a wrapper mark may never be.
+  submitMustFail venue do
+    exerciseCmd committeeCid ProposeWrappedFixing with
+      proposer = venue; instrumentId = "CBTC"; cashInstrument = usdc
+      session = "Close"; benchmarkPrice = 100000.0; parFactor = 0.998
+      rationale = ""
+
+-- ---------------------------------------------------------------------------
+-- TEST 8c — THE SIGNER PROTOCOL: evidence, and a venue that cannot rubber-stamp.
+-- ---------------------------------------------------------------------------
+-- docs/SIGNER_PROTOCOL.md. The point of `ConfirmWithChecks` is that the finished
+-- fixing can answer WHY each member signed. The sharpest guard is the venue's: a
+-- venue asserting a traded range it did not trade is refused on-ledger, so the one
+-- seat with real transaction data cannot sign a price its own book never printed.
+testSignerProtocolEvidence : Script ()
+testSignerProtocolEvidence = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  let members = [venue, bank, agent]
+  committeeCid <- submit issuer do
+    createCmd OperatorCommittee with
+      admin = issuer; members; threshold = 2; auditor
+      label = "cBTC Wrapper Committee"
+
+  propCid <- submit venue do
+    exerciseCmd committeeCid ProposeWrappedFixing with
+      proposer = venue; instrumentId = "CBTC"; cashInstrument = usdc
+      session = "Close"; benchmarkPrice = 100000.0; parFactor = 1.0
+      rationale = "CME CF BRR 16:00 London; attested at par"
+
+  -- A signer must name at least one condition it verified. An empty list is a vote,
+  -- and a vote is exactly what this choice exists to stop being sufficient.
+  submitMustFail bank do
+    exerciseCmd propCid ConfirmWithChecks with
+      member = bank
+      check = SignerCheck with
+        member = bank; role = "lender"
+        protocolRef = "SIGNER_PROTOCOL v1 lender"
+        checksPassed = []; observedLow = None; observedHigh = None
+
+  -- The evidence must be signed by the member actually confirming — one member
+  -- cannot file another's attestation.
+  submitMustFail bank do
+    exerciseCmd propCid ConfirmWithChecks with
+      member = bank
+      check = SignerCheck with
+        member = agent; role = "issuer"
+        protocolRef = "SIGNER_PROTOCOL v1 issuer"
+        checksPassed = ["attestor-quorum"]; observedLow = None; observedHigh = None
+
+  -- THE VENUE GUARD. 100,000 sits outside a book that traded 90,000-95,000, so the
+  -- venue cannot attest it. This is the single most informative refusal available.
+  submitMustFail agent do
+    exerciseCmd propCid ConfirmWithChecks with
+      member = agent
+      check = SignerCheck with
+        member = agent; role = "venue"
+        protocolRef = "SIGNER_PROTOCOL v1 venue"
+        checksPassed = ["traded-range"]
+        observedLow = Some 90000.0; observedHigh = Some 95000.0
+  -- An inverted range is incoherent whatever the price.
+  submitMustFail agent do
+    exerciseCmd propCid ConfirmWithChecks with
+      member = agent
+      check = SignerCheck with
+        member = agent; role = "venue"
+        protocolRef = "SIGNER_PROTOCOL v1 venue"
+        checksPassed = ["traded-range"]
+        observedLow = Some 101000.0; observedHigh = Some 99000.0
+  -- Half a range is not a range.
+  submitMustFail agent do
+    exerciseCmd propCid ConfirmWithChecks with
+      member = agent
+      check = SignerCheck with
+        member = agent; role = "venue"
+        protocolRef = "SIGNER_PROTOCOL v1 venue"
+        checksPassed = ["traded-range"]
+        observedLow = Some 99000.0; observedHigh = None
+
+  -- The lender signs against its own book; the venue signs a range that CONTAINS
+  -- the mark. Two distinct attestors, so the fix can be finalised.
+  propCid2 <- submit bank do
+    exerciseCmd propCid ConfirmWithChecks with
+      member = bank
+      check = SignerCheck with
+        member = bank; role = "lender"
+        protocolRef = "SIGNER_PROTOCOL v1 lender"
+        checksPassed = ["independent-mark-within-tolerance", "book-acceptance"]
+        observedLow = None; observedHigh = None
+  propCid3 <- submit agent do
+    exerciseCmd propCid2 ConfirmWithChecks with
+      member = agent
+      check = SignerCheck with
+        member = agent; role = "venue"
+        protocolRef = "SIGNER_PROTOCOL v1 venue"
+        checksPassed = ["traded-range", "spread-within-tolerance"]
+        observedLow = Some 99500.0; observedHigh = Some 100500.0
+  fixCid <- submit venue do exerciseCmd propCid3 FinalizeFixing with publishTo = [venue]
+
+  Some fix <- queryContractId venue fixCid
+  -- THE OVERSIGHT RECORD SURVIVES FINALISATION. This is the difference between a
+  -- signature count and an oversight function: the fixing says why, not just who.
+  let Some sigs = fix.attestations
+  length sigs === 2
+  assertMsg "the lender's attestation must be on the published record"
+    (any (\c -> c.role == "lender" && c.member == bank) sigs)
+  assertMsg "the venue's observed range must be on the published record"
+    (any (\c -> c.role == "venue" && c.observedLow == Some 99500.0) sigs)
+
+-- ---------------------------------------------------------------------------
 -- TEST 9 — COMMITTEE-ATTESTED CLOSE: an auction BOUND to a NavFixing may only run
 -- against the ATTESTED ANCHOR. What the committee fixes is no longer the print.
 -- ---------------------------------------------------------------------------
@@ -2110,6 +2272,9 @@ accrualFixture admin auditor base rate dayCount from = NavFixing with
   ratePerAnnum = rate; dayCount; accrualFrom = from
   publishedTo = []; finalizedAt = from
   supersedes = None; restatementReason = None
+  -- A native asset with no wrapper and no protocol evidence: the accrual arithmetic
+  -- is orthogonal to both, and `None` here is exactly a pre-protocol fixing.
+  referencePrice = None; wrapperFactor = None; attestations = None
 
 -- ---------------------------------------------------------------------------
 -- TEST 9a — THE ACCRUAL ARITHMETIC, HAND-COMPUTED.

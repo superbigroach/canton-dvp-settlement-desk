@@ -318,6 +318,53 @@ anchorConsistentWithNav accruedNav anchor =
      && accruedNav - anchor <= staleBudget             -- and no more than 1bp behind
 
 -- ---------------------------------------------------------------------------
+-- wrapperConsistent — the wrapper mark must RECONCILE.
+-- ---------------------------------------------------------------------------
+-- An attested price that does not equal `referencePrice x wrapperFactor` is two
+-- different assertions wearing one signature, and the auditor cannot tell which of
+-- them the members meant. Either the pair is present and reconciles, or neither is:
+-- half a recipe is not a recipe, so `Some`/`None` is refused as firmly as a bad
+-- product. Tolerance is 1e-6 relative, which absorbs Decimal rounding on a
+-- five-figure mark without admitting a second opinion about the price.
+wrapperConsistent : Decimal -> Optional Decimal -> Optional Decimal -> Bool
+wrapperConsistent price mRef mFactor = case (mRef, mFactor) of
+  (None,   None)   -> True
+  (Some r, Some f) -> r > 0.0 && f > 0.0 && abs (price - r * f) <= price / 1000000.0
+  _                -> False
+
+-- ===========================================================================
+-- THE SIGNER PROTOCOL — what a member ASSERTS, not what it thinks.
+-- ===========================================================================
+-- docs/SIGNER_PROTOCOL.md. A committee whose members each answer "do you like this
+-- price?" is a committee that rubber-stamps, because an opinion costs judgement and
+-- these members are not paid (§7 of the methodology). So no member is ever asked for
+-- an opinion about the price. Each is asked to assert A FACT ONLY IT CAN SEE:
+--
+--   issuer  — redemption is working: attestor quorum, reserves current, queue clear
+--   lender  — it will carry this mark against its OWN collateral book
+--   venue   — the mark sits inside the range its book actually traded
+--
+-- Two properties follow, and they are the whole point:
+--   1. Signing is CHEAP — a check against your own systems, automatable as a bot.
+--      That is what makes an unpaid committee operable at all.
+--   2. Refusal is SPECIFIC — "attestor quorum was 5 of 10", not "I disagree". A
+--      refusal that names a condition is actionable; a vote of no confidence is not.
+--
+-- `checksPassed` carries the NAMED conditions from the protocol document that the
+-- member verified. It is deliberately `[Text]` rather than an enum: the protocol is
+-- versioned prose that will gain conditions faster than the DAR is upgraded, and a
+-- closed enum would force a package upgrade to add a check.
+data SignerCheck = SignerCheck
+  with
+    member       : Party
+    role         : Text              -- "issuer" | "lender" | "venue" | "operator"
+    protocolRef  : Text              -- e.g. "SIGNER_PROTOCOL v1 §2 issuer"
+    checksPassed : [Text]            -- the named conditions verified
+    observedLow  : Optional Decimal  -- venue only: low of the traded range
+    observedHigh : Optional Decimal  -- venue only: high of the traded range
+  deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
 -- OperatorCommittee — the standing K-of-N committee (the decentralised operator).
 -- ---------------------------------------------------------------------------
 -- This is the configuration record: who the member parties are, and how many of
@@ -400,6 +447,11 @@ template OperatorCommittee
           -- number must be able to read the right one, without re-publishing by hand.
           publishTo = original.publishedTo
           approvers = [proposer]
+          -- A correction carries the ORIGINAL's wrapper mark and evidence forward by
+          -- default; a restatement that also changes the factor sets it explicitly.
+          referencePrice = original.referencePrice
+          wrapperFactor = original.wrapperFactor
+          attestations = original.attestations
 
     nonconsuming choice ProposeFixing : ContractId FixingProposal
       with
@@ -423,6 +475,57 @@ template OperatorCommittee
           -- accrual origin is only there to keep the record shape uniform.
           ratePerAnnum = 0.0; dayCount = "NONE"; accrualFrom = now
           approvers = [proposer]        -- the proposer is the first attestor
+          -- No wrapper mark and no protocol evidence on the plain path: this choice
+          -- predates both and must keep behaving exactly as it always did.
+          referencePrice = None
+          wrapperFactor = None
+          attestations = None
+
+    -- PROPOSE A WRAPPED-ASSET FIXING — the benchmark, and the factor that is the product.
+    -- ------------------------------------------------------------------------
+    -- For cBTC, cETH, or anything else that is a CLAIM on an asset priced elsewhere.
+    -- The proposer supplies the benchmark print (`referencePrice`, e.g. the CME CF
+    -- Bitcoin Reference Rate) and the par ratio the committee is being asked to
+    -- attest (`wrapperFactor`). The struck price is their product, computed here
+    -- rather than passed in, so the three numbers cannot disagree at birth.
+    --
+    -- Why this is a separate choice: on the plain path the members attest a price and
+    -- the wrapper question never gets asked, which is fine for a native asset and
+    -- wrong for a wrapped one. Here the question is unavoidable — an issuer that will
+    -- not attest par has to say so by refusing, and the refusal is legible because
+    -- the factor is a field rather than a component of a number nobody decomposed.
+    nonconsuming choice ProposeWrappedFixing : ContractId FixingProposal
+      with
+        proposer       : Party
+        instrumentId   : Text     -- the WRAPPED asset, e.g. "CBTC"
+        cashInstrument : Text
+        session        : Text
+        benchmarkPrice : Decimal  -- the underlying benchmark print, e.g. CF BRR
+        parFactor      : Decimal  -- 1.0 = attested at par; < 1.0 = attested at a discount
+        rationale      : Text     -- cite the benchmark and its strike, not an opinion
+      controller proposer
+      do
+        assertMsg "proposer must be a committee member" (proposer `elem` members)
+        assertMsg "session must be Open or Close" (session == "Open" || session == "Close")
+        assertMsg "reference price must be positive" (benchmarkPrice > 0.0)
+        -- A factor at or below zero is not a discount, it is a typo. The upper bound
+        -- is deliberately generous rather than 1.0: a wrapper CAN trade above par
+        -- (redemption queues cut both ways), and refusing to represent that would
+        -- force the committee to lie in the one field built to stop it lying.
+        assertMsg "wrapper factor must be greater than 0 and at most 2"
+          (parFactor > 0.0 && parFactor <= 2.0)
+        assertMsg "rationale must cite the benchmark used" (rationale /= "")
+        now <- getTime
+        create FixingProposal with
+          admin; members; threshold; auditor
+          proposer
+          instrumentId; cashInstrument; session; rationale
+          price = benchmarkPrice * parFactor
+          ratePerAnnum = 0.0; dayCount = "NONE"; accrualFrom = now
+          approvers = [proposer]
+          referencePrice = Some benchmarkPrice
+          wrapperFactor = Some parFactor
+          attestations = None
 
     -- PROPOSE AN ACCRUING FIXING — attest the INPUTS to a value that keeps moving.
     -- ------------------------------------------------------------------------
@@ -475,6 +578,9 @@ template OperatorCommittee
           instrumentId; cashInstrument; session; price; rationale
           ratePerAnnum; dayCount; accrualFrom
           approvers = [proposer]
+          referencePrice = None
+          wrapperFactor = None
+          attestations = None
 
 -- ---------------------------------------------------------------------------
 -- FixingProposal — an in-progress price attestation gathering member signatures.
@@ -503,6 +609,24 @@ template FixingProposal
     dayCount       : Text     -- "ACT/360" | "ACT/365F" | "NONE" (non-accruing)
     accrualFrom    : Time     -- the instant the mark applies from
     approvers      : [Party]  -- members who have attested so far (grows via Confirm)
+    -- ---------------------------------------------------------------------
+    -- APPENDED LAST AND ALL OPTIONAL — same upgrade rule as NavFixing's
+    -- restatement lineage: a non-Optional field, or one inserted mid-record,
+    -- fails NOT_VALID_UPGRADE_PACKAGE and orphans every proposal in flight.
+    -- `None` on all three reproduces the pre-existing behaviour exactly.
+    -- ---------------------------------------------------------------------
+    -- THE WRAPPER MARK — the judgement no benchmark administrator makes.
+    -- CF Benchmarks prices BTC. It has never priced cBTC. cBTC is a CLAIM on BTC
+    -- held under an attestor multisig, and its value is `BTC x f` where f is the
+    -- market's confidence that redemption works. f = 1.0 is not a fact, it is an
+    -- ASSERTION — and it is the assertion that has broken every wrapped asset that
+    -- ever broke. Recording it explicitly is what makes refusing to sign legible:
+    -- the issuer is not disputing the price of Bitcoin, it is declining to attest
+    -- par. Carrying `referencePrice` alongside separates the two cleanly: the input
+    -- nobody argues about, and the factor that is the entire product.
+    referencePrice : Optional Decimal      -- underlying benchmark, e.g. CME CF BRR
+    wrapperFactor  : Optional Decimal      -- attested price / referencePrice
+    attestations   : Optional [SignerCheck]  -- per-signer protocol evidence
   where
     -- The approvers gathered so far ALL sign — this is the accumulating multisig.
     signatory approvers
@@ -514,6 +638,14 @@ template FixingProposal
         && length (dedup approvers) == length approvers   -- an approver signs at most once
         && supportedDayCount dayCount
         && ratePerAnnum > -1.0
+        -- The wrapper mark reconciles, or is absent entirely (see wrapperConsistent).
+        && wrapperConsistent price referencePrice wrapperFactor
+        -- Only a committee member may appear in the protocol evidence, and only once.
+        && (case attestations of
+              None -> True
+              Some sigs ->
+                   all (\s -> s.member `elem` members) sigs
+                && length (dedup (map (.member) sigs)) == length sigs)
         -- A non-accruing mark must be non-accruing on BOTH fields, so "NONE" can
         -- never sit next to a live rate and quietly accrue on an assumed convention.
         && (dayCount /= "NONE" || ratePerAnnum == 0.0)
@@ -530,6 +662,39 @@ template FixingProposal
         assertMsg "confirmer must be a committee member" (member `elem` members)
         assertMsg "member has already attested this fix"  (member `notElem` approvers)
         create this with approvers = member :: approvers
+
+    -- CONFIRM WITH CHECKS — the same attestation, plus the protocol evidence.
+    -- A SEPARATE choice rather than extra fields on `Confirm`, so the plain path
+    -- keeps its exact signature and nothing already integrated has to change.
+    -- Behaviourally identical: one new signature per transaction. The difference is
+    -- that the resulting fixing can answer WHY each member signed, which is what an
+    -- oversight record is and what a signature count alone is not.
+    choice ConfirmWithChecks : ContractId FixingProposal
+      with
+        member : Party
+        check  : SignerCheck
+      controller member
+      do
+        assertMsg "confirmer must be a committee member" (member `elem` members)
+        assertMsg "member has already attested this fix"  (member `notElem` approvers)
+        assertMsg "the evidence must be signed by the confirming member"
+          (check.member == member)
+        assertMsg "a signer must name at least one condition it verified"
+          (not (null check.checksPassed))
+        -- A venue asserting a traded range must give a coherent one, and the mark
+        -- has to sit inside it. A venue whose own book never printed there is the
+        -- single most informative refusal in the protocol; letting it sign anyway
+        -- would discard exactly the signal the seat exists to produce.
+        case (check.observedLow, check.observedHigh) of
+          (Some lo, Some hi) -> do
+            assertMsg "observed range is inverted" (lo <= hi)
+            assertMsg "attested price sits outside the venue's observed range"
+              (price >= lo && price <= hi)
+          (None, None) -> pure ()
+          _ -> abort "an observed range needs both a low and a high"
+        create this with
+          approvers    = member :: approvers
+          attestations = Some (check :: optional [] identity attestations)
 
     -- FINALIZE — once the threshold of DISTINCT members has attested, promote the
     -- proposal to an official `NavFixing` signed by all of them. Controlled by the
@@ -556,6 +721,10 @@ template FixingProposal
           -- A first-time fixing supersedes nothing. Only RestatementProposal sets these.
           supersedes = None
           restatementReason = None
+          -- The wrapper mark and the protocol evidence carry through UNCHANGED from
+          -- the proposal the members confirmed, for the same reason the accrual
+          -- recipe does: nothing about what was attested is re-decided at finalise.
+          referencePrice; wrapperFactor; attestations
 
     -- WITHDRAW — the proposer abandons an un-finalised fix (e.g. a stale price).
     -- No official fix is produced.
@@ -616,6 +785,12 @@ template RestatementProposal
     accrualFrom     : Time
     publishTo       : [Party]   -- carried from the original so disclosure survives
     approvers       : [Party]
+    -- Appended last and Optional, same upgrade rule as everywhere else. Carried off
+    -- the fixing being corrected so a restatement republishes the WHOLE record, not a
+    -- price with its wrapper mark silently dropped.
+    referencePrice  : Optional Decimal
+    wrapperFactor   : Optional Decimal
+    attestations    : Optional [SignerCheck]
   where
     signatory approvers
     observer (auditor :: members)
@@ -683,6 +858,7 @@ template RestatementProposal
           finalizedAt = now
           supersedes = Some supersedes
           restatementReason = Some reason
+          referencePrice; wrapperFactor; attestations
 
     -- WITHDRAW — abandon a correction before it reaches quorum. The original fixing
     -- is untouched and remains the official number.
@@ -739,6 +915,15 @@ template NavFixing
     -- has never been corrected, which is the ordinary case.
     supersedes        : Optional (ContractId NavFixing)
     restatementReason : Optional Text
+    -- THE WRAPPER MARK AND THE OVERSIGHT RECORD, appended last under the same
+    -- upgrade rule as the lineage fields above. `referencePrice` is the input nobody
+    -- argues about (CME CF BRR, an index print); `wrapperFactor` is the par ratio the
+    -- committee actually decided; `attestations` is WHY each member signed, which is
+    -- the difference between a multisig and an oversight function. All `None` is a
+    -- fixing struck before the protocol existed, and reads exactly as it always did.
+    referencePrice : Optional Decimal
+    wrapperFactor  : Optional Decimal
+    attestations   : Optional [SignerCheck]
   where
     signatory attestors
     -- The auditor and the published-to venues observe the official fix; the fix is
@@ -752,6 +937,14 @@ template NavFixing
         && supportedDayCount dayCount
         && ratePerAnnum > -1.0
         && (dayCount /= "NONE" || ratePerAnnum == 0.0)
+        -- The published wrapper mark reconciles, or is absent (see wrapperConsistent).
+        && wrapperConsistent price referencePrice wrapperFactor
+        -- Evidence, where present, comes only from parties that actually signed.
+        && (case attestations of
+              None -> True
+              Some sigs ->
+                   all (\s -> s.member `elem` attestors) sigs
+                && length (dedup (map (.member) sigs)) == length sigs)
 
     -- DISCLOSE — extend the fix to another consuming venue/desk after the fact
     -- (e.g. a second auction that wants to print at the same official NAV). Any
