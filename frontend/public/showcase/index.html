@@ -1,0 +1,706 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="CrossDesk showcase — the wrapper mark no benchmark administrator produces, the K-of-N committee that signs it, what is built and verified, and what is honestly not done.">
+<title>The Fixing Nobody Strikes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,400;0,500;1,6..72,300&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+
+</head>
+<body>
+<style>
+/* ===========================================================================
+   CrossDesk showcase deck.
+   Palette inherited from the desk's own styles.css so the deck and the product
+   read as one thing: electric blue for action, and GOLD RESERVED — as the desk
+   reserves it — for one thing only, the officially struck price.
+   =========================================================================== */
+:root {
+  --ink:        #0A0B0F;
+  --surface:    #12141A;
+  --surface-2:  #171A21;
+  --border:     #1E212B;
+  --border-2:   #262A35;
+  --text:       #E8EAED;
+  --muted:      #8A909C;
+  --faint:      #5B616D;
+  --accent:     #4C82F7;
+  --accent-dim: #2E5FCB;
+  --gold:       #E6B450;
+  --good:       #3E9B72;
+  --bad:        #C65B5B;
+  --grid:       rgba(232,234,237,0.045);
+
+  --ui:      'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --display: 'Newsreader', Georgia, 'Times New Roman', serif;
+  --mono:    'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+/* The deck commits to one visual world — a dark trading-desk screen — so it does
+   not flip with the host theme. Every colour is therefore painted explicitly,
+   including the body ground, so it holds on either host. */
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--text);
+  font-family: var(--ui);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- deck chrome ------------------------------------------------------- */
+
+.deck { position: relative; }
+
+.slide {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 7vh 6vw 9vh;
+  border-bottom: 1px solid var(--border);
+  position: relative;
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 64px 64px;
+}
+
+.slide > * { position: relative; z-index: 1; }
+
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin: 0 0 22px;
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+}
+.eyebrow .num { color: var(--accent); }
+.eyebrow .rule { flex: 1; height: 1px; background: var(--border-2); }
+
+h1 {
+  font-family: var(--display);
+  font-weight: 300;
+  font-size: clamp(2.6rem, 7.4vw, 6rem);
+  line-height: 1.02;
+  letter-spacing: -0.022em;
+  margin: 0 0 26px;
+  text-wrap: balance;
+}
+
+h2 {
+  font-family: var(--display);
+  font-weight: 300;
+  font-size: clamp(1.9rem, 4.4vw, 3.4rem);
+  line-height: 1.1;
+  letter-spacing: -0.018em;
+  margin: 0 0 28px;
+  max-width: 20ch;
+  text-wrap: balance;
+}
+
+h3 {
+  font-family: var(--ui);
+  font-weight: 600;
+  font-size: 0.95rem;
+  letter-spacing: 0.01em;
+  margin: 0 0 10px;
+  color: var(--text);
+}
+
+p { margin: 0 0 18px; max-width: 62ch; color: var(--muted); }
+p.lead { font-size: clamp(1.05rem, 1.9vw, 1.35rem); color: var(--text); max-width: 46ch; }
+strong { color: var(--text); font-weight: 600; }
+em { font-style: italic; color: var(--text); }
+
+/* A pull-quote in the display italic — used only for lines meant to be said aloud. */
+.say {
+  font-family: var(--display);
+  font-style: italic;
+  font-weight: 300;
+  font-size: clamp(1.4rem, 3vw, 2.2rem);
+  line-height: 1.28;
+  color: var(--text);
+  max-width: 24ch;
+  border-left: 2px solid var(--accent);
+  padding-left: 26px;
+  margin: 0 0 26px;
+}
+
+/* ---- the struck price: the one place gold appears ---------------------- */
+
+.strike {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: var(--mono);
+}
+.strike .val {
+  font-size: clamp(2rem, 5vw, 3.4rem);
+  color: var(--gold);
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.strike .cap {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* ---- layout helpers ---------------------------------------------------- */
+
+.cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 26px;
+  margin-top: 8px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  border-radius: 10px;
+  padding: 22px 22px 20px;
+}
+.card p { font-size: 0.92rem; margin-bottom: 0; }
+.card .tag {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  display: block;
+  margin-bottom: 12px;
+}
+
+.tablewrap { overflow-x: auto; margin: 6px 0 20px; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  min-width: 560px;
+}
+th {
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+  font-weight: 400;
+  padding: 0 16px 10px 0;
+  border-bottom: 1px solid var(--border-2);
+}
+td {
+  padding: 13px 16px 13px 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  color: var(--muted);
+}
+td:first-child { color: var(--text); font-weight: 500; white-space: nowrap; }
+tr:last-child td { border-bottom: none; }
+
+code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  color: var(--accent);
+}
+
+.pill {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-2);
+  color: var(--muted);
+}
+.pill.ok   { color: var(--good); border-color: rgba(62,155,114,0.4); }
+.pill.no   { color: var(--bad);  border-color: rgba(198,91,91,0.4); }
+.pill.hold { color: var(--gold); border-color: rgba(230,180,80,0.4); }
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 6px 0 24px;
+}
+.metric { background: var(--surface); padding: 20px 20px 18px; }
+.metric .n {
+  font-family: var(--mono);
+  font-size: clamp(1.5rem, 3vw, 2.1rem);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.metric .n.ok { color: var(--good); }
+.metric .l {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-top: 7px;
+}
+
+/* ---- the waterfall diagram --------------------------------------------- */
+
+.flow { display: flex; flex-direction: column; gap: 0; margin: 4px 0 22px; max-width: 640px; }
+.flow-step {
+  display: grid;
+  grid-template-columns: 128px 1fr;
+  gap: 20px;
+  align-items: start;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+.flow-step:last-child { border-bottom: none; }
+.flow-step .who {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+  padding-top: 3px;
+}
+.flow-step .who.ext { color: var(--faint); }
+.flow-step .what { color: var(--muted); font-size: 0.92rem; }
+.flow-step .what b { color: var(--text); font-weight: 600; }
+
+/* ---- progress + nav ---------------------------------------------------- */
+
+.progress {
+  position: fixed; top: 0; left: 0; height: 2px;
+  background: var(--accent); width: 0;
+  z-index: 50; transition: width 160ms linear;
+}
+.counter {
+  position: fixed; bottom: 18px; right: 22px;
+  font-family: var(--mono); font-size: 11px;
+  letter-spacing: 0.1em; color: var(--faint);
+  z-index: 50; font-variant-numeric: tabular-nums;
+  background: rgba(10,11,15,0.82);
+  padding: 5px 10px; border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.hint {
+  position: fixed; bottom: 18px; left: 22px;
+  font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.1em; color: var(--faint);
+  z-index: 50; opacity: 0.8;
+  background: rgba(10,11,15,0.82);
+  padding: 5px 10px; border-radius: 999px;
+  border: 1px solid var(--border);
+}
+kbd {
+  font-family: var(--mono); font-size: 10px;
+  border: 1px solid var(--border-2); border-radius: 3px;
+  padding: 0 4px; color: var(--muted);
+}
+
+a { color: var(--accent); }
+a:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 3px;
+}
+
+.foot {
+  font-family: var(--mono); font-size: 11px;
+  color: var(--faint); letter-spacing: 0.06em;
+  margin-top: 30px;
+}
+
+/* ---- founder ----------------------------------------------------------- */
+.founder {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 14px 26px;
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  border-left: 2px solid var(--accent);
+  border-radius: 10px;
+  padding: 20px 24px;
+  margin-top: 30px;
+  max-width: 720px;
+}
+.founder .role {
+  font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--faint); display: block; margin-bottom: 3px;
+}
+.founder .name {
+  font-family: var(--display); font-size: 1.35rem;
+  color: var(--text); line-height: 1.2;
+}
+.founder .links { display: flex; flex-wrap: wrap; gap: 8px; }
+.founder .links a {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em;
+  text-decoration: none; color: var(--muted);
+  border: 1px solid var(--border-2); border-radius: 999px;
+  padding: 6px 13px;
+  transition: color 140ms ease, border-color 140ms ease;
+}
+.founder .links a:hover { color: var(--text); border-color: var(--accent); }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+
+/* ---- print → PDF ------------------------------------------------------- */
+@media print {
+  .progress, .counter, .hint { display: none !important; }
+  body { background: #fff; color: #14161c; font-size: 11pt; }
+  .slide {
+    min-height: auto; page-break-after: always; break-after: page;
+    padding: 12mm 14mm; border-bottom: none; background-image: none;
+  }
+  h1, h2, h3, .say, td:first-child, strong, em, .metric .n { color: #14161c; }
+  p, td, .flow-step .what { color: #43485a; }
+  .strike .val { color: #8a6212; }
+  .card, .metric, .founder { background: #f6f6f8; border-color: #d8dae2; }
+  .eyebrow, th, .metric .l, .flow-step .who, .founder .role { color: #6a7080; }
+  .founder .name { color: #14161c; }
+  .founder .links a { color: #43485a; border-color: #d8dae2; }
+}
+</style>
+
+<div class="progress" id="progress"></div>
+<div class="counter" id="counter">01 / 11</div>
+<div class="hint"><kbd>&larr;</kbd> <kbd>&rarr;</kbd> to move &middot; <kbd>Ctrl</kbd>+<kbd>P</kbd> for PDF</div>
+
+<main class="deck">
+
+<!-- 1 ------------------------------------------------------------------ -->
+<section class="slide">
+  <div class="eyebrow"><span class="num">CrossDesk</span> <span class="rule"></span> <span>Canton Network</span></div>
+  <h1>cBTC has fifteen<br>places to trade<br>and no fixing.</h1>
+  <p class="lead">CrossDesk strikes the official price for tokenised assets that no benchmark
+  administrator covers &mdash; and settles against it, atomically, on one ledger.</p>
+  <div class="foot">Best Financial Application &middot; HackCanton S2 &middot; August 2026</div>
+</section>
+
+<!-- 2 ------------------------------------------------------------------ -->
+<section class="slide">
+  <div class="eyebrow"><span class="num">01</span> <span class="rule"></span> <span>The gap</span></div>
+  <h2>Two industries. Neither one covers this.</h2>
+  <div class="cols">
+    <div class="card">
+      <span class="tag">Benchmark administrators</span>
+      <h3>CF Benchmarks &middot; S&amp;P &middot; ICE</h3>
+      <p>They price assets that trade on observable markets. CF Benchmarks prices
+      <strong>Bitcoin</strong>. It has never priced <strong>cBTC</strong>.</p>
+    </div>
+    <div class="card">
+      <span class="tag">Fund administrators</span>
+      <h3>BBH &middot; State Street</h3>
+      <p>They compute NAV from composition and prices. That NAV is not a licensable
+      benchmark, and nothing about it can be settled against on-chain.</p>
+    </div>
+    <div class="card" style="border-color:var(--accent-dim)">
+      <span class="tag" style="color:var(--gold)">The unfilled job</span>
+      <h3>A wrapped asset in a fund, on a ledger</h3>
+      <p>Nobody prices the wrapper. Nobody signs the composition. Nobody makes either
+      of them something a contract can settle against.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 3 ------------------------------------------------------------------ -->
+<section class="slide">
+  <div class="eyebrow"><span class="num">02</span> <span class="rule"></span> <span>The product</span></div>
+  <h2>One product, three layers.</h2>
+  <div class="flow">
+    <div class="flow-step">
+      <div class="who">Discover</div>
+      <div class="what"><b>Sealed auction.</b> The resting book is dark to other traders and to
+      the auditor, so the print cannot be front-run. The venue operator does see it.</div>
+    </div>
+    <div class="flow-step">
+      <div class="who">Attest</div>
+      <div class="what"><b>K-of-N committee.</b> No single party printed the number. The fixing's
+      signatory set <em>is</em> the attestor set &mdash; provable from the contract, not asserted by a server.</div>
+    </div>
+    <div class="flow-step">
+      <div class="who">Settle</div>
+      <div class="what"><b>Create &amp; redeem, in kind.</b> Shares mint against delivered
+      underlyings at the attested number, atomically. This is what proves the number is worth paying for.</div>
+    </div>
+  </div>
+  <p><strong>The product is the fixing.</strong> The comparable is CF Benchmarks or
+  S&amp;P Dow Jones &mdash; not an exchange.</p>
+</section>
+
+<!-- 4 ------------------------------------------------------------------ -->
+<section class="slide">
+  <div class="eyebrow"><span class="num">03</span> <span class="rule"></span> <span>The wrapper mark</span></div>
+  <h2>CME prices Bitcoin. We price a fund that holds a wrapper of Bitcoin.</h2>
+  <p>cBTC is a <strong>claim</strong> on BTC held under an attestor multisig. Its value is the
+  benchmark print multiplied by the market's confidence that redemption works.</p>
+  <p><strong>Marking it at par is not a fact. It is an assertion</strong> &mdash; and it is the
+  assertion that has broken every wrapped asset that ever broke.</p>
+  <div class="tablewrap">
+    <table>
+      <tr><th>Signed separately</th><th>What it is</th><th>Who argues about it</th></tr>
+      <tr><td><code>referencePrice</code></td><td>The benchmark print &mdash; CME CF BRR, 16:00 London</td><td>Nobody. It is free and public</td></tr>
+      <tr><td><code>wrapperFactor</code></td><td>The attested par ratio</td><td><strong>Everybody. This is the product</strong></td></tr>
+    </table>
+  </div>
+  <div class="strike">
+    <span class="val">100,000 &times; 0.998 = 99,800</span>
+    <span class="cap">struck on-ledger &middot; 20 bp below par &middot; the factor cannot disagree with the price</span>
+  </div>
+</section>
+
+<!-- 5 ------------------------------------------------------------------ -->
+<section class="slide">
+  <div class="eyebrow"><span class="num">04</span> <span class="rule"></span> <span>The committee</span></div>
+  <h2>Three seats, composed to disagree.</h2>
+  <p>A committee of issuers is an expensive way for issuers to bless their own valuation.
+  The number is worth something because the signers <strong>want different answers</strong>.</p>
+  <div class="tablewrap">
+    <table>
+      <tr><th>Seat</th><th>What only they can see</th><th>What they want</th></tr>
+      <tr>
+        <td>Issuer<br><span class="pill">BitSafe &middot; onRails</span></td>
+        <td>Whether the wrapper can actually be redeemed right now &mdash; attestor quorum, reserves, the redemption queue</td>
+        <td>The wrapper marked <strong>at par</strong></td>
+      </tr>
+      <tr>
+        <td>Lender<br><span class="pill">ACME &middot; Alpend &middot; Haven &middot; Verity</span></td>
+        <td>Whether they will carry this number on their <strong>own book</strong></td>
+        <td>The mark <strong>conservative</strong> &mdash; they are under-collateralised if it is too high</td>
+      </tr>
+      <tr>
+        <td>Venue<br><span class="pill">Cantex &middot; Cantor8</span></td>
+        <td>The transaction data &mdash; the only observed prints for the wrapped asset</td>
+        <td>The mark <strong>where it traded</strong></td>
+      </tr>
+    </table>
+  </div>
+  <p>No single interest holds <em>K</em>. Signers are <strong>never paid</strong> &mdash;
+  attestation is a by-product of a position they already hold.</p>
+</section>
+
+<!-- 6 ------------------------------------------------------------------ -->
+<section class="slide">
+  <div class="eyebrow"><span class="num">05</span> <span class="rule"></span> <span>The objection</span></div>
+  <h2>&ldquo;You seated people with positions and called it oversight. That is LIBOR.&rdquo;</h2>
+  <p>It is the best argument against this design, and it gets answered rather than dodged.</p>
+  <div class="cols">
+    <div class="card">
+      <span class="tag">Difference 01</span>
+      <h3>The panel is built to disagree</h3>
+      <p>LIBOR's submitters shared a direction of interest. Here the issuer, the lender and
+      the venue each want a different answer, and no single interest holds the threshold.</p>
+    </div>
+    <div class="card">
+      <span class="tag">Difference 02</span>
+      <h3>Submissions are verifiable</h3>
+      <p>A LIBOR submission was an unfalsifiable estimate. Every condition here is a fact
+      with a record behind it &mdash; and the venue's is checked by the ledger itself.</p>
+    </div>
+    <div class="card">
+      <span class="tag">Difference 03</span>
+      <h3>Every signature is permanent</h3>
+      <p>LIBOR ran on phone calls. Who signed which fixing, under which protocol version,
+      having verified which conditions, is on the ledger forever.</p>
+    </div>
+  </div>
+  <p><strong>What honesty requires conceding:</strong> this is a <em>mitigated</em> conflict,
+  not an absent one. A panel of disinterested referees would never be assembled or funded.</p>
+</section>
+
+<!-- 7 ------------------------------------------------------------------ -->
+<section class="slide">
+  <div class="eyebrow"><span class="num">06</span> <span class="rule"></span> <span>The signer protocol</span></div>
+  <h2>Nobody is asked whether they like the price.</h2>
+  <p class="lead">Each signer asserts <strong>a fact only they can see.</strong></p>
+  <p>An unpaid committee asked for a daily act of judgement starts clicking yes within a
+  fortnight. So the question is narrowed until it is nearly free to answer &mdash; which means
+  signing can be automated, and a refusal names <em>what broke</em> rather than expressing disagreement.</p>
+  <div class="tablewrap">
+    <table>
+      <tr><th>Seat</th><th>Named conditions it verifies</th><th>Enforced by</th></tr>
+      <tr><td>Issuer</td><td><code>attestor-quorum</code> <code>reserves-current</code> <code>reserves-cover-supply</code> <code>redemption-queue-clear</code></td><td><span class="pill">API &middot; recorded</span></td></tr>
+      <tr><td>Lender</td><td><code>independent-mark-within-tolerance</code> <code>liquidations-consistent</code> <code>book-acceptance</code></td><td><span class="pill">API &middot; recorded</span></td></tr>
+      <tr><td>Venue</td><td><code>traded-range</code> <code>spread-within-tolerance</code> <code>sufficient-volume</code></td><td><span class="pill ok">Ledger &middot; enforced</span></td></tr>
+    </table>
+  </div>
+  <p><strong>A venue cannot attest a price its own book never printed.</strong> That refusal
+  is rejected on-chain &mdash; the one seat holding real transaction data cannot rubber-stamp.</p>
+</section>
+
+<!-- 8 ------------------------------------------------------------------ -->
+<section class="slide">
+  <div class="eyebrow"><span class="num">07</span> <span class="rule"></span> <span>Built &amp; verified</span></div>
+  <h2>Running, not rendered.</h2>
+  <div class="metrics">
+    <div class="metric"><div class="n ok">125</div><div class="l">Daml scripts green</div></div>
+    <div class="metric"><div class="n ok">0</div><div class="l">Failures</div></div>
+    <div class="metric"><div class="n">4.16</div><div class="l">Real cBTC claimed &middot; CIP-56</div></div>
+    <div class="metric"><div class="n">K-of-N</div><div class="l">Provable from the contract</div></div>
+  </div>
+  <div class="tablewrap">
+    <table>
+      <tr><th>Verified live against a Canton sandbox</th><th>Result</th></tr>
+      <tr><td>Wrapped fixing struck through the committee</td><td><span class="pill ok">99,800 at 20 bp below par</span></td></tr>
+      <tr><td>Lender claiming the issuer's condition</td><td><span class="pill no">Refused &middot; HTTP 400</span></td></tr>
+      <tr><td>Venue attesting outside its own traded range</td><td><span class="pill no">Refused by the ledger &middot; 409</span></td></tr>
+      <tr><td>Cessation served 30 days out</td><td><span class="pill no">Refused &middot; 60 days enforced on-chain</span></td></tr>
+      <tr><td>Published series with corrections resolved</td><td><span class="pill ok">Tier, factor, age of strike</span></td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- 9 ------------------------------------------------------------------ -->
+<section class="slide">
+  <div class="eyebrow"><span class="num">08</span> <span class="rule"></span> <span>The money</span></div>
+  <h2>Which of these two is an attested fixing?</h2>
+  <div class="cols">
+    <div class="card">
+      <span class="tag">Lead with the one that hurts</span>
+      <div class="strike"><span class="val" style="color:var(--text)">0.325 bp</span>
+      <span class="cap">What BBH discloses for calculating a NAV</span></div>
+    </div>
+    <div class="card" style="border-color:rgba(230,180,80,0.35)">
+      <span class="tag" style="color:var(--gold)">The whole business in one line</span>
+      <div class="strike"><span class="val">3 bp + $600k</span>
+      <span class="cap">What the SPY trust pays S&amp;P Dow Jones for an official price</span></div>
+    </div>
+  </div>
+  <p>I think it is the second. I will know when someone pays me.</p>
+  <div class="tablewrap">
+    <table>
+      <tr><th>Who</th><th>What they buy</th></tr>
+      <tr><td>Fund / ETP issuer</td><td><strong>The licence.</strong> This is the customer</td></tr>
+      <tr><td>AP / market maker</td><td>Per-order creation and redemption fees</td></tr>
+      <tr><td>Lender</td><td>A free committee seat &mdash; and the reason the number matters</td></tr>
+      <tr><td>Asset issuer</td><td><strong>Nothing.</strong> Distribution and a seat. Never a payer</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- 10 ----------------------------------------------------------------- -->
+<section class="slide">
+  <div class="eyebrow"><span class="num">09</span> <span class="rule"></span> <span>Stated plainly</span></div>
+  <h2>What is not done.</h2>
+  <p>A methodology that hides its gaps is not a methodology. All of this is published in
+  <code>FIXING_METHODOLOGY.md</code> &sect;12 and <code>SIGNER_PROTOCOL.md</code> &sect;7.</p>
+  <div class="tablewrap">
+    <table>
+      <tr><th>Limit</th><th>Where it stands</th></tr>
+      <tr><td>Nobody uses it yet</td><td>No fixing has been published and no committee convened. A fixing needs participants &mdash; that is the honest chicken-and-egg</td></tr>
+      <tr><td>Striking is a human act</td><td><span class="pill hold">By design</span> The schedule reports a missed strike rather than inventing a number nobody attested</td></tr>
+      <tr><td>Issuer and lender claims</td><td>Recorded, <strong>not verified.</strong> Only the venue's range is checked against reality</td></tr>
+      <tr><td>No holiday calendar</td><td>Business days are weekdays; a public holiday reads as a missed strike</td></tr>
+      <tr><td>Not a regulated administrator</td><td>Benchmark administration is licensed in the EU and UK. Recognition must be resolved first</td></tr>
+      <tr><td>A participant node</td><td><span class="pill no">The standing blocker</span> The desk runs from a local sandbox today</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- 11 ----------------------------------------------------------------- -->
+<section class="slide">
+  <div class="eyebrow"><span class="num">10</span> <span class="rule"></span> <span>The ask</span></div>
+  <h2>Four things, in order of speed to cash.</h2>
+  <div class="flow">
+    <div class="flow-step">
+      <div class="who">01</div>
+      <div class="what"><b>A paid engagement.</b> Decentralization Services builds Canton apps
+      for institutions. Weeks, not quarters.</div>
+    </div>
+    <div class="flow-step">
+      <div class="who">02</div>
+      <div class="what"><b>An introduction to one lender.</b> ACME Lend, Alpend, Haven Digital,
+      Verity. Their liquidation engines consume a mark they did not produce and cannot defend.
+      <em>This is the real customer.</em></div>
+    </div>
+    <div class="flow-step">
+      <div class="who">03</div>
+      <div class="what"><b>A participant node</b>, or node-operator matching. The standing
+      blocker on everything.</div>
+    </div>
+    <div class="flow-step">
+      <div class="who ext">04</div>
+      <div class="what"><b>Co-marketing.</b> Given willingly &mdash; it costs nothing and it buys
+      the three above.</div>
+    </div>
+  </div>
+  <div class="say">&ldquo;You have fifteen venues where cBTC trades, and nothing that settles a
+  contract against it.&rdquo;</div>
+
+  <div class="founder">
+    <div>
+      <span class="role">Founder</span>
+      <div class="name">Sebastian Borjas</div>
+    </div>
+    <div class="links">
+      <a href="mailto:s.borjas@lucilla.ca">s.borjas@lucilla.ca</a>
+      <a href="https://t.me/sb_lucilla" rel="noopener">Telegram &commat;sb_lucilla</a>
+      <a href="https://www.linkedin.com/in/sborjasto/" rel="noopener">LinkedIn</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<script>
+(function () {
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var counter = document.getElementById('counter');
+  var progress = document.getElementById('progress');
+  var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+
+  function currentIndex() {
+    var best = 0, bestDist = Infinity;
+    for (var i = 0; i < slides.length; i++) {
+      var d = Math.abs(slides[i].getBoundingClientRect().top);
+      if (d < bestDist) { bestDist = d; best = i; }
+    }
+    return best;
+  }
+
+  function render() {
+    var i = currentIndex();
+    counter.textContent = pad(i + 1) + ' / ' + pad(slides.length);
+    var max = document.body.scrollHeight - window.innerHeight;
+    progress.style.width = (max > 0 ? (window.scrollY / max) * 100 : 0) + '%';
+  }
+
+  function go(delta) {
+    var next = Math.min(slides.length - 1, Math.max(0, currentIndex() + delta));
+    slides[next].scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  document.addEventListener('keydown', function (e) {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') { e.preventDefault(); go(1); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); go(-1); }
+    else if (e.key === 'Home') { e.preventDefault(); slides[0].scrollIntoView({ behavior: 'smooth' }); }
+    else if (e.key === 'End') { e.preventDefault(); slides[slides.length - 1].scrollIntoView({ behavior: 'smooth' }); }
+  });
+
+  window.addEventListener('scroll', render, { passive: true });
+  window.addEventListener('resize', render);
+  render();
+})();
+</script>
+
+</body>
+</html>

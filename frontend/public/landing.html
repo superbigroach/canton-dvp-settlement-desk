@@ -5,111 +5,218 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>CrossDesk — price discovery, attested NAV and settlement for tokenised funds</title>
 <meta name="description" content="One ledger for the three jobs a tokenised fund needs on day one: a price, an official NAV nobody can accuse the issuer of setting, and in-kind creation and redemption that settles against it. Built on Canton.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,400;0,500;1,6..72,300&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
 <style>
-/* Marketing front door for the desk. Same palette as the app (frontend/src/styles.css)
-   so a visitor who clicks through does not feel handed to a different product. */
-:root{
-  --bg:#0A0B0F; --surface:#12141A; --surface2:#171A21;
-  --border:#1E212B; --border2:#262A35;
-  --text:#E8EAED; --muted:#8A909C; --faint:#5B616D;
-  --accent:#4C82F7; --accent-dk:#2E5FCB; --gold:#E6B450; --buy:#3E9B72; --sell:#C65B5B;
-  --ui:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
-  --mono:ui-monospace,'SF Mono','Cascadia Code',Menlo,monospace;
-  --max:1080px;
-}
-*{box-sizing:border-box;margin:0;padding:0}
-html{scroll-behavior:smooth}
-body{background:var(--bg);color:var(--text);font-family:var(--ui);line-height:1.6;
-     -webkit-font-smoothing:antialiased}
-.wrap{max-width:var(--max);margin:0 auto;padding:0 24px}
-section{padding:84px 0;border-top:1px solid var(--border)}
-section:first-of-type{border-top:0}
-h1{font-size:clamp(38px,6vw,68px);line-height:1.04;letter-spacing:-.03em;font-weight:700}
-h2{font-size:clamp(26px,3.4vw,38px);line-height:1.15;letter-spacing:-.02em;font-weight:650;margin-bottom:14px}
-h3{font-size:18px;font-weight:650;margin-bottom:6px}
-p{color:var(--muted);font-size:16.5px}
-.lede{font-size:clamp(18px,2.2vw,23px);color:var(--muted);margin-top:20px;max-width:44ch;line-height:1.5}
-.kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.2em;text-transform:uppercase;
-        color:var(--faint);margin-bottom:18px}
-strong{color:var(--text);font-weight:650}
+/* ===========================================================================
+   CrossDesk — marketing front door.
 
-/* header */
-header{position:sticky;top:0;z-index:20;background:rgba(10,11,15,.86);
-       backdrop-filter:blur(10px);border-bottom:1px solid var(--border)}
-header .wrap{display:flex;align-items:center;justify-content:space-between;height:62px}
-.logo{font-weight:700;letter-spacing:-.02em;font-size:18px}
+   Same design system as the showcase deck and the same palette as the app
+   (frontend/src/styles.css), so a visitor moving between the site, the deck and
+   the desk never feels handed to a different product. GOLD IS RESERVED, exactly
+   as the app reserves it, for one thing: an officially struck price.
+
+   The page commits to a single dark visual world rather than following the host
+   theme, so every colour is painted explicitly and nothing is inherited.
+   =========================================================================== */
+:root{
+  --ink:#0A0B0F; --surface:#12141A; --surface-2:#171A21;
+  --border:#1E212B; --border-2:#262A35;
+  --text:#E8EAED; --muted:#8A909C; --faint:#5B616D;
+  --accent:#4C82F7; --accent-dim:#2E5FCB;
+  --gold:#E6B450;
+  --good:#3E9B72; --bad:#C65B5B;
+  --grid:rgba(232,234,237,0.045);
+
+  --ui:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --display:'Newsreader',Georgia,'Times New Roman',serif;
+  --mono:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+
+  --maxw:1140px;
+}
+
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+
+body{
+  margin:0;background:var(--ink);color:var(--text);
+  font-family:var(--ui);font-size:16px;line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 6vw}
+
+/* ---- header ------------------------------------------------------------ */
+header{
+  position:sticky;top:0;z-index:60;
+  background:rgba(10,11,15,0.86);
+  backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--border);
+}
+header .wrap{display:flex;align-items:center;justify-content:space-between;gap:20px;height:62px}
+.logo{
+  font-family:var(--display);font-size:22px;font-weight:400;
+  letter-spacing:-0.01em;color:var(--text);white-space:nowrap;
+}
 .logo span{color:var(--accent)}
-nav{display:flex;gap:22px;align-items:center}
-nav a{color:var(--muted);text-decoration:none;font-size:14px}
+nav{display:flex;align-items:center;gap:22px;flex-wrap:wrap}
+nav a{
+  font-family:var(--mono);font-size:11px;letter-spacing:0.1em;text-transform:uppercase;
+  color:var(--muted);text-decoration:none;
+}
 nav a:hover{color:var(--text)}
 
-/* buttons */
-.btn{display:inline-block;padding:13px 22px;border-radius:9px;font-size:15px;font-weight:600;
-     text-decoration:none;border:1px solid var(--accent-dk);color:#fff;
-     background:linear-gradient(180deg,var(--accent),var(--accent-dk));
-     box-shadow:0 6px 18px rgba(76,130,247,.28);transition:filter .15s,box-shadow .15s}
-.btn:hover{filter:brightness(1.08);box-shadow:0 8px 24px rgba(76,130,247,.4)}
-.btn.ghost{background:none;border-color:var(--border2);color:var(--muted);box-shadow:none}
-.btn.ghost:hover{color:var(--text);border-color:var(--faint)}
-.cta-row{display:flex;gap:12px;flex-wrap:wrap;margin-top:34px}
-.note{font-family:var(--mono);font-size:12px;color:var(--faint);margin-top:16px}
+/* ---- sections ---------------------------------------------------------- */
+section{
+  padding:11vh 0;border-bottom:1px solid var(--border);
+  background-image:
+    linear-gradient(var(--grid) 1px,transparent 1px),
+    linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:64px 64px;
+}
+section.hero{padding:15vh 0 13vh;border-bottom:1px solid var(--border)}
 
-/* hero */
-.hero{padding:96px 0 76px}
-.pill{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;
-      color:var(--buy);background:rgba(62,155,114,.1);border:1px solid rgba(62,155,114,.35);
-      border-radius:999px;padding:6px 13px;margin-bottom:26px}
-.dot{width:7px;height:7px;border-radius:50%;background:var(--buy)}
+.kicker{
+  font-family:var(--mono);font-size:11px;letter-spacing:0.16em;text-transform:uppercase;
+  color:var(--faint);margin:0 0 22px;display:flex;align-items:baseline;gap:14px;
+}
+.kicker .rule{flex:1;height:1px;background:var(--border-2)}
 
-/* grids */
-.grid{display:grid;gap:18px;margin-top:34px}
-.g3{grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
-.g4{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
-.card{background:var(--surface);border:1px solid var(--border2);border-radius:14px;padding:24px}
-.card.accent{border-left:3px solid var(--accent)}
-.card.buy{border-left:3px solid var(--buy)}
-.card p{font-size:15px}
+h1{
+  font-family:var(--display);font-weight:300;
+  font-size:clamp(2.4rem,6vw,4.8rem);line-height:1.04;letter-spacing:-0.022em;
+  margin:0 0 26px;text-wrap:balance;
+}
+h2{
+  font-family:var(--display);font-weight:300;
+  font-size:clamp(1.8rem,4vw,3rem);line-height:1.12;letter-spacing:-0.018em;
+  margin:0 0 26px;max-width:22ch;text-wrap:balance;
+}
+h3{font-family:var(--ui);font-weight:600;font-size:0.95rem;margin:0 0 10px;color:var(--text)}
 
-/* the privacy proof */
-.eyes{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px;margin-top:28px}
-.eye{background:var(--surface);border:1px solid var(--border2);border-radius:14px;padding:22px 14px;text-align:center}
-.eye .who{font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
-.eye .n{font-size:44px;font-weight:700;letter-spacing:-.03em;margin:6px 0 2px}
-.eye .sub{font-size:12.5px;color:var(--faint)}
-.eye.zero{border-color:rgba(62,155,114,.55);background:rgba(62,155,114,.07)}
-.eye.zero .n{color:var(--buy)}
+p{margin:0 0 18px;max-width:64ch;color:var(--muted)}
+.lede{font-size:clamp(1.02rem,1.7vw,1.24rem);color:var(--text);max-width:56ch}
+strong{color:var(--text);font-weight:600}
+em{font-style:italic;color:var(--text)}
+a{color:var(--accent)}
+a.inline{color:var(--accent)}
+a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+
+.punch{
+  font-family:var(--display);font-style:italic;font-weight:300;
+  font-size:clamp(1.25rem,2.6vw,1.9rem);line-height:1.3;color:var(--text);
+  max-width:30ch;border-left:2px solid var(--accent);padding-left:24px;margin:32px 0 24px;
+}
+.note,.src{font-size:0.85rem;color:var(--faint);max-width:70ch}
+.src{font-family:var(--mono);font-size:0.76rem;letter-spacing:0.02em;line-height:1.7}
+
+/* ---- pills & buttons --------------------------------------------------- */
+.pill{
+  display:inline-flex;align-items:center;gap:9px;
+  font-family:var(--mono);font-size:11px;letter-spacing:0.1em;
+  border:1px solid var(--border-2);border-radius:999px;padding:6px 14px;
+  color:var(--muted);margin-bottom:28px;
+}
+.pill .dot{width:6px;height:6px;border-radius:50%;background:var(--good);flex:none}
+
+.cta-row{display:flex;gap:14px;flex-wrap:wrap;margin:30px 0 22px}
+.btn{
+  display:inline-block;text-decoration:none;
+  font-family:var(--ui);font-size:14px;font-weight:500;
+  background:var(--accent);color:#fff;border:1px solid var(--accent);
+  padding:12px 22px;border-radius:8px;transition:background 140ms ease;
+}
+.btn:hover{background:var(--accent-dim)}
+.btn.ghost{background:transparent;color:var(--text);border-color:var(--border-2)}
+.btn.ghost:hover{background:var(--surface-2)}
+header .btn{padding:8px 15px;font-size:13px}
+
+/* ---- cards & grids ----------------------------------------------------- */
+.grid{display:grid;gap:22px;margin-top:8px}
+.g3{grid-template-columns:repeat(auto-fit,minmax(255px,1fr))}
+.g4{grid-template-columns:repeat(auto-fit,minmax(215px,1fr))}
+
+.card{
+  background:var(--surface);border:1px solid var(--border-2);
+  border-radius:10px;padding:22px 22px 20px;
+}
+.card p{font-size:0.9rem;margin-bottom:0}
+.card.buy{border-color:rgba(76,130,247,0.34)}
+.card.accent{border-color:var(--border-2);border-left:2px solid var(--accent)}
+
+/* ---- the three mechanisms: a typed sequence, so it is numbered ---------- */
+.steps{display:flex;flex-direction:column;max-width:720px;margin-top:6px}
+.step{
+  display:grid;grid-template-columns:56px 1fr;gap:22px;align-items:start;
+  padding:20px 0;border-bottom:1px solid var(--border);counter-increment:stepc;
+}
+.steps{counter-reset:stepc}
+.step:last-child{border-bottom:none}
+.step::before{
+  content:counter(stepc,decimal-leading-zero);
+  font-family:var(--mono);font-size:12px;letter-spacing:0.08em;
+  color:var(--accent);padding-top:4px;
+}
+.step p{font-size:0.92rem;margin-bottom:0}
+
+/* ---- who sees what ----------------------------------------------------- */
+.eyes{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;
+  background:var(--border);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin:8px 0 6px}
+.eye{background:var(--surface);padding:20px}
+.eye .who{font-family:var(--mono);font-size:10px;letter-spacing:0.13em;text-transform:uppercase;color:var(--faint)}
+.eye .n{font-family:var(--mono);font-size:2.2rem;line-height:1.2;color:var(--text);font-variant-numeric:tabular-nums;margin-top:6px}
+.eye .sub{font-size:0.78rem;color:var(--muted)}
 .eye.own .n{color:var(--accent)}
+.eye.zero .n{color:var(--good)}
 
-/* the two numbers */
-.vs{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:30px}
-@media(max-width:640px){.vs{grid-template-columns:1fr}}
-.vs .card .lab{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;
-               text-transform:uppercase;color:var(--muted)}
-.vs .fig{font-size:44px;font-weight:700;letter-spacing:-.03em;margin:10px 0 4px}
-.vs .fig small{font-size:17px;font-weight:600}
-.vs .lo{border-color:rgba(198,91,91,.4)} .vs .lo .fig{color:var(--sell)}
-.vs .hi{border-color:rgba(230,180,80,.45)} .vs .hi .fig{color:var(--gold)}
-.punch{margin-top:24px;font-size:clamp(19px,2.4vw,26px);font-weight:650;color:var(--text);
-       letter-spacing:-.015em}
-.src{font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-top:14px}
+/* ---- pricing: the one place gold appears ------------------------------- */
+.vs{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:22px;margin-top:6px}
+.vs .lab{font-family:var(--mono);font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:var(--faint);margin-bottom:12px}
+.vs .fig{font-family:var(--mono);font-size:clamp(2rem,4.4vw,3rem);letter-spacing:-0.02em;
+  font-variant-numeric:tabular-nums;line-height:1.1;margin-bottom:14px}
+.vs .lo .fig{color:var(--text)}
+.vs .hi .fig{color:var(--gold)}
+.vs .fig small{font-size:0.36em;letter-spacing:0.02em;color:var(--faint)}
+.vs .hi{border-color:rgba(230,180,80,0.35)}
 
-/* steps */
-.steps{counter-reset:s;display:grid;gap:14px;margin-top:30px}
-.step{display:flex;gap:16px;background:var(--surface);border:1px solid var(--border2);
-      border-radius:12px;padding:20px 22px}
-.step::before{counter-increment:s;content:counter(s);font-family:var(--mono);font-size:13px;
-              color:var(--accent);border:1px solid var(--border2);border-radius:8px;
-              min-width:32px;height:32px;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+/* ---- tables ------------------------------------------------------------ */
+.tablewrap{overflow-x:auto;margin:24px 0 14px}
+table{width:100%;border-collapse:collapse;font-size:0.9rem;min-width:560px}
+th{text-align:left;font-family:var(--mono);font-size:10px;letter-spacing:0.14em;text-transform:uppercase;
+  color:var(--faint);font-weight:400;padding:0 16px 10px 0;border-bottom:1px solid var(--border-2)}
+td{padding:14px 16px 14px 0;border-bottom:1px solid var(--border);vertical-align:top;color:var(--muted)}
+tr:last-child td{border-bottom:none}
+td.mono{font-family:var(--mono);font-size:0.82rem;color:var(--text);white-space:nowrap}
 
-table{width:100%;border-collapse:collapse;margin-top:26px;font-size:15px}
-th,td{text-align:left;padding:12px 10px;border-bottom:1px solid var(--border)}
-th{font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:600}
-td.mono{font-family:var(--mono);font-size:13.5px}
+/* ---- founder ----------------------------------------------------------- */
+.founder{
+  display:flex;flex-wrap:wrap;align-items:center;gap:14px 26px;
+  background:var(--surface);border:1px solid var(--border-2);
+  border-left:2px solid var(--accent);
+  border-radius:10px;padding:20px 24px;margin-top:34px;max-width:760px;
+}
+.founder .name{font-family:var(--display);font-size:1.3rem;color:var(--text);line-height:1.2}
+.founder .role{font-family:var(--mono);font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:var(--faint);display:block;margin-bottom:3px}
+.founder .links{display:flex;flex-wrap:wrap;gap:8px}
+.founder .links a{
+  font-family:var(--mono);font-size:11px;letter-spacing:0.06em;text-decoration:none;
+  border:1px solid var(--border-2);border-radius:999px;padding:6px 13px;color:var(--muted);
+  transition:border-color 140ms ease,color 140ms ease;
+}
+.founder .links a:hover{color:var(--text);border-color:var(--accent)}
 
-footer{border-top:1px solid var(--border);padding:44px 0 60px}
-footer p{font-size:14px}
-a.inline{color:var(--accent);text-decoration:none}
-a.inline:hover{text-decoration:underline}
+/* ---- footer ------------------------------------------------------------ */
+footer{padding:8vh 0 10vh}
+footer p{max-width:72ch}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+}
+@media (max-width:640px){
+  nav a:not(.btn){display:none}
+  .step{grid-template-columns:40px 1fr;gap:14px}
+}
 </style>
 </head>
 <body>
@@ -122,8 +229,9 @@ a.inline:hover{text-decoration:underline}
       <a href="#how">How it works</a>
       <a href="#markets">Which assets</a>
       <a href="#pricing">Pricing</a>
+      <a href="/showcase/">Showcase</a>
       <a href="/pitch/">Pitch deck</a>
-      <a href="/pitch/" class="btn" style="padding:9px 16px;font-size:14px">Watch the demo</a>
+      <a href="/pitch/" class="btn">Watch the demo</a>
     </nav>
   </div>
 </header>
@@ -154,9 +262,9 @@ a.inline:hover{text-decoration:underline}
 <!-- ---------------- problem ---------------- -->
 <section id="problem">
   <div class="wrap">
-    <div class="kicker">The problem</div>
+    <div class="kicker"><span>The problem</span> <span class="rule"></span></div>
     <h2>Three companies. Three fees. One number.</h2>
-    <p style="max-width:60ch">To launch a tokenised fund you hire an <strong>exchange</strong> to
+    <p>To launch a tokenised fund you hire an <strong>exchange</strong> to
       discover a price, an <strong>administrator</strong> to strike the NAV, and a
       <strong>custodian</strong> to settle the shares. Each hands a number to the next — and the
       gaps between them are where the money leaks.</p>
@@ -186,7 +294,7 @@ a.inline:hover{text-decoration:underline}
 <!-- ---------------- how ---------------- -->
 <section id="how">
   <div class="wrap">
-    <div class="kicker">How it works</div>
+    <div class="kicker"><span>How it works</span> <span class="rule"></span></div>
     <h2>One venue. Three mechanisms.</h2>
     <div class="steps">
       <div class="step"><div>
@@ -212,9 +320,9 @@ a.inline:hover{text-decoration:underline}
 <!-- ---------------- privacy ---------------- -->
 <section id="privacy">
   <div class="wrap">
-    <div class="kicker">The part that can't be copied</div>
+    <div class="kicker"><span>The part that can't be copied</span> <span class="rule"></span></div>
     <h2>Dark pre-trade. Lit post-trade.</h2>
-    <p style="max-width:60ch">On Canton a contract is visible only to its signatories. A resting
+    <p>On Canton a contract is visible only to its signatories. A resting
       order is signed by the venue and the trader and observed by <strong>nobody</strong> — so a
       sealed book isn't a feature we bolted on, it's the default. One order book, four resting
       orders, four parties looking at it:</p>
@@ -233,9 +341,9 @@ a.inline:hover{text-decoration:underline}
 <!-- ---------------- markets ---------------- -->
 <section id="markets">
   <div class="wrap">
-    <div class="kicker">Which assets need this</div>
+    <div class="kicker"><span>Which assets need this</span> <span class="rule"></span></div>
     <h2>If somebody already publishes the number, walk away.</h2>
-    <p style="max-width:70ch">Most assets already have an official price and do not need a new one.
+    <p>Most assets already have an official price and do not need a new one.
       Apple has a closing auction. Bitcoin has the CME CF reference rate. Gold has the LBMA
       auction. Those are solved, and solved well. The gap is narrower and more permanent than
       that: <strong>every leg of a bespoke basket has an official price, and the basket itself
@@ -284,7 +392,7 @@ a.inline:hover{text-decoration:underline}
 <!-- ---------------- pricing ---------------- -->
 <section id="pricing">
   <div class="wrap">
-    <div class="kicker">Why this is a business</div>
+    <div class="kicker"><span>Why this is a business</span> <span class="rule"></span></div>
     <h2>Same computation. Two price tags.</h2>
     <div class="vs">
       <div class="card lo">
@@ -303,14 +411,16 @@ a.inline:hover{text-decoration:underline}
     <p class="punch">One is accounting. One is a benchmark. Ten to fifteen times the money.</p>
     <p class="src">0.325 bps: BBH Trust, Form N-CSR · 3 bps + $600,000: SPDR S&amp;P 500 ETF Trust, Form N-30D</p>
 
-    <table>
-      <thead><tr><th>Line</th><th>Who pays</th><th>Price</th></tr></thead>
-      <tbody>
-        <tr><td><strong>NAV-as-a-service</strong> — a private, auditable daily strike</td><td>the issuer</td><td class="mono">$50–150k/yr flat → 1–3 bps at scale</td></tr>
-        <tr><td><strong>Creation &amp; redemption</strong> — a flat fee per order</td><td>the authorised participant</td><td class="mono">flat, per creation unit</td></tr>
-        <tr><td><strong>Platform licence</strong> — run the venue for your own members</td><td>market infrastructure</td><td class="mono">annual licence</td></tr>
-      </tbody>
-    </table>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Line</th><th>Who pays</th><th>Price</th></tr></thead>
+        <tbody>
+          <tr><td><strong>NAV-as-a-service</strong> — a private, auditable daily strike</td><td>the issuer</td><td class="mono">$50–150k/yr flat → 1–3 bps at scale</td></tr>
+          <tr><td><strong>Creation &amp; redemption</strong> — a flat fee per order</td><td>the authorised participant</td><td class="mono">flat, per creation unit</td></tr>
+          <tr><td><strong>Platform licence</strong> — run the venue for your own members</td><td>market infrastructure</td><td class="mono">annual licence</td></tr>
+        </tbody>
+      </table>
+    </div>
     <p class="src">Your administrator loses nothing. It keeps the mandate and the fee — and becomes one of the signers.</p>
   </div>
 </section>
@@ -318,7 +428,7 @@ a.inline:hover{text-decoration:underline}
 <!-- ---------------- live ---------------- -->
 <section id="live">
   <div class="wrap">
-    <div class="kicker">What's running today</div>
+    <div class="kicker"><span>What's running today</span> <span class="rule"></span></div>
     <h2>Not a mockup.</h2>
     <div class="grid g4">
       <div class="card buy"><h3>The sealed cross</h3><p>A closing auction that uncrosses the whole book at one uniform price.</p></div>
@@ -329,7 +439,7 @@ a.inline:hover{text-decoration:underline}
     <div class="grid g4" style="margin-top:18px">
       <div class="card"><h3>4.16 cBTC</h3><p>Real BitSafe cBTC claimed through the CIP-56 registry flow, on their own templates.</p></div>
       <div class="card"><h3>38 templates</h3><p>15,984 lines of Daml across the settlement, auction, committee and perpetual layers.</p></div>
-      <div class="card"><h3>121 test scripts</h3><p>Every settlement path asserts total cash before equals total cash after.</p></div>
+      <div class="card"><h3>125 test scripts</h3><p>Every settlement path asserts total cash before equals total cash after.</p></div>
       <div class="card"><h3>crossdesk 2.1.0</h3><p>A legal smart-contract upgrade of 2.0.0 — every new field Optional and appended, so no contract on a participant is orphaned.</p></div>
     </div>
     <p class="src" style="margin-top:22px">
@@ -344,9 +454,9 @@ a.inline:hover{text-decoration:underline}
 <!-- ---------------- deck ---------------- -->
 <section id="deck">
   <div class="wrap">
-    <div class="kicker">The four-minute version</div>
+    <div class="kicker"><span>The four-minute version</span> <span class="rule"></span></div>
     <h2>The pitch deck, as delivered.</h2>
-    <p style="max-width:60ch">Twelve slides and a screen recording of the desk executing a hedged
+    <p>Twelve slides and a screen recording of the desk executing a hedged
       arbitrage on a live Canton participant — the problem, the mechanism, the numbers and the
       ask. Arrow keys to advance; it runs in the browser.</p>
     <div class="cta-row">
@@ -354,15 +464,24 @@ a.inline:hover{text-decoration:underline}
       <a class="btn ghost" href="mailto:s.borjas@lucilla.ca?subject=CrossDesk">Ask me something</a>
     </div>
     <p class="note">Press <strong>F</strong> for full screen, <strong>P</strong> to print it as a PDF.</p>
+
+    <h2 style="margin-top:7vh">The ten-minute version.</h2>
+    <p>A separate deck for the room that is deciding rather than judging: the wrapper
+      mark no benchmark administrator produces, the three committee seats and why they must
+      disagree, what is verified against a running ledger — and a slide that states plainly what
+      is <em>not</em> done. Arrow keys to advance, <strong>Ctrl</strong>+<strong>P</strong> for a PDF.</p>
+    <div class="cta-row">
+      <a class="btn" href="/showcase/">Open the showcase →</a>
+    </div>
   </div>
 </section>
 
 <!-- ---------------- pilot ---------------- -->
 <section id="pilot">
   <div class="wrap">
-    <div class="kicker">The ask</div>
+    <div class="kicker"><span>The ask</span> <span class="rule"></span></div>
     <h2>One pilot fund. Ninety days. Shadow mode.</h2>
-    <p style="max-width:62ch">We strike the NAV alongside whoever strikes it today, and publish
+    <p>We strike the NAV alongside whoever strikes it today, and publish
       both. <strong>Nobody switches. Nothing is at risk.</strong> At the end you own a signed,
       auditable price history a regulator can read — and a daily measurement of how far your
       current mark drifts between strikes.</p>
@@ -375,6 +494,18 @@ a.inline:hover{text-decoration:underline}
       <a class="btn" href="mailto:s.borjas@lucilla.ca?subject=CrossDesk%20pilot">Start a pilot conversation</a>
       <a class="btn ghost" href="/pitch/">Watch the demo first →</a>
     </div>
+
+    <div class="founder">
+      <div>
+        <span class="role">Founder</span>
+        <div class="name">Sebastian Borjas</div>
+      </div>
+      <div class="links">
+        <a href="mailto:s.borjas@lucilla.ca">s.borjas@lucilla.ca</a>
+        <a href="https://t.me/sb_lucilla" rel="noopener">Telegram @sb_lucilla</a>
+        <a href="https://www.linkedin.com/in/sborjasto/" rel="noopener">LinkedIn</a>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -382,13 +513,17 @@ a.inline:hover{text-decoration:underline}
   <div class="wrap">
     <p><strong>CrossDesk</strong> — price discovery, attested NAV and atomic settlement for
       tokenised funds. Built on the <a class="inline" href="https://www.canton.network" rel="noopener">Canton Network</a>.</p>
-    <p style="margin-top:10px;color:var(--faint);font-size:13px">
+    <p class="src" style="margin-top:10px">
       The demo desk runs on a shared Canton devnet participant. Instruments in the demo basket are
       issued for demonstration; the cBTC integration is a real CIP-56 registry claim.
       Figures cited carry their sources.
     </p>
-    <p style="margin-top:14px">
+    <p style="margin-top:16px">
       <a class="inline" href="mailto:s.borjas@lucilla.ca">s.borjas@lucilla.ca</a>
+      &nbsp;·&nbsp;
+      <a class="inline" href="https://t.me/sb_lucilla" rel="noopener">@sb_lucilla</a>
+      &nbsp;·&nbsp;
+      <a class="inline" href="https://www.linkedin.com/in/sborjasto/" rel="noopener">LinkedIn</a>
     </p>
   </div>
 </footer>
