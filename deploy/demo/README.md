@@ -54,12 +54,29 @@ gcloud run deploy crossdesk-demo \
   --allow-unauthenticated \
   --memory 4Gi --cpu 2 \
   --timeout 900 \
-  --min-instances 0 \
+  --min-instances 0 --max-instances 1 \
   --port 8080
 ```
 
 `app.jar` and `crossdesk.dar` are gitignored. They are build output, and a 42 MB
 jar in git history is not worth the convenience of skipping two `cp` commands.
+
+### `--max-instances 1` is not a cost control. It is a correctness requirement.
+
+Each container carries **its own in-memory sandbox**, so each instance is a
+separate ledger. Left at the Cloud Run default the service scales out under
+traffic and two visitors land on two different worlds: one strikes a fixing, the
+other cannot see it, and a third arrives to a book neither of them recognises.
+Nothing errors. It simply stops being one venue, which is the single claim the
+demo exists to support - and it would only ever show up with more than one
+person on the site, which is precisely when it matters.
+
+Pinning to one instance makes every visitor share one ledger. It behaves like a
+venue because there is only one of it. Concurrency is 160 requests on that
+instance, far more than a demo will need.
+
+**Do not raise this ceiling to "handle load".** Load is not the constraint; a
+shared world is.
 
 ---
 
