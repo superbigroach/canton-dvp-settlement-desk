@@ -48,13 +48,21 @@ import java.util.Set;
 public final class OperatorCommittee extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#crossdesk", "Governance", "OperatorCommittee");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("abbcb556af749c83f1afa7694d9aef2854b73e4e26080ad1d301b6b1789b47d1", "Governance", "OperatorCommittee");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("527a2b50430ceabba40484b4518c4d390781e8db6c016ab3ec5528eea36766ea", "Governance", "OperatorCommittee");
 
-  public static final String PACKAGE_ID = "abbcb556af749c83f1afa7694d9aef2854b73e4e26080ad1d301b6b1789b47d1";
+  public static final String PACKAGE_ID = "527a2b50430ceabba40484b4518c4d390781e8db6c016ab3ec5528eea36766ea";
 
   public static final String PACKAGE_NAME = "crossdesk";
 
   public static final PackageVersion PACKAGE_VERSION = new PackageVersion(new int[] {2, 1, 0});
+
+  public static final Choice<OperatorCommittee, ProposeFixing, FixingProposal.ContractId> CHOICE_ProposeFixing = 
+      Choice.create("ProposeFixing", value$ -> value$.toValue(), value$ ->
+        ProposeFixing.valueDecoder().decode(value$), value$ ->
+        new FixingProposal.ContractId(value$.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected value$ to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()),
+        new ProposeFixing.JsonDecoder$().get(),
+        JsonLfDecoders.contractId(FixingProposal.ContractId::new), ProposeFixing::jsonEncoder,
+        JsonLfEncoders::contractId);
 
   public static final Choice<OperatorCommittee, ProposeRestatement, RestatementProposal.ContractId> CHOICE_ProposeRestatement = 
       Choice.create("ProposeRestatement", value$ -> value$.toValue(), value$ ->
@@ -64,6 +72,14 @@ public final class OperatorCommittee extends Template {
         JsonLfDecoders.contractId(RestatementProposal.ContractId::new),
         ProposeRestatement::jsonEncoder, JsonLfEncoders::contractId);
 
+  public static final Choice<OperatorCommittee, ProposeWrappedFixing, FixingProposal.ContractId> CHOICE_ProposeWrappedFixing = 
+      Choice.create("ProposeWrappedFixing", value$ -> value$.toValue(), value$ ->
+        ProposeWrappedFixing.valueDecoder().decode(value$), value$ ->
+        new FixingProposal.ContractId(value$.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected value$ to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()),
+        new ProposeWrappedFixing.JsonDecoder$().get(),
+        JsonLfDecoders.contractId(FixingProposal.ContractId::new),
+        ProposeWrappedFixing::jsonEncoder, JsonLfEncoders::contractId);
+
   public static final Choice<OperatorCommittee, ProposeAccruingFixing, FixingProposal.ContractId> CHOICE_ProposeAccruingFixing = 
       Choice.create("ProposeAccruingFixing", value$ -> value$.toValue(), value$ ->
         ProposeAccruingFixing.valueDecoder().decode(value$), value$ ->
@@ -71,14 +87,6 @@ public final class OperatorCommittee extends Template {
         new ProposeAccruingFixing.JsonDecoder$().get(),
         JsonLfDecoders.contractId(FixingProposal.ContractId::new),
         ProposeAccruingFixing::jsonEncoder, JsonLfEncoders::contractId);
-
-  public static final Choice<OperatorCommittee, ProposeFixing, FixingProposal.ContractId> CHOICE_ProposeFixing = 
-      Choice.create("ProposeFixing", value$ -> value$.toValue(), value$ ->
-        ProposeFixing.valueDecoder().decode(value$), value$ ->
-        new FixingProposal.ContractId(value$.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected value$ to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()),
-        new ProposeFixing.JsonDecoder$().get(),
-        JsonLfDecoders.contractId(FixingProposal.ContractId::new), ProposeFixing::jsonEncoder,
-        JsonLfEncoders::contractId);
 
   public static final Choice<OperatorCommittee, Archive, Unit> CHOICE_Archive = 
       Choice.create("Archive", value$ -> value$.toValue(), value$ -> Archive.valueDecoder()
@@ -90,8 +98,8 @@ public final class OperatorCommittee extends Template {
       new ContractCompanion.WithoutKey<>(new ContractTypeCompanion.Package(OperatorCommittee.PACKAGE_ID, OperatorCommittee.PACKAGE_NAME, OperatorCommittee.PACKAGE_VERSION),
         "com.lucilla.settlement.model.governance.OperatorCommittee", TEMPLATE_ID, ContractId::new,
         v -> OperatorCommittee.templateValueDecoder().decode(v), OperatorCommittee::fromJson,
-        Contract::new, List.of(CHOICE_ProposeRestatement, CHOICE_ProposeAccruingFixing,
-        CHOICE_ProposeFixing, CHOICE_Archive));
+        Contract::new, List.of(CHOICE_ProposeFixing, CHOICE_ProposeAccruingFixing,
+        CHOICE_ProposeRestatement, CHOICE_ProposeWrappedFixing, CHOICE_Archive));
 
   public final String admin;
 
@@ -118,6 +126,26 @@ public final class OperatorCommittee extends Template {
   }
 
   /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseProposeFixing} instead
+   */
+  @Deprecated
+  public Update<Exercised<FixingProposal.ContractId>> createAndExerciseProposeFixing(
+      ProposeFixing arg) {
+    return createAnd().exerciseProposeFixing(arg);
+  }
+
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseProposeFixing} instead
+   */
+  @Deprecated
+  public Update<Exercised<FixingProposal.ContractId>> createAndExerciseProposeFixing(
+      String proposer, String instrumentId, String cashInstrument, String session, BigDecimal price,
+      String rationale) {
+    return createAndExerciseProposeFixing(new ProposeFixing(proposer, instrumentId, cashInstrument,
+        session, price, rationale));
+  }
+
+  /**
    * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseProposeRestatement} instead
    */
   @Deprecated
@@ -138,6 +166,26 @@ public final class OperatorCommittee extends Template {
   }
 
   /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseProposeWrappedFixing} instead
+   */
+  @Deprecated
+  public Update<Exercised<FixingProposal.ContractId>> createAndExerciseProposeWrappedFixing(
+      ProposeWrappedFixing arg) {
+    return createAnd().exerciseProposeWrappedFixing(arg);
+  }
+
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseProposeWrappedFixing} instead
+   */
+  @Deprecated
+  public Update<Exercised<FixingProposal.ContractId>> createAndExerciseProposeWrappedFixing(
+      String proposer, String instrumentId, String cashInstrument, String session,
+      BigDecimal benchmarkPrice, BigDecimal parFactor, String rationale) {
+    return createAndExerciseProposeWrappedFixing(new ProposeWrappedFixing(proposer, instrumentId,
+        cashInstrument, session, benchmarkPrice, parFactor, rationale));
+  }
+
+  /**
    * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseProposeAccruingFixing} instead
    */
   @Deprecated
@@ -155,26 +203,6 @@ public final class OperatorCommittee extends Template {
       String rationale, BigDecimal ratePerAnnum, String dayCount, Instant accrualFrom) {
     return createAndExerciseProposeAccruingFixing(new ProposeAccruingFixing(proposer, instrumentId,
         cashInstrument, session, price, rationale, ratePerAnnum, dayCount, accrualFrom));
-  }
-
-  /**
-   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseProposeFixing} instead
-   */
-  @Deprecated
-  public Update<Exercised<FixingProposal.ContractId>> createAndExerciseProposeFixing(
-      ProposeFixing arg) {
-    return createAnd().exerciseProposeFixing(arg);
-  }
-
-  /**
-   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseProposeFixing} instead
-   */
-  @Deprecated
-  public Update<Exercised<FixingProposal.ContractId>> createAndExerciseProposeFixing(
-      String proposer, String instrumentId, String cashInstrument, String session, BigDecimal price,
-      String rationale) {
-    return createAndExerciseProposeFixing(new ProposeFixing(proposer, instrumentId, cashInstrument,
-        session, price, rationale));
   }
 
   /**
@@ -335,6 +363,17 @@ public final class OperatorCommittee extends Template {
   }
 
   public interface Exercises<Cmd> extends com.daml.ledger.javaapi.data.codegen.Exercises.Archivable<Cmd> {
+    default Update<Exercised<FixingProposal.ContractId>> exerciseProposeFixing(ProposeFixing arg) {
+      return makeExerciseCmd(CHOICE_ProposeFixing, arg);
+    }
+
+    default Update<Exercised<FixingProposal.ContractId>> exerciseProposeFixing(String proposer,
+        String instrumentId, String cashInstrument, String session, BigDecimal price,
+        String rationale) {
+      return exerciseProposeFixing(new ProposeFixing(proposer, instrumentId, cashInstrument,
+          session, price, rationale));
+    }
+
     default Update<Exercised<RestatementProposal.ContractId>> exerciseProposeRestatement(
         ProposeRestatement arg) {
       return makeExerciseCmd(CHOICE_ProposeRestatement, arg);
@@ -345,6 +384,18 @@ public final class OperatorCommittee extends Template {
         String reason, BigDecimal ratePerAnnum, String dayCount, Instant accrualFrom) {
       return exerciseProposeRestatement(new ProposeRestatement(proposer, supersedes, price,
           rationale, reason, ratePerAnnum, dayCount, accrualFrom));
+    }
+
+    default Update<Exercised<FixingProposal.ContractId>> exerciseProposeWrappedFixing(
+        ProposeWrappedFixing arg) {
+      return makeExerciseCmd(CHOICE_ProposeWrappedFixing, arg);
+    }
+
+    default Update<Exercised<FixingProposal.ContractId>> exerciseProposeWrappedFixing(
+        String proposer, String instrumentId, String cashInstrument, String session,
+        BigDecimal benchmarkPrice, BigDecimal parFactor, String rationale) {
+      return exerciseProposeWrappedFixing(new ProposeWrappedFixing(proposer, instrumentId,
+          cashInstrument, session, benchmarkPrice, parFactor, rationale));
     }
 
     default Update<Exercised<FixingProposal.ContractId>> exerciseProposeAccruingFixing(
@@ -358,17 +409,6 @@ public final class OperatorCommittee extends Template {
         Instant accrualFrom) {
       return exerciseProposeAccruingFixing(new ProposeAccruingFixing(proposer, instrumentId,
           cashInstrument, session, price, rationale, ratePerAnnum, dayCount, accrualFrom));
-    }
-
-    default Update<Exercised<FixingProposal.ContractId>> exerciseProposeFixing(ProposeFixing arg) {
-      return makeExerciseCmd(CHOICE_ProposeFixing, arg);
-    }
-
-    default Update<Exercised<FixingProposal.ContractId>> exerciseProposeFixing(String proposer,
-        String instrumentId, String cashInstrument, String session, BigDecimal price,
-        String rationale) {
-      return exerciseProposeFixing(new ProposeFixing(proposer, instrumentId, cashInstrument,
-          session, price, rationale));
     }
 
     default Update<Exercised<Unit>> exerciseArchive(Archive arg) {

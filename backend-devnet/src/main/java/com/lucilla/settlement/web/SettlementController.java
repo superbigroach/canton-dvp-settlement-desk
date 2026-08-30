@@ -4,6 +4,7 @@ import com.daml.ledger.javaapi.data.Transaction;
 import com.lucilla.settlement.ledger.Accrual;
 import com.lucilla.settlement.ledger.LedgerCommands;
 import com.lucilla.settlement.ledger.LedgerService;
+import com.lucilla.settlement.ledger.SignerProtocol;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -1256,6 +1257,92 @@ public class SettlementController {
         String member = ledger.resolveParty(req.member());
         String next = ledger.submitForCreated(member,
                 LedgerCommands.confirmFixing(cid, member), LedgerCommands.fixingProposalTemplateId());
+        return created(new Dtos.CidResponse(next));
+    }
+
+    /**
+     * A member proposes a WRAPPED-ASSET fix — the benchmark print and the par ratio,
+     * attested as separate fields.
+     *
+     * <p>A SEPARATE ENDPOINT FROM {@code /propose}, exactly as {@code ProposeWrappedFixing}
+     * is a separate choice. The plain path never asks the wrapper question, which is
+     * correct for a native asset and wrong for cBTC or cETH. Here it cannot be skipped:
+     * the factor is a field, so an issuer that will not attest par declines in a way the
+     * record can show. See {@code docs/SIGNER_PROTOCOL.md} §2a.
+     */
+    @PostMapping("/committee/{cid}/propose-wrapped")
+    public ResponseEntity<Dtos.WrappedFixingProposalResponse> proposeWrappedFixing(
+            @PathVariable String cid, @Valid @RequestBody Dtos.ProposeWrappedFixingRequest req) {
+        String proposer = ledger.resolveParty(req.proposer());
+        String cash = blankTo(req.cashInstrument(), "USDC");
+        String sess = LedgerCommands.session(req.session());
+        var cmd = LedgerCommands.proposeWrappedFixing(cid, proposer, req.instrumentId(),
+                cash, sess, req.benchmarkPrice(), req.parFactor(), req.rationale());
+        String propCid = ledger.submitForCreated(proposer, cmd, LedgerCommands.fixingProposalTemplateId());
+
+        BigDecimal strike = req.benchmarkPrice().multiply(req.parFactor());
+        // Publish the discount in basis points as well as the raw factor. A factor of
+        // 0.998 is easy to read past; "20 bp below par" is the number a risk committee
+        // actually argues about, and it is the whole reason this endpoint exists.
+        BigDecimal discountBps = BigDecimal.ONE.subtract(req.parFactor())
+                .multiply(BigDecimal.valueOf(10000));
+        return created(new Dtos.WrappedFixingProposalResponse(propCid,
+                req.instrumentId(), cash, sess,
+                Accrual.wire(req.benchmarkPrice()), Accrual.wire(req.parFactor()),
+                Accrual.wire(strike), Accrual.wire(discountBps), req.rationale()));
+    }
+
+    /**
+     * Confirm WITH the protocol evidence — which named conditions this member verified,
+     * and for a venue the range its own book traded.
+     *
+     * <p>Behaviourally identical to {@code /confirm}: one more signature, a new proposal
+     * contract id. The difference is what the finished fixing can say afterwards. A
+     * venue supplying a range that does not contain the price is refused ON-LEDGER, so
+     * the one seat holding real transaction data cannot rubber-stamp.
+     */
+    /**
+     * The signer protocol as data — every seat, what it uniquely knows, and the named
+     * conditions it verifies.
+     *
+     * <p>The UI renders its checkboxes from THIS, rather than hard-coding a list that
+     * would drift from what {@code /confirm-checked} accepts. One source of truth, so a
+     * signer ticks exactly what the backend will take.
+     */
+    @GetMapping("/signer-protocol")
+    public Dtos.SignerProtocolResponse signerProtocol() {
+        return new Dtos.SignerProtocolResponse(
+                SignerProtocol.VERSION,
+                SignerProtocol.roles().stream()
+                        .map(r -> new Dtos.SignerRoleView(
+                                r.key(), r.title(), r.uniquelyKnows(),
+                                r.conditions().stream()
+                                        .map(c -> new Dtos.SignerConditionView(c.name(), c.passesWhen()))
+                                        .toList(),
+                                r.requiresObservedRange()))
+                        .toList());
+    }
+
+    @PostMapping("/fixing/{cid}/confirm-checked")
+    public ResponseEntity<Dtos.CidResponse> confirmFixingWithChecks(
+            @PathVariable String cid, @Valid @RequestBody Dtos.ConfirmWithChecksRequest req) {
+        // REFUSE BEFORE SUBMITTING. The ledger enforces the venue's range and that at
+        // least one condition is named; it cannot know whether `book-acceptance` is a
+        // check the venue seat is entitled to claim. That belongs to the protocol
+        // version, which lives at the edge — see SignerProtocol's class comment.
+        String bad = SignerProtocol.rejectionReason(req.role(), req.checksPassed(),
+                req.observedLow() != null, req.observedHigh() != null);
+        if (bad != null) {
+            throw new IllegalArgumentException(bad);
+        }
+        String member = ledger.resolveParty(req.member());
+        String ref = blankTo(req.protocolRef(), SignerProtocol.refFor(req.role()));
+        String next = ledger.submitForCreated(member,
+                LedgerCommands.confirmFixingWithChecks(cid, member, req.role(), ref,
+                        req.checksPassed(),
+                        Optional.ofNullable(req.observedLow()),
+                        Optional.ofNullable(req.observedHigh())),
+                LedgerCommands.fixingProposalTemplateId());
         return created(new Dtos.CidResponse(next));
     }
 

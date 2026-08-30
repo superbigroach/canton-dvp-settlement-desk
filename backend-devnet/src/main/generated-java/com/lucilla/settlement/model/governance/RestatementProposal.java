@@ -7,6 +7,7 @@ import com.daml.ledger.javaapi.data.CreateAndExerciseCommand;
 import com.daml.ledger.javaapi.data.CreateCommand;
 import com.daml.ledger.javaapi.data.CreatedEvent;
 import com.daml.ledger.javaapi.data.DamlCollectors;
+import com.daml.ledger.javaapi.data.DamlOptional;
 import com.daml.ledger.javaapi.data.DamlRecord;
 import com.daml.ledger.javaapi.data.ExerciseCommand;
 import com.daml.ledger.javaapi.data.Identifier;
@@ -45,14 +46,15 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 public final class RestatementProposal extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#crossdesk", "Governance", "RestatementProposal");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("abbcb556af749c83f1afa7694d9aef2854b73e4e26080ad1d301b6b1789b47d1", "Governance", "RestatementProposal");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("527a2b50430ceabba40484b4518c4d390781e8db6c016ab3ec5528eea36766ea", "Governance", "RestatementProposal");
 
-  public static final String PACKAGE_ID = "abbcb556af749c83f1afa7694d9aef2854b73e4e26080ad1d301b6b1789b47d1";
+  public static final String PACKAGE_ID = "527a2b50430ceabba40484b4518c4d390781e8db6c016ab3ec5528eea36766ea";
 
   public static final String PACKAGE_NAME = "crossdesk";
 
@@ -128,11 +130,19 @@ public final class RestatementProposal extends Template {
 
   public final List<String> approvers;
 
+  public final Optional<BigDecimal> referencePrice;
+
+  public final Optional<BigDecimal> wrapperFactor;
+
+  public final Optional<List<SignerCheck>> attestations;
+
   public RestatementProposal(String admin, List<String> members, Long threshold, String auditor,
       String proposer, NavFixing.ContractId supersedes, BigDecimal supersededPrice,
       String instrumentId, String cashInstrument, String session, BigDecimal price,
       String rationale, String reason, BigDecimal ratePerAnnum, String dayCount,
-      Instant accrualFrom, List<String> publishTo, List<String> approvers) {
+      Instant accrualFrom, List<String> publishTo, List<String> approvers,
+      Optional<BigDecimal> referencePrice, Optional<BigDecimal> wrapperFactor,
+      Optional<List<SignerCheck>> attestations) {
     this.admin = admin;
     this.members = members;
     this.threshold = threshold;
@@ -151,6 +161,9 @@ public final class RestatementProposal extends Template {
     this.accrualFrom = accrualFrom;
     this.publishTo = publishTo;
     this.approvers = approvers;
+    this.referencePrice = referencePrice;
+    this.wrapperFactor = wrapperFactor;
+    this.attestations = attestations;
   }
 
   @Override
@@ -227,10 +240,13 @@ public final class RestatementProposal extends Template {
       Long threshold, String auditor, String proposer, NavFixing.ContractId supersedes,
       BigDecimal supersededPrice, String instrumentId, String cashInstrument, String session,
       BigDecimal price, String rationale, String reason, BigDecimal ratePerAnnum, String dayCount,
-      Instant accrualFrom, List<String> publishTo, List<String> approvers) {
+      Instant accrualFrom, List<String> publishTo, List<String> approvers,
+      Optional<BigDecimal> referencePrice, Optional<BigDecimal> wrapperFactor,
+      Optional<List<SignerCheck>> attestations) {
     return new RestatementProposal(admin, members, threshold, auditor, proposer, supersedes,
         supersededPrice, instrumentId, cashInstrument, session, price, rationale, reason,
-        ratePerAnnum, dayCount, accrualFrom, publishTo, approvers).create();
+        ratePerAnnum, dayCount, accrualFrom, publishTo, approvers, referencePrice, wrapperFactor,
+        attestations).create();
   }
 
   @Override
@@ -248,7 +264,7 @@ public final class RestatementProposal extends Template {
   }
 
   public DamlRecord toValue() {
-    ArrayList<DamlRecord.Field> fields = new ArrayList<DamlRecord.Field>(18);
+    ArrayList<DamlRecord.Field> fields = new ArrayList<DamlRecord.Field>(21);
     fields.add(new DamlRecord.Field("admin", new Party(this.admin)));
     fields.add(new DamlRecord.Field("members", this.members.stream().collect(DamlCollectors.toDamlList(v$0 -> new Party(v$0)))));
     fields.add(new DamlRecord.Field("threshold", new Int64(this.threshold)));
@@ -267,6 +283,9 @@ public final class RestatementProposal extends Template {
     fields.add(new DamlRecord.Field("accrualFrom", Timestamp.fromInstant(this.accrualFrom)));
     fields.add(new DamlRecord.Field("publishTo", this.publishTo.stream().collect(DamlCollectors.toDamlList(v$0 -> new Party(v$0)))));
     fields.add(new DamlRecord.Field("approvers", this.approvers.stream().collect(DamlCollectors.toDamlList(v$0 -> new Party(v$0)))));
+    fields.add(new DamlRecord.Field("referencePrice", DamlOptional.of(this.referencePrice.map(v$0 -> new Numeric(v$0)))));
+    fields.add(new DamlRecord.Field("wrapperFactor", DamlOptional.of(this.wrapperFactor.map(v$0 -> new Numeric(v$0)))));
+    fields.add(new DamlRecord.Field("attestations", DamlOptional.of(this.attestations.map(v$0 -> v$0.stream().collect(DamlCollectors.toDamlList(v$1 -> v$1.toValue()))))));
     return new DamlRecord(fields);
   }
 
@@ -274,7 +293,7 @@ public final class RestatementProposal extends Template {
       IllegalArgumentException {
     return value$ -> {
       Value recordValue$ = value$;
-      List<DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(18,0, recordValue$);
+      List<DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(21,3, recordValue$);
       String admin = PrimitiveValueDecoders.fromParty.decode(fields$.get(0).getValue());
       List<String> members = PrimitiveValueDecoders.fromList(PrimitiveValueDecoders.fromParty)
           .decode(fields$.get(1).getValue());
@@ -299,14 +318,22 @@ public final class RestatementProposal extends Template {
           .decode(fields$.get(16).getValue());
       List<String> approvers = PrimitiveValueDecoders.fromList(PrimitiveValueDecoders.fromParty)
           .decode(fields$.get(17).getValue());
+      Optional<BigDecimal> referencePrice = PrimitiveValueDecoders.fromOptional(
+            PrimitiveValueDecoders.fromNumeric).decode(fields$.get(18).getValue());
+      Optional<BigDecimal> wrapperFactor = PrimitiveValueDecoders.fromOptional(
+            PrimitiveValueDecoders.fromNumeric).decode(fields$.get(19).getValue());
+      Optional<List<SignerCheck>> attestations = PrimitiveValueDecoders.fromOptional(
+            PrimitiveValueDecoders.fromList(SignerCheck.valueDecoder()))
+          .decode(fields$.get(20).getValue());
       return new RestatementProposal(admin, members, threshold, auditor, proposer, supersedes,
           supersededPrice, instrumentId, cashInstrument, session, price, rationale, reason,
-          ratePerAnnum, dayCount, accrualFrom, publishTo, approvers);
+          ratePerAnnum, dayCount, accrualFrom, publishTo, approvers, referencePrice, wrapperFactor,
+          attestations);
     } ;
   }
 
   public static JsonLfDecoder<RestatementProposal> jsonDecoder() {
-    return JsonLfDecoders.record(Arrays.asList("admin", "members", "threshold", "auditor", "proposer", "supersedes", "supersededPrice", "instrumentId", "cashInstrument", "session", "price", "rationale", "reason", "ratePerAnnum", "dayCount", "accrualFrom", "publishTo", "approvers"), name -> {
+    return JsonLfDecoders.record(Arrays.asList("admin", "members", "threshold", "auditor", "proposer", "supersedes", "supersededPrice", "instrumentId", "cashInstrument", "session", "price", "rationale", "reason", "ratePerAnnum", "dayCount", "accrualFrom", "publishTo", "approvers", "referencePrice", "wrapperFactor", "attestations"), name -> {
           switch (name) {
             case "admin": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
             case "members": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(1, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.list(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party));
@@ -326,10 +353,13 @@ public final class RestatementProposal extends Template {
             case "accrualFrom": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(15, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.timestamp);
             case "publishTo": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(16, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.list(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party));
             case "approvers": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(17, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.list(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party));
+            case "referencePrice": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(18, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10)), java.util.Optional.empty());
+            case "wrapperFactor": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(19, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10)), java.util.Optional.empty());
+            case "attestations": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(20, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.list(new com.lucilla.settlement.model.governance.SignerCheck.JsonDecoder$().get())), java.util.Optional.empty());
             default: return null;
           }
         }
-        , (Object[] args) -> new RestatementProposal(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6]), JsonLfDecoders.cast(args[7]), JsonLfDecoders.cast(args[8]), JsonLfDecoders.cast(args[9]), JsonLfDecoders.cast(args[10]), JsonLfDecoders.cast(args[11]), JsonLfDecoders.cast(args[12]), JsonLfDecoders.cast(args[13]), JsonLfDecoders.cast(args[14]), JsonLfDecoders.cast(args[15]), JsonLfDecoders.cast(args[16]), JsonLfDecoders.cast(args[17])));
+        , (Object[] args) -> new RestatementProposal(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6]), JsonLfDecoders.cast(args[7]), JsonLfDecoders.cast(args[8]), JsonLfDecoders.cast(args[9]), JsonLfDecoders.cast(args[10]), JsonLfDecoders.cast(args[11]), JsonLfDecoders.cast(args[12]), JsonLfDecoders.cast(args[13]), JsonLfDecoders.cast(args[14]), JsonLfDecoders.cast(args[15]), JsonLfDecoders.cast(args[16]), JsonLfDecoders.cast(args[17]), JsonLfDecoders.cast(args[18]), JsonLfDecoders.cast(args[19]), JsonLfDecoders.cast(args[20])));
   }
 
   public static RestatementProposal fromJson(String json) throws JsonLfDecoder.Error {
@@ -355,7 +385,10 @@ public final class RestatementProposal extends Template {
         JsonLfEncoders.Field.of("dayCount", apply(JsonLfEncoders::text, dayCount)),
         JsonLfEncoders.Field.of("accrualFrom", apply(JsonLfEncoders::timestamp, accrualFrom)),
         JsonLfEncoders.Field.of("publishTo", apply(JsonLfEncoders.list(JsonLfEncoders::party), publishTo)),
-        JsonLfEncoders.Field.of("approvers", apply(JsonLfEncoders.list(JsonLfEncoders::party), approvers)));
+        JsonLfEncoders.Field.of("approvers", apply(JsonLfEncoders.list(JsonLfEncoders::party), approvers)),
+        JsonLfEncoders.Field.of("referencePrice", apply(JsonLfEncoders.optional(JsonLfEncoders::numeric), referencePrice)),
+        JsonLfEncoders.Field.of("wrapperFactor", apply(JsonLfEncoders.optional(JsonLfEncoders::numeric), wrapperFactor)),
+        JsonLfEncoders.Field.of("attestations", apply(JsonLfEncoders.optional(JsonLfEncoders.list(SignerCheck::jsonEncoder)), attestations)));
   }
 
   public static ContractFilter<Contract> contractFilter() {
@@ -389,7 +422,10 @@ public final class RestatementProposal extends Template {
         Objects.equals(this.dayCount, other.dayCount) &&
         Objects.equals(this.accrualFrom, other.accrualFrom) &&
         Objects.equals(this.publishTo, other.publishTo) &&
-        Objects.equals(this.approvers, other.approvers);
+        Objects.equals(this.approvers, other.approvers) &&
+        Objects.equals(this.referencePrice, other.referencePrice) &&
+        Objects.equals(this.wrapperFactor, other.wrapperFactor) &&
+        Objects.equals(this.attestations, other.attestations);
   }
 
   @Override
@@ -397,16 +433,16 @@ public final class RestatementProposal extends Template {
     return Objects.hash(this.admin, this.members, this.threshold, this.auditor, this.proposer,
         this.supersedes, this.supersededPrice, this.instrumentId, this.cashInstrument, this.session,
         this.price, this.rationale, this.reason, this.ratePerAnnum, this.dayCount, this.accrualFrom,
-        this.publishTo, this.approvers);
+        this.publishTo, this.approvers, this.referencePrice, this.wrapperFactor, this.attestations);
   }
 
   @Override
   public String toString() {
-    return String.format("com.lucilla.settlement.model.governance.RestatementProposal(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+    return String.format("com.lucilla.settlement.model.governance.RestatementProposal(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         this.admin, this.members, this.threshold, this.auditor, this.proposer, this.supersedes,
         this.supersededPrice, this.instrumentId, this.cashInstrument, this.session, this.price,
         this.rationale, this.reason, this.ratePerAnnum, this.dayCount, this.accrualFrom,
-        this.publishTo, this.approvers);
+        this.publishTo, this.approvers, this.referencePrice, this.wrapperFactor, this.attestations);
   }
 
   public static final class ContractId extends com.daml.ledger.javaapi.data.codegen.ContractId<RestatementProposal> implements Exercises<ExerciseCommand> {

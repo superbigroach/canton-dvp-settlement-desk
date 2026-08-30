@@ -574,9 +574,46 @@ public final class LedgerCommands {
                         price, rationale, ratePerAnnum, dayCount, accrualFrom);
     }
 
+    /**
+     * A member proposes a WRAPPED-ASSET fix — the benchmark print and the par ratio.
+     *
+     * <p>A SEPARATE CHOICE for the same reason {@link #proposeAccruingFixing} is: on the
+     * plain path the members attest a price and the wrapper question never gets asked,
+     * which is right for a native asset and wrong for a claim on one priced elsewhere.
+     * Here the question is unavoidable. The struck price is computed on-ledger as
+     * {@code benchmarkPrice × parFactor} rather than passed in, so the three numbers
+     * cannot disagree at birth, and a pair that does not reconcile cannot exist.
+     */
+    public static Update<?> proposeWrappedFixing(
+            String committeeCid, String proposer, String instrumentId, String cashInstrument,
+            String session, BigDecimal benchmarkPrice, BigDecimal parFactor, String rationale) {
+        return new OperatorCommittee.ContractId(committeeCid)
+                .exerciseProposeWrappedFixing(proposer, instrumentId, cashInstrument, session,
+                        benchmarkPrice, parFactor, rationale);
+    }
+
     /** Another member adds its attestation (accumulating multisig). */
     public static Update<?> confirmFixing(String proposalCid, String member) {
         return new FixingProposal.ContractId(proposalCid).exerciseConfirm(member);
+    }
+
+    /**
+     * The same attestation, PLUS the protocol evidence — which named conditions this
+     * member verified, and (for a venue) the range its own book actually traded.
+     *
+     * <p>Left as a separate command rather than widening {@link #confirmFixing}, so
+     * every existing integration keeps its exact signature. The difference is that the
+     * finished fixing can answer WHY each member signed, which is what an oversight
+     * record is and what a signature count alone is not. See
+     * {@code docs/SIGNER_PROTOCOL.md}.
+     */
+    public static Update<?> confirmFixingWithChecks(
+            String proposalCid, String member, String role, String protocolRef,
+            List<String> checksPassed, Optional<BigDecimal> observedLow,
+            Optional<BigDecimal> observedHigh) {
+        var check = new com.lucilla.settlement.model.governance.SignerCheck(
+                member, role, protocolRef, checksPassed, observedLow, observedHigh);
+        return new FixingProposal.ContractId(proposalCid).exerciseConfirmWithChecks(member, check);
     }
 
     /** Promote a threshold-attested proposal to an official NavFixing. */

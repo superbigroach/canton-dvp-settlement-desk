@@ -236,7 +236,8 @@ An EU- or UK-supervised entity referencing a CrossDesk fixing must resolve
 
 | Section | Status |
 |---|---|
-| §2 role definitions and named conditions | **documented here; not machine-checked.** `checksPassed` is free text by design (the protocol versions faster than the DAR) — the ledger records what was claimed, it does not verify the issuer's or lender's claims |
+| §2 role definitions and named conditions | **implemented, tested at the edge** — `SignerProtocol.java` is this document as data. `POST /fixing/{cid}/confirm-checked` refuses a condition that does not belong to the declared seat, an unknown role, an empty or repeated checklist, a venue without a range, and a non-venue with one. `checksPassed` stays free text *on-ledger* by design (the protocol versions faster than the DAR), so the constraint lives where it can be versioned with this document |
+| §2 the conditions a signer is shown | **implemented** — `GET /signer-protocol` serves the same list the validator uses, and the desk UI renders its checkboxes from it rather than a local copy, so a box on screen is a box the API accepts |
 | §2c venue range enforcement | **implemented, tested** — `ConfirmWithChecks` refuses a price outside the range, an inverted range, or a half-specified one (`testSignerProtocolEvidence`) |
 | §2 one attestation per member, signed by the confirming member | implemented, tested |
 | §3 wrapper mark as an explicit field | **implemented, tested** — `ProposeWrappedFixing`, `wrapperConsistent` (`testWrapperMarkAttested`) |
@@ -245,8 +246,16 @@ An EU- or UK-supervised entity referencing a CrossDesk fixing must resolve
 | §5 fund behaviour when `K` is not reached | **not specified** — belongs to the fund's governing documents |
 | §2d operator-exit rule | **policy only** — `role = "operator"` makes it visible; nothing enforces the exit |
 
-**The honest summary:** the ledger enforces the venue's claim and the arithmetic of the wrapper
-mark. It records, but cannot verify, the issuer's and the lender's claims — those rest on the
-signer's own systems and on the fact that a false attestation is permanent, attributable, and
-made against their own money. That asymmetry is deliberate and should be disclosed to anyone
-taking a seat, not glossed.
+**The honest summary, in three layers:**
+
+1. **The ledger enforces** the venue's traded range and the arithmetic of the wrapper mark. A
+   price outside the range, or a factor that does not reconcile, cannot exist on-chain.
+2. **The API enforces** that a claimed condition belongs to the seat claiming it. A lender cannot
+   file the issuer's evidence.
+3. **Nothing enforces** that the issuer's attestor quorum really was met, or that the lender will
+   really mark its book at that level. Those rest on the signer's own systems and on the fact
+   that a false attestation is permanent, attributable, and made against their own money.
+
+Layer 3 is the residual trust in this design. It is deliberate — the alternative is auditing every
+signer's internal systems daily, which is the disinterested-referee model that cannot be funded —
+and it should be disclosed to anyone taking a seat rather than glossed.

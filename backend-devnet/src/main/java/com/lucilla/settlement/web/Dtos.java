@@ -422,9 +422,95 @@ public final class Dtos {
             boolean accruing) {              // false = a pure snapshot (rate 0, "NONE")
     }
 
+    /**
+     * A member proposes a WRAPPED-ASSET fix — the benchmark print and the par ratio,
+     * signed separately.
+     *
+     * <p>CF Benchmarks prices BTC. It has never priced cBTC. A wrapped asset is a claim
+     * on something priced elsewhere, and its value is {@code benchmarkPrice × parFactor}
+     * where the factor is the market's confidence that redemption works. Marking it at
+     * par is not a fact, it is an assertion — and it is the assertion that has broken
+     * every wrapped asset that ever broke.
+     *
+     * <p>So the two travel as SEPARATE FIELDS and the struck price is their product,
+     * computed on-ledger rather than sent in. That is what makes an issuer's refusal
+     * legible: it is not disputing the price of Bitcoin, it is declining to attest par.
+     * See {@code docs/SIGNER_PROTOCOL.md} §2a.
+     */
+    public record ProposeWrappedFixingRequest(
+            @NotBlank String proposer,
+            @NotBlank String instrumentId,           // the WRAPPED asset, e.g. "CBTC"
+            String cashInstrument,                   // defaults to "USDC"
+            String session,                          // Open | Close (defaults to Close)
+            @NotNull @Positive BigDecimal benchmarkPrice,  // e.g. the CME CF BRR print
+            @NotNull @Positive BigDecimal parFactor,       // 1.0 = at par; < 1.0 = a discount
+            @NotBlank String rationale) {            // MUST cite the benchmark and its strike
+    }
+
+    /** The wrapped fix echoed back with the factor visible, not folded into the price. */
+    public record WrappedFixingProposalResponse(
+            String contractId,
+            String instrumentId, String cashInstrument, String session,
+            String benchmarkPrice,
+            String parFactor,
+            String strikePrice,              // benchmarkPrice × parFactor, as struck
+            String discountBps,              // (1 - parFactor) × 10000, signed
+            String rationale) {
+    }
+
+    /**
+     * The signer protocol as data, so the UI renders exactly what the API will accept.
+     *
+     * <p>Hard-coding the conditions in the frontend would let the screen drift from the
+     * rule, and a signer ticking a box that the backend then refuses is the fastest way
+     * to teach someone their seat is decorative.
+     */
+    public record SignerProtocolResponse(
+            String version,
+            List<SignerRoleView> roles) {
+    }
+
+    /** One seat: what only it can see, and what it is therefore able to attest. */
+    public record SignerRoleView(
+            String key,                      // issuer | lender | venue | operator
+            String title,
+            String uniquelyKnows,
+            List<SignerConditionView> conditions,
+            boolean requiresObservedRange) { // venue only — the range the ledger checks
+    }
+
+    /** One named condition, and the plain statement of when it passes. */
+    public record SignerConditionView(
+            String name,
+            String passesWhen) {
+    }
+
     /** Another member adds its attestation. */
     public record ConfirmFixingRequest(
             @NotBlank String member) {
+    }
+
+    /**
+     * Another member attests, AND records the named conditions it verified.
+     *
+     * <p>{@code docs/SIGNER_PROTOCOL.md}. No signer is ever asked for an opinion about
+     * the price — each asserts a fact only it can see, so signing is cheap enough to
+     * automate and a refusal names what broke. {@code checksPassed} carries the named
+     * conditions from the protocol document (e.g. {@code attestor-quorum},
+     * {@code book-acceptance}, {@code traded-range}).
+     *
+     * <p>{@code observedLow}/{@code observedHigh} are the VENUE's traded range, and are
+     * enforced on-ledger: a venue cannot attest a price its own book never printed, and
+     * an inverted or half-specified range is refused. That is the sharpest guard in the
+     * protocol and the only one the ledger itself checks.
+     */
+    public record ConfirmWithChecksRequest(
+            @NotBlank String member,
+            @NotBlank String role,                   // issuer | lender | venue | operator
+            String protocolRef,                      // defaults to "SIGNER_PROTOCOL v1 <role>"
+            @NotNull List<@NotBlank String> checksPassed,  // at least one, enforced on-ledger
+            BigDecimal observedLow,                  // venue only; both or neither
+            BigDecimal observedHigh) {
     }
 
     /** Promote a threshold-attested proposal to an official NavFixing. */
