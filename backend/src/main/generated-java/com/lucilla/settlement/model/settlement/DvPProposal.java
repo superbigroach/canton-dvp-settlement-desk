@@ -46,9 +46,9 @@ import java.util.Set;
 public final class DvPProposal extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#crossdesk", "Settlement", "DvPProposal");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("abbcb556af749c83f1afa7694d9aef2854b73e4e26080ad1d301b6b1789b47d1", "Settlement", "DvPProposal");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("527a2b50430ceabba40484b4518c4d390781e8db6c016ab3ec5528eea36766ea", "Settlement", "DvPProposal");
 
-  public static final String PACKAGE_ID = "abbcb556af749c83f1afa7694d9aef2854b73e4e26080ad1d301b6b1789b47d1";
+  public static final String PACKAGE_ID = "527a2b50430ceabba40484b4518c4d390781e8db6c016ab3ec5528eea36766ea";
 
   public static final String PACKAGE_NAME = "crossdesk";
 

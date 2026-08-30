@@ -7,6 +7,7 @@ import com.daml.ledger.javaapi.data.CreateAndExerciseCommand;
 import com.daml.ledger.javaapi.data.CreateCommand;
 import com.daml.ledger.javaapi.data.CreatedEvent;
 import com.daml.ledger.javaapi.data.DamlCollectors;
+import com.daml.ledger.javaapi.data.DamlOptional;
 import com.daml.ledger.javaapi.data.DamlRecord;
 import com.daml.ledger.javaapi.data.ExerciseCommand;
 import com.daml.ledger.javaapi.data.Identifier;
@@ -45,14 +46,15 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 public final class FixingProposal extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#crossdesk", "Governance", "FixingProposal");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("abbcb556af749c83f1afa7694d9aef2854b73e4e26080ad1d301b6b1789b47d1", "Governance", "FixingProposal");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("527a2b50430ceabba40484b4518c4d390781e8db6c016ab3ec5528eea36766ea", "Governance", "FixingProposal");
 
-  public static final String PACKAGE_ID = "abbcb556af749c83f1afa7694d9aef2854b73e4e26080ad1d301b6b1789b47d1";
+  public static final String PACKAGE_ID = "527a2b50430ceabba40484b4518c4d390781e8db6c016ab3ec5528eea36766ea";
 
   public static final String PACKAGE_NAME = "crossdesk";
 
@@ -65,6 +67,25 @@ public final class FixingProposal extends Template {
         new Confirm.JsonDecoder$().get(), JsonLfDecoders.contractId(ContractId::new),
         Confirm::jsonEncoder, JsonLfEncoders::contractId);
 
+  public static final Choice<FixingProposal, WithdrawFixing, Unit> CHOICE_WithdrawFixing = 
+      Choice.create("WithdrawFixing", value$ -> value$.toValue(), value$ ->
+        WithdrawFixing.valueDecoder().decode(value$), value$ -> PrimitiveValueDecoders.fromUnit
+        .decode(value$), new WithdrawFixing.JsonDecoder$().get(), JsonLfDecoders.unit,
+        WithdrawFixing::jsonEncoder, JsonLfEncoders::unit);
+
+  public static final Choice<FixingProposal, ConfirmWithChecks, ContractId> CHOICE_ConfirmWithChecks = 
+      Choice.create("ConfirmWithChecks", value$ -> value$.toValue(), value$ ->
+        ConfirmWithChecks.valueDecoder().decode(value$), value$ ->
+        new ContractId(value$.asContractId().orElseThrow(() -> new IllegalArgumentException("Expected value$ to be of type com.daml.ledger.javaapi.data.ContractId")).getValue()),
+        new ConfirmWithChecks.JsonDecoder$().get(), JsonLfDecoders.contractId(ContractId::new),
+        ConfirmWithChecks::jsonEncoder, JsonLfEncoders::contractId);
+
+  public static final Choice<FixingProposal, Archive, Unit> CHOICE_Archive = 
+      Choice.create("Archive", value$ -> value$.toValue(), value$ -> Archive.valueDecoder()
+        .decode(value$), value$ -> PrimitiveValueDecoders.fromUnit.decode(value$),
+        new Archive.JsonDecoder$().get(), JsonLfDecoders.unit, Archive::jsonEncoder,
+        JsonLfEncoders::unit);
+
   public static final Choice<FixingProposal, FinalizeFixing, NavFixing.ContractId> CHOICE_FinalizeFixing = 
       Choice.create("FinalizeFixing", value$ -> value$.toValue(), value$ ->
         FinalizeFixing.valueDecoder().decode(value$), value$ ->
@@ -73,24 +94,12 @@ public final class FixingProposal extends Template {
         JsonLfDecoders.contractId(NavFixing.ContractId::new), FinalizeFixing::jsonEncoder,
         JsonLfEncoders::contractId);
 
-  public static final Choice<FixingProposal, WithdrawFixing, Unit> CHOICE_WithdrawFixing = 
-      Choice.create("WithdrawFixing", value$ -> value$.toValue(), value$ ->
-        WithdrawFixing.valueDecoder().decode(value$), value$ -> PrimitiveValueDecoders.fromUnit
-        .decode(value$), new WithdrawFixing.JsonDecoder$().get(), JsonLfDecoders.unit,
-        WithdrawFixing::jsonEncoder, JsonLfEncoders::unit);
-
-  public static final Choice<FixingProposal, Archive, Unit> CHOICE_Archive = 
-      Choice.create("Archive", value$ -> value$.toValue(), value$ -> Archive.valueDecoder()
-        .decode(value$), value$ -> PrimitiveValueDecoders.fromUnit.decode(value$),
-        new Archive.JsonDecoder$().get(), JsonLfDecoders.unit, Archive::jsonEncoder,
-        JsonLfEncoders::unit);
-
   public static final ContractCompanion.WithoutKey<Contract, ContractId, FixingProposal> COMPANION = 
       new ContractCompanion.WithoutKey<>(new ContractTypeCompanion.Package(FixingProposal.PACKAGE_ID, FixingProposal.PACKAGE_NAME, FixingProposal.PACKAGE_VERSION),
         "com.lucilla.settlement.model.governance.FixingProposal", TEMPLATE_ID, ContractId::new,
         v -> FixingProposal.templateValueDecoder().decode(v), FixingProposal::fromJson,
-        Contract::new, List.of(CHOICE_Confirm, CHOICE_FinalizeFixing, CHOICE_WithdrawFixing,
-        CHOICE_Archive));
+        Contract::new, List.of(CHOICE_ConfirmWithChecks, CHOICE_WithdrawFixing,
+        CHOICE_FinalizeFixing, CHOICE_Archive, CHOICE_Confirm));
 
   public final String admin;
 
@@ -120,10 +129,17 @@ public final class FixingProposal extends Template {
 
   public final List<String> approvers;
 
+  public final Optional<BigDecimal> referencePrice;
+
+  public final Optional<BigDecimal> wrapperFactor;
+
+  public final Optional<List<SignerCheck>> attestations;
+
   public FixingProposal(String admin, List<String> members, Long threshold, String auditor,
       String proposer, String instrumentId, String cashInstrument, String session, BigDecimal price,
       String rationale, BigDecimal ratePerAnnum, String dayCount, Instant accrualFrom,
-      List<String> approvers) {
+      List<String> approvers, Optional<BigDecimal> referencePrice,
+      Optional<BigDecimal> wrapperFactor, Optional<List<SignerCheck>> attestations) {
     this.admin = admin;
     this.members = members;
     this.threshold = threshold;
@@ -138,6 +154,9 @@ public final class FixingProposal extends Template {
     this.dayCount = dayCount;
     this.accrualFrom = accrualFrom;
     this.approvers = approvers;
+    this.referencePrice = referencePrice;
+    this.wrapperFactor = wrapperFactor;
+    this.attestations = attestations;
   }
 
   @Override
@@ -162,24 +181,6 @@ public final class FixingProposal extends Template {
   }
 
   /**
-   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseFinalizeFixing} instead
-   */
-  @Deprecated
-  public Update<Exercised<NavFixing.ContractId>> createAndExerciseFinalizeFixing(
-      FinalizeFixing arg) {
-    return createAnd().exerciseFinalizeFixing(arg);
-  }
-
-  /**
-   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseFinalizeFixing} instead
-   */
-  @Deprecated
-  public Update<Exercised<NavFixing.ContractId>> createAndExerciseFinalizeFixing(
-      List<String> publishTo) {
-    return createAndExerciseFinalizeFixing(new FinalizeFixing(publishTo));
-  }
-
-  /**
    * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseWithdrawFixing} instead
    */
   @Deprecated
@@ -193,6 +194,23 @@ public final class FixingProposal extends Template {
   @Deprecated
   public Update<Exercised<Unit>> createAndExerciseWithdrawFixing() {
     return createAndExerciseWithdrawFixing(new WithdrawFixing());
+  }
+
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseConfirmWithChecks} instead
+   */
+  @Deprecated
+  public Update<Exercised<ContractId>> createAndExerciseConfirmWithChecks(ConfirmWithChecks arg) {
+    return createAnd().exerciseConfirmWithChecks(arg);
+  }
+
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseConfirmWithChecks} instead
+   */
+  @Deprecated
+  public Update<Exercised<ContractId>> createAndExerciseConfirmWithChecks(String member,
+      SignerCheck check) {
+    return createAndExerciseConfirmWithChecks(new ConfirmWithChecks(member, check));
   }
 
   /**
@@ -211,13 +229,32 @@ public final class FixingProposal extends Template {
     return createAndExerciseArchive(new Archive());
   }
 
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseFinalizeFixing} instead
+   */
+  @Deprecated
+  public Update<Exercised<NavFixing.ContractId>> createAndExerciseFinalizeFixing(
+      FinalizeFixing arg) {
+    return createAnd().exerciseFinalizeFixing(arg);
+  }
+
+  /**
+   * @deprecated since Daml 2.3.0; use {@code createAnd().exerciseFinalizeFixing} instead
+   */
+  @Deprecated
+  public Update<Exercised<NavFixing.ContractId>> createAndExerciseFinalizeFixing(
+      List<String> publishTo) {
+    return createAndExerciseFinalizeFixing(new FinalizeFixing(publishTo));
+  }
+
   public static Update<Created<ContractId>> create(String admin, List<String> members,
       Long threshold, String auditor, String proposer, String instrumentId, String cashInstrument,
       String session, BigDecimal price, String rationale, BigDecimal ratePerAnnum, String dayCount,
-      Instant accrualFrom, List<String> approvers) {
+      Instant accrualFrom, List<String> approvers, Optional<BigDecimal> referencePrice,
+      Optional<BigDecimal> wrapperFactor, Optional<List<SignerCheck>> attestations) {
     return new FixingProposal(admin, members, threshold, auditor, proposer, instrumentId,
-        cashInstrument, session, price, rationale, ratePerAnnum, dayCount, accrualFrom,
-        approvers).create();
+        cashInstrument, session, price, rationale, ratePerAnnum, dayCount, accrualFrom, approvers,
+        referencePrice, wrapperFactor, attestations).create();
   }
 
   @Override
@@ -235,7 +272,7 @@ public final class FixingProposal extends Template {
   }
 
   public DamlRecord toValue() {
-    ArrayList<DamlRecord.Field> fields = new ArrayList<DamlRecord.Field>(14);
+    ArrayList<DamlRecord.Field> fields = new ArrayList<DamlRecord.Field>(17);
     fields.add(new DamlRecord.Field("admin", new Party(this.admin)));
     fields.add(new DamlRecord.Field("members", this.members.stream().collect(DamlCollectors.toDamlList(v$0 -> new Party(v$0)))));
     fields.add(new DamlRecord.Field("threshold", new Int64(this.threshold)));
@@ -250,6 +287,9 @@ public final class FixingProposal extends Template {
     fields.add(new DamlRecord.Field("dayCount", new Text(this.dayCount)));
     fields.add(new DamlRecord.Field("accrualFrom", Timestamp.fromInstant(this.accrualFrom)));
     fields.add(new DamlRecord.Field("approvers", this.approvers.stream().collect(DamlCollectors.toDamlList(v$0 -> new Party(v$0)))));
+    fields.add(new DamlRecord.Field("referencePrice", DamlOptional.of(this.referencePrice.map(v$0 -> new Numeric(v$0)))));
+    fields.add(new DamlRecord.Field("wrapperFactor", DamlOptional.of(this.wrapperFactor.map(v$0 -> new Numeric(v$0)))));
+    fields.add(new DamlRecord.Field("attestations", DamlOptional.of(this.attestations.map(v$0 -> v$0.stream().collect(DamlCollectors.toDamlList(v$1 -> v$1.toValue()))))));
     return new DamlRecord(fields);
   }
 
@@ -257,7 +297,7 @@ public final class FixingProposal extends Template {
       IllegalArgumentException {
     return value$ -> {
       Value recordValue$ = value$;
-      List<DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(14,0, recordValue$);
+      List<DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(17,3, recordValue$);
       String admin = PrimitiveValueDecoders.fromParty.decode(fields$.get(0).getValue());
       List<String> members = PrimitiveValueDecoders.fromList(PrimitiveValueDecoders.fromParty)
           .decode(fields$.get(1).getValue());
@@ -275,14 +315,21 @@ public final class FixingProposal extends Template {
       Instant accrualFrom = PrimitiveValueDecoders.fromTimestamp.decode(fields$.get(12).getValue());
       List<String> approvers = PrimitiveValueDecoders.fromList(PrimitiveValueDecoders.fromParty)
           .decode(fields$.get(13).getValue());
+      Optional<BigDecimal> referencePrice = PrimitiveValueDecoders.fromOptional(
+            PrimitiveValueDecoders.fromNumeric).decode(fields$.get(14).getValue());
+      Optional<BigDecimal> wrapperFactor = PrimitiveValueDecoders.fromOptional(
+            PrimitiveValueDecoders.fromNumeric).decode(fields$.get(15).getValue());
+      Optional<List<SignerCheck>> attestations = PrimitiveValueDecoders.fromOptional(
+            PrimitiveValueDecoders.fromList(SignerCheck.valueDecoder()))
+          .decode(fields$.get(16).getValue());
       return new FixingProposal(admin, members, threshold, auditor, proposer, instrumentId,
-          cashInstrument, session, price, rationale, ratePerAnnum, dayCount, accrualFrom,
-          approvers);
+          cashInstrument, session, price, rationale, ratePerAnnum, dayCount, accrualFrom, approvers,
+          referencePrice, wrapperFactor, attestations);
     } ;
   }
 
   public static JsonLfDecoder<FixingProposal> jsonDecoder() {
-    return JsonLfDecoders.record(Arrays.asList("admin", "members", "threshold", "auditor", "proposer", "instrumentId", "cashInstrument", "session", "price", "rationale", "ratePerAnnum", "dayCount", "accrualFrom", "approvers"), name -> {
+    return JsonLfDecoders.record(Arrays.asList("admin", "members", "threshold", "auditor", "proposer", "instrumentId", "cashInstrument", "session", "price", "rationale", "ratePerAnnum", "dayCount", "accrualFrom", "approvers", "referencePrice", "wrapperFactor", "attestations"), name -> {
           switch (name) {
             case "admin": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
             case "members": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(1, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.list(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party));
@@ -298,10 +345,13 @@ public final class FixingProposal extends Template {
             case "dayCount": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(11, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text);
             case "accrualFrom": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(12, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.timestamp);
             case "approvers": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(13, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.list(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party));
+            case "referencePrice": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(14, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10)), java.util.Optional.empty());
+            case "wrapperFactor": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(15, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10)), java.util.Optional.empty());
+            case "attestations": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(16, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.list(new com.lucilla.settlement.model.governance.SignerCheck.JsonDecoder$().get())), java.util.Optional.empty());
             default: return null;
           }
         }
-        , (Object[] args) -> new FixingProposal(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6]), JsonLfDecoders.cast(args[7]), JsonLfDecoders.cast(args[8]), JsonLfDecoders.cast(args[9]), JsonLfDecoders.cast(args[10]), JsonLfDecoders.cast(args[11]), JsonLfDecoders.cast(args[12]), JsonLfDecoders.cast(args[13])));
+        , (Object[] args) -> new FixingProposal(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6]), JsonLfDecoders.cast(args[7]), JsonLfDecoders.cast(args[8]), JsonLfDecoders.cast(args[9]), JsonLfDecoders.cast(args[10]), JsonLfDecoders.cast(args[11]), JsonLfDecoders.cast(args[12]), JsonLfDecoders.cast(args[13]), JsonLfDecoders.cast(args[14]), JsonLfDecoders.cast(args[15]), JsonLfDecoders.cast(args[16])));
   }
 
   public static FixingProposal fromJson(String json) throws JsonLfDecoder.Error {
@@ -323,7 +373,10 @@ public final class FixingProposal extends Template {
         JsonLfEncoders.Field.of("ratePerAnnum", apply(JsonLfEncoders::numeric, ratePerAnnum)),
         JsonLfEncoders.Field.of("dayCount", apply(JsonLfEncoders::text, dayCount)),
         JsonLfEncoders.Field.of("accrualFrom", apply(JsonLfEncoders::timestamp, accrualFrom)),
-        JsonLfEncoders.Field.of("approvers", apply(JsonLfEncoders.list(JsonLfEncoders::party), approvers)));
+        JsonLfEncoders.Field.of("approvers", apply(JsonLfEncoders.list(JsonLfEncoders::party), approvers)),
+        JsonLfEncoders.Field.of("referencePrice", apply(JsonLfEncoders.optional(JsonLfEncoders::numeric), referencePrice)),
+        JsonLfEncoders.Field.of("wrapperFactor", apply(JsonLfEncoders.optional(JsonLfEncoders::numeric), wrapperFactor)),
+        JsonLfEncoders.Field.of("attestations", apply(JsonLfEncoders.optional(JsonLfEncoders.list(SignerCheck::jsonEncoder)), attestations)));
   }
 
   public static ContractFilter<Contract> contractFilter() {
@@ -353,22 +406,27 @@ public final class FixingProposal extends Template {
         Objects.equals(this.ratePerAnnum, other.ratePerAnnum) &&
         Objects.equals(this.dayCount, other.dayCount) &&
         Objects.equals(this.accrualFrom, other.accrualFrom) &&
-        Objects.equals(this.approvers, other.approvers);
+        Objects.equals(this.approvers, other.approvers) &&
+        Objects.equals(this.referencePrice, other.referencePrice) &&
+        Objects.equals(this.wrapperFactor, other.wrapperFactor) &&
+        Objects.equals(this.attestations, other.attestations);
   }
 
   @Override
   public int hashCode() {
     return Objects.hash(this.admin, this.members, this.threshold, this.auditor, this.proposer,
         this.instrumentId, this.cashInstrument, this.session, this.price, this.rationale,
-        this.ratePerAnnum, this.dayCount, this.accrualFrom, this.approvers);
+        this.ratePerAnnum, this.dayCount, this.accrualFrom, this.approvers, this.referencePrice,
+        this.wrapperFactor, this.attestations);
   }
 
   @Override
   public String toString() {
-    return String.format("com.lucilla.settlement.model.governance.FixingProposal(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+    return String.format("com.lucilla.settlement.model.governance.FixingProposal(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         this.admin, this.members, this.threshold, this.auditor, this.proposer, this.instrumentId,
         this.cashInstrument, this.session, this.price, this.rationale, this.ratePerAnnum,
-        this.dayCount, this.accrualFrom, this.approvers);
+        this.dayCount, this.accrualFrom, this.approvers, this.referencePrice, this.wrapperFactor,
+        this.attestations);
   }
 
   public static final class ContractId extends com.daml.ledger.javaapi.data.codegen.ContractId<FixingProposal> implements Exercises<ExerciseCommand> {
@@ -418,14 +476,6 @@ public final class FixingProposal extends Template {
       return exerciseConfirm(new Confirm(member));
     }
 
-    default Update<Exercised<NavFixing.ContractId>> exerciseFinalizeFixing(FinalizeFixing arg) {
-      return makeExerciseCmd(CHOICE_FinalizeFixing, arg);
-    }
-
-    default Update<Exercised<NavFixing.ContractId>> exerciseFinalizeFixing(List<String> publishTo) {
-      return exerciseFinalizeFixing(new FinalizeFixing(publishTo));
-    }
-
     default Update<Exercised<Unit>> exerciseWithdrawFixing(WithdrawFixing arg) {
       return makeExerciseCmd(CHOICE_WithdrawFixing, arg);
     }
@@ -434,12 +484,29 @@ public final class FixingProposal extends Template {
       return exerciseWithdrawFixing(new WithdrawFixing());
     }
 
+    default Update<Exercised<ContractId>> exerciseConfirmWithChecks(ConfirmWithChecks arg) {
+      return makeExerciseCmd(CHOICE_ConfirmWithChecks, arg);
+    }
+
+    default Update<Exercised<ContractId>> exerciseConfirmWithChecks(String member,
+        SignerCheck check) {
+      return exerciseConfirmWithChecks(new ConfirmWithChecks(member, check));
+    }
+
     default Update<Exercised<Unit>> exerciseArchive(Archive arg) {
       return makeExerciseCmd(CHOICE_Archive, arg);
     }
 
     default Update<Exercised<Unit>> exerciseArchive() {
       return exerciseArchive(new Archive());
+    }
+
+    default Update<Exercised<NavFixing.ContractId>> exerciseFinalizeFixing(FinalizeFixing arg) {
+      return makeExerciseCmd(CHOICE_FinalizeFixing, arg);
+    }
+
+    default Update<Exercised<NavFixing.ContractId>> exerciseFinalizeFixing(List<String> publishTo) {
+      return exerciseFinalizeFixing(new FinalizeFixing(publishTo));
     }
   }
 

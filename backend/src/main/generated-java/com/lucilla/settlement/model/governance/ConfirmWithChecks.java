@@ -21,48 +21,55 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
-public class ConfirmRestatement extends DamlRecord<ConfirmRestatement> {
+public class ConfirmWithChecks extends DamlRecord<ConfirmWithChecks> {
   public static final String _packageId = "527a2b50430ceabba40484b4518c4d390781e8db6c016ab3ec5528eea36766ea";
 
   public final String member;
 
-  public ConfirmRestatement(String member) {
+  public final SignerCheck check;
+
+  public ConfirmWithChecks(String member, SignerCheck check) {
     this.member = member;
+    this.check = check;
   }
 
-  public static ValueDecoder<ConfirmRestatement> valueDecoder() throws IllegalArgumentException {
+  public static ValueDecoder<ConfirmWithChecks> valueDecoder() throws IllegalArgumentException {
     return value$ -> {
       Value recordValue$ = value$;
-      List<com.daml.ledger.javaapi.data.DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(1,0,
+      List<com.daml.ledger.javaapi.data.DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(2,0,
           recordValue$);
       String member = PrimitiveValueDecoders.fromParty.decode(fields$.get(0).getValue());
-      return new ConfirmRestatement(member);
+      SignerCheck check = SignerCheck.valueDecoder().decode(fields$.get(1).getValue());
+      return new ConfirmWithChecks(member, check);
     } ;
   }
 
   public com.daml.ledger.javaapi.data.DamlRecord toValue() {
-    ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field> fields = new ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field>(1);
+    ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field> fields = new ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field>(2);
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("member", new Party(this.member)));
+    fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("check", this.check.toValue()));
     return new com.daml.ledger.javaapi.data.DamlRecord(fields);
   }
 
-  public static JsonLfDecoder<ConfirmRestatement> jsonDecoder() {
-    return JsonLfDecoders.record(Arrays.asList("member"), name -> {
+  public static JsonLfDecoder<ConfirmWithChecks> jsonDecoder() {
+    return JsonLfDecoders.record(Arrays.asList("member", "check"), name -> {
           switch (name) {
             case "member": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
+            case "check": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(1, new com.lucilla.settlement.model.governance.SignerCheck.JsonDecoder$().get());
             default: return null;
           }
         }
-        , (Object[] args) -> new ConfirmRestatement(JsonLfDecoders.cast(args[0])));
+        , (Object[] args) -> new ConfirmWithChecks(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1])));
   }
 
-  public static ConfirmRestatement fromJson(String json) throws JsonLfDecoder.Error {
+  public static ConfirmWithChecks fromJson(String json) throws JsonLfDecoder.Error {
     return jsonDecoder().decode(new JsonLfReader(json));
   }
 
   public JsonLfEncoder jsonEncoder() {
     return JsonLfEncoders.record(
-        JsonLfEncoders.Field.of("member", apply(JsonLfEncoders::party, member)));
+        JsonLfEncoders.Field.of("member", apply(JsonLfEncoders::party, member)),
+        JsonLfEncoders.Field.of("check", apply(SignerCheck::jsonEncoder, check)));
   }
 
   @Override
@@ -73,29 +80,29 @@ public class ConfirmRestatement extends DamlRecord<ConfirmRestatement> {
     if (object == null) {
       return false;
     }
-    if (!(object instanceof ConfirmRestatement)) {
+    if (!(object instanceof ConfirmWithChecks)) {
       return false;
     }
-    ConfirmRestatement other = (ConfirmRestatement) object;
-    return Objects.equals(this.member, other.member);
+    ConfirmWithChecks other = (ConfirmWithChecks) object;
+    return Objects.equals(this.member, other.member) && Objects.equals(this.check, other.check);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(this.member);
+    return Objects.hash(this.member, this.check);
   }
 
   @Override
   public String toString() {
-    return String.format("com.lucilla.settlement.model.governance.ConfirmRestatement(%s)",
-        this.member);
+    return String.format("com.lucilla.settlement.model.governance.ConfirmWithChecks(%s, %s)",
+        this.member, this.check);
   }
 
   /**
    * Proxies the jsonDecoder(...) static method, to provide an alternative calling synatx, which avoids some cases in generated code where javac gets confused
    */
   public static class JsonDecoder$ {
-    public JsonLfDecoder<ConfirmRestatement> get() {
+    public JsonLfDecoder<ConfirmWithChecks> get() {
       return jsonDecoder();
     }
   }

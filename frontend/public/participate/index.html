@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CrossDesk — Contribute to a Fixing</title>
+<meta name="description" content="CrossDesk publishes a daily attested fixing on Canton Network. Information for prospective contributors.">
+<style>
+/* ============================================================================
+   /participate/ — the page a prospective committee member reads.
+   Deliberately NOT the pitch deck: no slides, no animation, no persuasion
+   furniture. A benchmark administrator's information page reads like a
+   document, because the reader is deciding whether to put their name on a
+   number. Palette matches the product so the two read as one thing.
+   ========================================================================== */
+:root{
+  --bg:#0A0B0F; --surface:#12141A; --surface2:#171A21;
+  --border:#1E212B; --border2:#262A35;
+  --text:#E8EAED; --muted:#8A909C; --faint:#5B616D;
+  --accent:#4C82F7; --gold:#E6B450; --buy:#3E9B72; --sell:#C65B5B;
+  --ui:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --mono:ui-monospace,'SF Mono','Cascadia Code',Menlo,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--ui);line-height:1.6;font-size:16px}
+
+.wrap{max-width:760px;margin:0 auto;padding:0 24px}
+header{border-bottom:1px solid var(--border2);padding:56px 0 32px;margin-bottom:44px}
+.kicker{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--gold);margin-bottom:14px}
+h1{font-size:34px;line-height:1.15;letter-spacing:-.02em;font-weight:700;margin-bottom:14px}
+.lede{color:var(--muted);font-size:18px;max-width:62ch}
+
+h2{font-size:20px;font-weight:700;margin:52px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--border);letter-spacing:-.01em}
+h3{font-size:15px;font-weight:700;margin:26px 0 8px;color:var(--text)}
+p{margin-bottom:14px;color:#C9CDD4}
+strong{color:var(--text);font-weight:600}
+a{color:var(--accent);text-decoration:none;border-bottom:1px solid rgba(76,130,247,.35)}
+a:hover{border-bottom-color:var(--accent)}
+ul{margin:0 0 16px 20px}
+li{margin-bottom:7px;color:#C9CDD4}
+code{font-family:var(--mono);font-size:13px;background:var(--surface2);padding:2px 6px;border-radius:3px;color:var(--gold)}
+
+table{width:100%;border-collapse:collapse;margin:18px 0 22px;font-size:14px}
+th{text-align:left;font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+   color:var(--faint);font-weight:600;padding:9px 12px;border-bottom:1px solid var(--border2)}
+td{padding:11px 12px;border-bottom:1px solid var(--border);vertical-align:top;color:#C9CDD4}
+tr:last-child td{border-bottom:none}
+
+.box{background:var(--surface);border:1px solid var(--border2);border-radius:6px;padding:20px 22px;margin:22px 0}
+.box.warn{border-left:3px solid var(--gold)}
+.box.stop{border-left:3px solid var(--sell)}
+.box.good{border-left:3px solid var(--buy)}
+.box h3{margin-top:0}
+.box p:last-child{margin-bottom:0}
+
+.stage{display:grid;grid-template-columns:1fr auto;gap:10px 18px;font-size:14px;margin:18px 0 24px}
+.stage div{padding:9px 0;border-bottom:1px solid var(--border)}
+.stage .y{color:var(--buy);font-family:var(--mono);text-align:right}
+.stage .n{color:var(--sell);font-family:var(--mono);text-align:right}
+
+.cta{display:inline-block;background:var(--accent);color:#fff;padding:12px 22px;border-radius:5px;
+     font-weight:600;font-size:15px;border:none;margin:6px 10px 6px 0}
+.cta:hover{background:#3d6fd9}
+.cta.ghost{background:transparent;border:1px solid var(--border2);color:var(--text)}
+
+footer{border-top:1px solid var(--border2);margin-top:64px;padding:28px 0 64px;
+       color:var(--faint);font-size:13px;font-family:var(--mono)}
+footer p{color:var(--faint);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">Canton Network · Information for prospective contributors</div>
+  <h1>Contribute to a CrossDesk fixing</h1>
+  <p class="lede">A daily official price for tokenised assets on Canton, produced by a defined
+  process and signed by several independent parties instead of asserted by one.</p>
+</header>
+
+<div class="box stop">
+  <h3>Read this first — what stage this is at</h3>
+  <div class="stage">
+    <div>Software built and tested</div><div class="y">YES — 123 Daml scripts, 0 failures</div>
+    <div>A fixing published</div><div class="n">NOT YET</div>
+    <div>A contributor panel assembled</div><div class="n">NOT YET</div>
+    <div>Anyone using it</div><div class="n">NOBODY</div>
+    <div>Outstanding dependency</div><div class="n">A Canton participant node</div>
+  </div>
+  <p>Every one of those is checkable, so it is stated here rather than discovered later.
+  <strong>You would be among the first contributors.</strong></p>
+</div>
+
+<h2>Why a fixing exists for something that already trades</h2>
+
+<p>An actively traded asset has thousands of prices — one per venue, changing continuously.
+<strong>A contract can reference only one.</strong> Settlement needs a single number, struck at a
+defined moment, that both parties agreed in advance and neither can afterwards move.</p>
+
+<p>This is why EUR/USD trades every millisecond and the ECB still publishes one daily reference
+rate; why gold trades continuously and the LBMA auction still runs twice a day; and why Bitcoin
+trades around the clock and CME still settles every future on one daily fixing.</p>
+
+<p><strong>Continuous trading is the reason fixings exist, not the reason they do not.</strong></p>
+
+<h2>What you would actually do</h2>
+
+<h3>1. Contribute</h3>
+<p>For the observation window, from your own records: the <strong>volume-weighted average
+price</strong> of executed transactions, and the <strong>total executed volume</strong>. If nothing
+traded in a partition, you contribute nothing for it. You do not estimate.</p>
+
+<div class="box good">
+  <p><strong>This is a lookup, not a judgement.</strong> You are not asked what you believe the
+  instrument is worth, and nothing here requires you to change your own internal valuation policy.
+  A conservative marker and an aggressive marker can contribute to the same fixing without either
+  changing anything.</p>
+</div>
+
+<h3>2. Confirm</h3>
+<p>One member proposes a fixing carrying the price, the recipe, and the <strong>rationale</strong> —
+the method statement showing how the number was derived. Others confirm.</p>
+
+<p>By confirming you attest only that <strong>(a)</strong> your own contribution is recorded
+correctly, and <strong>(b)</strong> the published aggregation rule was applied correctly.
+<strong>You do not attest that you agree with the value as a matter of your own valuation
+policy.</strong></p>
+
+<table>
+  <tr><th>Commitment</th><th>What it is</th></tr>
+  <tr><td>Daily</td><td>Confirm with your own key. Minutes</td></tr>
+  <tr><td>Quarterly</td><td>Oversight review</td></tr>
+  <tr><td>Integration</td><td><strong>None</strong> for the shadow run</td></tr>
+  <tr><td>Cost</td><td><strong>None</strong></td></tr>
+  <tr><td>Binding</td><td><strong>Nothing.</strong> Either side may stop at any time</td></tr>
+</table>
+
+<div class="box good">
+  <h3>Your contribution stays private</h3>
+  <p>Contributions are disclosed to the committee and the auditor only. <strong>The fixing is
+  public; the contributions that produced it are not.</strong> This is enforced by Canton's
+  signatory model, not by an API filter and not by policy.</p>
+  <p><strong>You do not publish your own flow in order to participate</strong> — which is not
+  available in a conventional benchmark, where contributing means handing trading data to an
+  administrator that may republish it.</p>
+</div>
+
+<h2>Which seat you would hold</h2>
+
+<p>A committee whose members are all asked <em>&ldquo;do you agree this is the right price?&rdquo;</em>
+becomes a rubber stamp within a fortnight &mdash; not from bad faith, from economics. Contributors are
+<strong>not paid</strong>, and an unpaid member asked for a daily act of judgement will start clicking
+yes. So the question put to you is narrowed until it is nearly free to answer:</p>
+
+<div class="box good">
+  <p><strong>No contributor is ever asked for an opinion about the price. Each asserts a fact only
+  it can see.</strong> Two things follow: signing is cheap enough to automate, and a refusal is
+  specific &mdash; you decline by naming a condition that failed, not by disagreeing.</p>
+</div>
+
+<p>The three seats are composed to <strong>want different answers</strong>, which is what makes the
+number worth anything. An issuer wants the wrapper marked at par; a lender wants it marked
+conservatively; a venue wants it marked where it actually traded.</p>
+
+<table>
+  <tr><th>Seat</th><th>What only you can see</th><th>What you assert</th></tr>
+  <tr>
+    <td><strong>Issuer</strong><br><span class="muted">wrapped-asset issuer</span></td>
+    <td>Whether the wrapper can actually be redeemed right now</td>
+    <td>Attestor quorum is met &middot; proof-of-reserve is under 24h old &middot; reserves cover
+        supply &middot; no redemption is stuck past its window</td>
+  </tr>
+  <tr>
+    <td><strong>Lender</strong><br><span class="muted">collateral platform</span></td>
+    <td>Whether you will carry this number on your own book</td>
+    <td>The mark is within your declared tolerance of your own valuation &middot; no liquidation you
+        ran cleared materially away from it &middot; <strong>you will mark your own collateral
+        here</strong></td>
+  </tr>
+  <tr>
+    <td><strong>Venue</strong><br><span class="muted">where the asset trades</span></td>
+    <td>The transaction data &mdash; the only observed prints for the wrapped asset</td>
+    <td>The mark sits inside the range your book traded &middot; the spread is inside tolerance
+        &middot; volume met the declared minimum</td>
+  </tr>
+</table>
+
+<div class="box warn">
+  <p><strong>The venue's assertion is enforced by the ledger, not by policy.</strong> A venue
+  supplying a traded range that does not contain the proposed price is <em>refused on-chain</em>,
+  as is an inverted range or a half-specified one. The one seat holding real transaction data
+  cannot rubber-stamp even if it wants to.</p>
+  <p class="muted">The issuer's and lender's assertions are <strong>recorded but not
+  machine-checked</strong> &mdash; they rest on your own systems, and on a false attestation being
+  permanent, attributable, and made against your own money. We would rather state that asymmetry
+  than let you discover it.</p>
+</div>
+
+<h3>The wrapper question, which is the whole point</h3>
+
+<p>CF Benchmarks prices Bitcoin. It has never priced <em>wrapped</em> Bitcoin. A wrapped asset is a
+claim on something priced elsewhere, and its value is the benchmark print multiplied by the
+market's confidence that redemption works. Marking it at par is not a fact &mdash; it is an
+assertion, and it is the assertion that has broken every wrapped asset that ever broke.</p>
+
+<p>So the benchmark print and the par factor are <strong>separate signed fields</strong>, and the
+struck price is computed as their product. That is what lets you decline meaningfully: you are not
+disputing the price of Bitcoin, you are declining to attest par, and the record shows which.</p>
+
+<h3>Automating your seat</h3>
+
+<p>Every check above is a query against your own systems. None requires a human to form a view, and
+you should run a checker that confirms automatically when all your conditions pass and
+<strong>halts and escalates when one does not</strong>. That is not a convenience &mdash; a seat that
+needs daily human attention is a seat that is dishonest by month six.</p>
+
+<div class="box stop">
+  <p><strong>A checker must never auto-confirm on a failed condition, and never widen its own
+  tolerances to make a check pass.</strong> Both silently convert this back into a rubber stamp,
+  and both are invisible on the ledger because the signature looks identical.</p>
+</div>
+
+<h2>How the number is determined</h2>
+
+<p>A waterfall, applied in order. <strong>The first tier that produces a value is the fixing, and
+the tier used is published with it.</strong></p>
+
+<table>
+  <tr><th>Tier</th><th>Method</th><th>Requires</th></tr>
+  <tr><td><strong>1</strong></td><td>Sealed auction uniform price</td>
+      <td>Two orders, two distinct parties. <strong>One participant can never set a fixing</strong></td></tr>
+  <tr><td><strong>2</strong></td><td>Contributed inputs, aggregated</td>
+      <td>Three contributions from three distinct contributors</td></tr>
+  <tr><td><strong>3</strong></td><td>Carry forward, <strong>flagged</strong></td>
+      <td>Nothing. Three consecutive triggers an oversight review</td></tr>
+</table>
+
+<p><strong>Observation window:</strong> one hour ending at the strike, in twelve five-minute
+partitions. Volume-weighted median within each partition; equal-weighted mean across them. This
+follows the CME CF Reference Rate construction: partitioning defeats volume-based manipulation,
+the median defeats outliers, and equal weighting stops late volume dominating. A short window —
+the final five minutes alone, for instance — is deliberately <strong>not</strong> used, because a
+short window is inexpensive to move.</p>
+
+<h2>Governance</h2>
+
+<div class="box warn">
+  <p><strong>The administrator does not trade the instruments it prices.</strong> A hard constraint
+  on the business, not a preference. CrossDesk operates no venue and takes no position in any
+  instrument for which it publishes a fixing.</p>
+</div>
+
+<ul>
+  <li><strong>N</strong> contributors are named on-ledger. <strong>K</strong> signatures are required.
+      <strong>Both are public.</strong></li>
+  <li><strong>No single party, and no single class of party, may reach <strong>K</strong> alone or
+      block <strong>K</strong> alone.</strong> An issuer may not reach quorum using only parties it
+      controls.</li>
+  <li><strong>Every signature is attributable and permanent.</strong> The signatory set of the
+      attestation contract <em>is</em> the attestor list — a quorum cannot be claimed that does not
+      exist.</li>
+  <li>A correction requires the <strong>same quorum</strong> as the original. The wrong number is
+      never deleted, only superseded.</li>
+  <li><strong>Anyone may challenge a fixing</strong>, not only contributors. Outcomes are published.</li>
+  <li>Any methodology change takes effect <strong>30 days after publication</strong>, with minutes
+      recording who voted which way.</li>
+</ul>
+
+<h2>The proposed pilot</h2>
+
+<p><strong>A 90-day shadow run.</strong> A daily fixing struck in parallel with whatever you use
+now. Informational only — <strong>not for settlement or valuation</strong>. No fee, no
+integration, and either side may stop at any time.</p>
+
+<p>If the shadow fixing agrees with your existing mark, you have gained an attributable,
+independently-signed record at no cost. <strong>If it diverges, you have learned something worth
+knowing about a number you currently rely on.</strong></p>
+
+<h2>The documents</h2>
+
+<p>The full Participant Information Pack sets out governance, methodology, corrections and known
+limitations. The pilot letter is one page and non-binding.</p>
+
+<p style="margin-top:22px">
+  <a class="cta" href="mailto:s.borjas@lucilla.ca?subject=CrossDesk%20fixing%20%E2%80%94%20participant%20pack">Request the participant pack</a>
+  <a class="cta ghost" href="/pitch/">What CrossDesk is</a>
+</p>
+
+<h2>Known limitations</h2>
+
+<p>Listed so you do not have to find them.</p>
+
+<ul>
+  <li><strong>No live fixing has been published, and nobody uses this.</strong></li>
+  <li><strong>The panel does not exist yet.</strong></li>
+  <li><strong>A participant node is required and not yet secured.</strong></li>
+  <li>Oversight and contribution are currently the same parties — separate functions, same people,
+      with the intention to separate as the panel grows.</li>
+  <li>Cessation procedure is specified but not implemented.</li>
+  <li>Corporate actions — splits, dividends, mergers — are not yet addressed.</li>
+  <li>The restatement window is policy, not enforced on-ledger.</li>
+  <li><strong>The venue operator is a single party holding a single key.</strong> The intended
+      remedy is a threshold-governed decentralised party; this is designed but untested, and the
+      effect on write latency has not been measured.</li>
+</ul>
+
+<footer>
+  <p><strong style="color:var(--muted)">CrossDesk</strong> · Sebastian Borjas ·
+     <a href="mailto:s.borjas@lucilla.ca">s.borjas@lucilla.ca</a></p>
+  <p style="margin-top:10px">CrossDesk is not an incorporated entity and is not a registered or
+  authorised benchmark administrator in any jurisdiction. Nothing on this page is a price, a
+  valuation, a benchmark, investment advice, or an offer of any financial product or service.</p>
+</footer>
+
+</div>
+</body>
+</html>

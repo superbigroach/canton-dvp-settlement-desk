@@ -1260,6 +1260,61 @@ public class SettlementController {
     }
 
     /**
+     * A member proposes a WRAPPED-ASSET fix — the benchmark print and the par ratio,
+     * attested as separate fields.
+     *
+     * <p>A SEPARATE ENDPOINT FROM {@code /propose}, exactly as {@code ProposeWrappedFixing}
+     * is a separate choice. The plain path never asks the wrapper question, which is
+     * correct for a native asset and wrong for cBTC or cETH. Here it cannot be skipped:
+     * the factor is a field, so an issuer that will not attest par declines in a way the
+     * record can show. See {@code docs/SIGNER_PROTOCOL.md} §2a.
+     */
+    @PostMapping("/committee/{cid}/propose-wrapped")
+    public ResponseEntity<Dtos.WrappedFixingProposalResponse> proposeWrappedFixing(
+            @PathVariable String cid, @Valid @RequestBody Dtos.ProposeWrappedFixingRequest req) {
+        String proposer = ledger.resolveParty(req.proposer());
+        String cash = blankTo(req.cashInstrument(), "USDC");
+        String sess = LedgerCommands.session(req.session());
+        var cmd = LedgerCommands.proposeWrappedFixing(cid, proposer, req.instrumentId(),
+                cash, sess, req.benchmarkPrice(), req.parFactor(), req.rationale());
+        String propCid = ledger.submitForCreated(proposer, cmd, LedgerCommands.fixingProposalTemplateId());
+
+        BigDecimal strike = req.benchmarkPrice().multiply(req.parFactor());
+        // Publish the discount in basis points as well as the raw factor. A factor of
+        // 0.998 is easy to read past; "20 bp below par" is the number a risk committee
+        // actually argues about, and it is the whole reason this endpoint exists.
+        BigDecimal discountBps = BigDecimal.ONE.subtract(req.parFactor())
+                .multiply(BigDecimal.valueOf(10000));
+        return created(new Dtos.WrappedFixingProposalResponse(propCid,
+                req.instrumentId(), cash, sess,
+                Accrual.wire(req.benchmarkPrice()), Accrual.wire(req.parFactor()),
+                Accrual.wire(strike), Accrual.wire(discountBps), req.rationale()));
+    }
+
+    /**
+     * Confirm WITH the protocol evidence — which named conditions this member verified,
+     * and for a venue the range its own book traded.
+     *
+     * <p>Behaviourally identical to {@code /confirm}: one more signature, a new proposal
+     * contract id. The difference is what the finished fixing can say afterwards. A
+     * venue supplying a range that does not contain the price is refused ON-LEDGER, so
+     * the one seat holding real transaction data cannot rubber-stamp.
+     */
+    @PostMapping("/fixing/{cid}/confirm-checked")
+    public ResponseEntity<Dtos.CidResponse> confirmFixingWithChecks(
+            @PathVariable String cid, @Valid @RequestBody Dtos.ConfirmWithChecksRequest req) {
+        String member = ledger.resolveParty(req.member());
+        String ref = blankTo(req.protocolRef(), "SIGNER_PROTOCOL v1 " + req.role());
+        String next = ledger.submitForCreated(member,
+                LedgerCommands.confirmFixingWithChecks(cid, member, req.role(), ref,
+                        req.checksPassed(),
+                        Optional.ofNullable(req.observedLow()),
+                        Optional.ofNullable(req.observedHigh())),
+                LedgerCommands.fixingProposalTemplateId());
+        return created(new Dtos.CidResponse(next));
+    }
+
+    /**
      * Finalise a threshold-attested proposal into an official NavFixing (fails with a
      * clear error if fewer than the committee threshold have attested). The fix is
      * disclosed to {@code publishTo} (e.g. the auction venue that will print at it).

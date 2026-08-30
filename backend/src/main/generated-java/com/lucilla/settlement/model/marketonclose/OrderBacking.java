@@ -18,7 +18,7 @@ import java.lang.String;
 import java.util.Arrays;
 
 public abstract class OrderBacking extends Variant<OrderBacking> {
-  public static final String _packageId = "abbcb556af749c83f1afa7694d9aef2854b73e4e26080ad1d301b6b1789b47d1";
+  public static final String _packageId = "527a2b50430ceabba40484b4518c4d390781e8db6c016ab3ec5528eea36766ea";
 
   public OrderBacking() {
   }

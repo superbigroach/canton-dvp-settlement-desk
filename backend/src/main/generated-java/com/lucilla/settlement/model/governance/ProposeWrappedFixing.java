@@ -24,7 +24,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
-public class ProposeFixing extends DamlRecord<ProposeFixing> {
+public class ProposeWrappedFixing extends DamlRecord<ProposeWrappedFixing> {
   public static final String _packageId = "527a2b50430ceabba40484b4518c4d390781e8db6c016ab3ec5528eea36766ea";
 
   public final String proposer;
@@ -35,62 +35,70 @@ public class ProposeFixing extends DamlRecord<ProposeFixing> {
 
   public final String session;
 
-  public final BigDecimal price;
+  public final BigDecimal benchmarkPrice;
+
+  public final BigDecimal parFactor;
 
   public final String rationale;
 
-  public ProposeFixing(String proposer, String instrumentId, String cashInstrument, String session,
-      BigDecimal price, String rationale) {
+  public ProposeWrappedFixing(String proposer, String instrumentId, String cashInstrument,
+      String session, BigDecimal benchmarkPrice, BigDecimal parFactor, String rationale) {
     this.proposer = proposer;
     this.instrumentId = instrumentId;
     this.cashInstrument = cashInstrument;
     this.session = session;
-    this.price = price;
+    this.benchmarkPrice = benchmarkPrice;
+    this.parFactor = parFactor;
     this.rationale = rationale;
   }
 
-  public static ValueDecoder<ProposeFixing> valueDecoder() throws IllegalArgumentException {
+  public static ValueDecoder<ProposeWrappedFixing> valueDecoder() throws IllegalArgumentException {
     return value$ -> {
       Value recordValue$ = value$;
-      List<com.daml.ledger.javaapi.data.DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(6,0,
+      List<com.daml.ledger.javaapi.data.DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(7,0,
           recordValue$);
       String proposer = PrimitiveValueDecoders.fromParty.decode(fields$.get(0).getValue());
       String instrumentId = PrimitiveValueDecoders.fromText.decode(fields$.get(1).getValue());
       String cashInstrument = PrimitiveValueDecoders.fromText.decode(fields$.get(2).getValue());
       String session = PrimitiveValueDecoders.fromText.decode(fields$.get(3).getValue());
-      BigDecimal price = PrimitiveValueDecoders.fromNumeric.decode(fields$.get(4).getValue());
-      String rationale = PrimitiveValueDecoders.fromText.decode(fields$.get(5).getValue());
-      return new ProposeFixing(proposer, instrumentId, cashInstrument, session, price, rationale);
+      BigDecimal benchmarkPrice = PrimitiveValueDecoders.fromNumeric
+          .decode(fields$.get(4).getValue());
+      BigDecimal parFactor = PrimitiveValueDecoders.fromNumeric.decode(fields$.get(5).getValue());
+      String rationale = PrimitiveValueDecoders.fromText.decode(fields$.get(6).getValue());
+      return new ProposeWrappedFixing(proposer, instrumentId, cashInstrument, session,
+          benchmarkPrice, parFactor, rationale);
     } ;
   }
 
   public com.daml.ledger.javaapi.data.DamlRecord toValue() {
-    ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field> fields = new ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field>(6);
+    ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field> fields = new ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field>(7);
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("proposer", new Party(this.proposer)));
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("instrumentId", new Text(this.instrumentId)));
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("cashInstrument", new Text(this.cashInstrument)));
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("session", new Text(this.session)));
-    fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("price", new Numeric(this.price)));
+    fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("benchmarkPrice", new Numeric(this.benchmarkPrice)));
+    fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("parFactor", new Numeric(this.parFactor)));
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("rationale", new Text(this.rationale)));
     return new com.daml.ledger.javaapi.data.DamlRecord(fields);
   }
 
-  public static JsonLfDecoder<ProposeFixing> jsonDecoder() {
-    return JsonLfDecoders.record(Arrays.asList("proposer", "instrumentId", "cashInstrument", "session", "price", "rationale"), name -> {
+  public static JsonLfDecoder<ProposeWrappedFixing> jsonDecoder() {
+    return JsonLfDecoders.record(Arrays.asList("proposer", "instrumentId", "cashInstrument", "session", "benchmarkPrice", "parFactor", "rationale"), name -> {
           switch (name) {
             case "proposer": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
             case "instrumentId": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(1, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text);
             case "cashInstrument": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(2, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text);
             case "session": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(3, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text);
-            case "price": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(4, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10));
-            case "rationale": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(5, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text);
+            case "benchmarkPrice": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(4, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10));
+            case "parFactor": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(5, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10));
+            case "rationale": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(6, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text);
             default: return null;
           }
         }
-        , (Object[] args) -> new ProposeFixing(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5])));
+        , (Object[] args) -> new ProposeWrappedFixing(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6])));
   }
 
-  public static ProposeFixing fromJson(String json) throws JsonLfDecoder.Error {
+  public static ProposeWrappedFixing fromJson(String json) throws JsonLfDecoder.Error {
     return jsonDecoder().decode(new JsonLfReader(json));
   }
 
@@ -100,7 +108,8 @@ public class ProposeFixing extends DamlRecord<ProposeFixing> {
         JsonLfEncoders.Field.of("instrumentId", apply(JsonLfEncoders::text, instrumentId)),
         JsonLfEncoders.Field.of("cashInstrument", apply(JsonLfEncoders::text, cashInstrument)),
         JsonLfEncoders.Field.of("session", apply(JsonLfEncoders::text, session)),
-        JsonLfEncoders.Field.of("price", apply(JsonLfEncoders::numeric, price)),
+        JsonLfEncoders.Field.of("benchmarkPrice", apply(JsonLfEncoders::numeric, benchmarkPrice)),
+        JsonLfEncoders.Field.of("parFactor", apply(JsonLfEncoders::numeric, parFactor)),
         JsonLfEncoders.Field.of("rationale", apply(JsonLfEncoders::text, rationale)));
   }
 
@@ -112,35 +121,37 @@ public class ProposeFixing extends DamlRecord<ProposeFixing> {
     if (object == null) {
       return false;
     }
-    if (!(object instanceof ProposeFixing)) {
+    if (!(object instanceof ProposeWrappedFixing)) {
       return false;
     }
-    ProposeFixing other = (ProposeFixing) object;
+    ProposeWrappedFixing other = (ProposeWrappedFixing) object;
     return Objects.equals(this.proposer, other.proposer) &&
         Objects.equals(this.instrumentId, other.instrumentId) &&
         Objects.equals(this.cashInstrument, other.cashInstrument) &&
-        Objects.equals(this.session, other.session) && Objects.equals(this.price, other.price) &&
+        Objects.equals(this.session, other.session) &&
+        Objects.equals(this.benchmarkPrice, other.benchmarkPrice) &&
+        Objects.equals(this.parFactor, other.parFactor) &&
         Objects.equals(this.rationale, other.rationale);
   }
 
   @Override
   public int hashCode() {
     return Objects.hash(this.proposer, this.instrumentId, this.cashInstrument, this.session,
-        this.price, this.rationale);
+        this.benchmarkPrice, this.parFactor, this.rationale);
   }
 
   @Override
   public String toString() {
-    return String.format("com.lucilla.settlement.model.governance.ProposeFixing(%s, %s, %s, %s, %s, %s)",
-        this.proposer, this.instrumentId, this.cashInstrument, this.session, this.price,
-        this.rationale);
+    return String.format("com.lucilla.settlement.model.governance.ProposeWrappedFixing(%s, %s, %s, %s, %s, %s, %s)",
+        this.proposer, this.instrumentId, this.cashInstrument, this.session, this.benchmarkPrice,
+        this.parFactor, this.rationale);
   }
 
   /**
    * Proxies the jsonDecoder(...) static method, to provide an alternative calling synatx, which avoids some cases in generated code where javac gets confused
    */
   public static class JsonDecoder$ {
-    public JsonLfDecoder<ProposeFixing> get() {
+    public JsonLfDecoder<ProposeWrappedFixing> get() {
       return jsonDecoder();
     }
   }
