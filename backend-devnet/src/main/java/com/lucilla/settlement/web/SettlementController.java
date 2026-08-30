@@ -2,6 +2,7 @@ package com.lucilla.settlement.web;
 
 import com.daml.ledger.javaapi.data.Transaction;
 import com.lucilla.settlement.ledger.Accrual;
+import com.lucilla.settlement.ledger.FixingSchedule;
 import com.lucilla.settlement.ledger.LedgerCommands;
 import com.lucilla.settlement.ledger.LedgerService;
 import com.lucilla.settlement.ledger.SignerProtocol;
@@ -22,6 +23,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -1496,6 +1498,48 @@ public class SettlementController {
                         req.reason(), notify),
                 LedgerCommands.cessationNoticeTemplateId());
         return created(new Dtos.CidResponse(noticeCid));
+    }
+
+    /**
+     * THE DECLARED SCHEDULE, and whether each identifier has actually been struck — §4.
+     *
+     * <p>Strikes are triggered by hand, which meant the published record depended on
+     * somebody remembering; a benchmark whose continuity rests on an operator's diary is
+     * not one a contract can safely reference. This does not auto-strike — inventing a
+     * number the committee never attested is the one thing the design exists to prevent
+     * — it makes "we forgot" a visible, actionable fact and feeds §3's carry-forward.
+     */
+    @GetMapping("/fixing-schedule")
+    public Dtos.FixingScheduleResponse fixingSchedule(@RequestParam(required = false) String actingAs) {
+        String acting = ledger.resolveParty(blankTo(actingAs, "Auditor"));
+        Instant now = Instant.now();
+
+        // The most recent STRIKE (accrualFrom, the attested instant) per identifier —
+        // not finalizedAt, which is when the ledger saw it. A mark struck as of 16:00
+        // and finalised at 16:07 satisfies the 16:00 schedule, and judging it by the
+        // later timestamp would mark the committee's own latency as a missed strike.
+        Map<String, Instant> lastStruck = new java.util.HashMap<>();
+        for (LedgerService.NavFixingView f : ledger.navFixingsVisibleTo(acting)) {
+            String k = FixingSchedule.key(f.instrumentId(), f.session());
+            Instant prev = lastStruck.get(k);
+            if (prev == null || f.accrualFrom().isAfter(prev)) {
+                lastStruck.put(k, f.accrualFrom());
+            }
+        }
+
+        List<Dtos.ScheduleStatusView> views = FixingSchedule
+                .statuses(FixingSchedule.defaults(), now, lastStruck).stream()
+                .map(st -> new Dtos.ScheduleStatusView(
+                        st.declared().instrumentId(), st.declared().session(),
+                        st.declared().strikeAt().toString(), st.declared().zone().getId(),
+                        st.declared().graceMinutes(), st.state().name(),
+                        st.expectedAt().toString(), st.minutesLate(), st.note()))
+                .toList();
+
+        long overdue = views.stream()
+                .filter(v -> FixingSchedule.State.OVERDUE.name().equals(v.state()))
+                .count();
+        return new Dtos.FixingScheduleResponse(views, (int) overdue, now.toString());
     }
 
     /** Every cessation notice this party can see (§8). */

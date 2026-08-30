@@ -289,7 +289,7 @@ route must be resolved first.
 | §3 Tier 2 committee attestation of a recipe | implemented, tested |
 | §3 Tier 2 basket summation | implemented, tested |
 | §3 Tier 3 carry-forward flagging | implemented — a fixing whose strike is more than one interval old is returned with `carriedForward` and `ageOfStrikeHours`. A stale number that looks freshly struck is worse than a gap, because a gap is visible and staleness is not |
-| §4 Scheduled strike at a fixed time | **not implemented** — strikes are triggered manually |
+| §4 Scheduled strike at a fixed time | **detection implemented; striking is still manual.** `FixingSchedule` declares the strike time and zone per identifier and `GET /fixing-schedule` reports PENDING / DUE / OVERDUE / STRUCK / NOT_DUE_TODAY, judged against the ATTESTED strike instant rather than when the ledger saw it. The desk deliberately does **not** auto-strike: a fixing nobody attested is not a cheaper fixing, it is a lie with a timestamp. Business days are approximated as weekdays — no holiday calendar is carried, so a public holiday reads as a missed strike |
 | §5 Gap-rather-than-estimate | implemented (`navPerShare` returns `None` on a missing mark) |
 | §6 Restatement | implemented, tested — `RestatementProposal`, same K-of-N as a fixing. The two-business-day window is policy, not code (see §6) |
 | §5 Wrapper mark as two signed fields (`referencePrice`, `wrapperFactor`) | implemented, tested — reconciliation enforced on-ledger (`testWrapperMarkAttested`) |
@@ -298,6 +298,12 @@ route must be resolved first.
 | §8 Cessation notice | implemented, tested — `CessationNotice`, served through `POST /committee/{cid}/cessation` and readable at `GET /cessations`. The sixty days are enforced **on-ledger** (unlike §6's window, which needs a holiday calendar this package does not carry; sixty *calendar* days needs none). Extensions may only move the date later |
 | §10 Lookup by identifier and date | implemented — `GET /fixings/{instrumentId}` returns the published series with §6's consumer rule applied (`current` is the print nothing supersedes), an optional `asOf` for "which number was in force when my liquidation fired", and any cessation notice covering the identifier. Every fixing now carries its tier, wrapper mark and restatement lineage |
 
-**One gap remains: §4's scheduled strike.** Strikes are still triggered by hand, which means the
-record depends on somebody remembering. Everything else in this table is now either implemented or
-explicitly the fund's decision rather than the administrator's.
+**Where this now stands.** Every gap in the original §12 list is closed or explicitly reassigned.
+What remains is not a missing feature but two honest limits: **striking is still a human act** (by
+design — the schedule reports a missed strike rather than inventing a number nobody attested), and
+**no holiday calendar is carried**, so both the §6 restatement window and §4's business days are
+approximations that are stated rather than hidden.
+
+The two decisions that are deliberately *not* the administrator's: what a fund does when the
+committee cannot reach quorum (its governing documents), and whether an EU- or UK-supervised entity
+may reference these fixings at all (§11).

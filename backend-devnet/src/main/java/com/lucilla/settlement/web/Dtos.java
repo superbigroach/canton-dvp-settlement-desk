@@ -606,6 +606,30 @@ public final class Dtos {
             List<String> notifiedTo) {
     }
 
+    /**
+     * The declared strike schedule and where each identifier stands — §4.
+     *
+     * <p>{@code state} is PENDING / DUE / OVERDUE / STRUCK / NOT_DUE_TODAY. The desk
+     * does NOT auto-strike: a fixing nobody attested is not a cheaper fixing, it is a
+     * lie with a timestamp. What this replaces is the operator's memory.
+     */
+    public record FixingScheduleResponse(
+            List<ScheduleStatusView> identifiers,
+            int overdueCount,
+            String asOf) {
+    }
+
+    public record ScheduleStatusView(
+            String instrumentId, String session,
+            String strikeAt,                 // local time, e.g. "16:00"
+            String zone,                     // e.g. "Europe/London"
+            long graceMinutes,
+            String state,
+            String expectedAt,               // ISO-8601 instant
+            long minutesLate,
+            String note) {
+    }
+
     /** Serve a cessation notice for an identifier (§8). Sixty days is enforced on-ledger. */
     public record PublishCessationRequest(
             @NotBlank String instrumentId,
