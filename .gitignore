@@ -62,3 +62,11 @@ bin/
 # ---- gstack browse tooling ----
 # Session logs from the headless browser skill. Local diagnostics, not project state.
 .gstack/
+
+# ---- demo image build context ----
+# Assembled by `cp` from artefacts the repo already produces (deploy/demo/README).
+# A 42 MB jar and a 3 MB DAR are build output; keeping them out of history is
+# worth more than skipping two commands.
+deploy/demo/app.jar
+deploy/demo/crossdesk.dar
+deploy/demo/sandbox.log

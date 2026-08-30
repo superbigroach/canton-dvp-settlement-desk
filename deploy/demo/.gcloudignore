@@ -1,0 +1,7 @@
+# Cloud Build needs the jar and the DAR, so this file exists ONLY to stop
+# .gitignore being used as the upload filter — which would exclude exactly the
+# two artefacts the image cannot be built without.
+.git
+.gitignore
+README.md
+sandbox.log
