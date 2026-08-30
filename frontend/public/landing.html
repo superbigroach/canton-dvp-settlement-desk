@@ -247,14 +247,17 @@ footer p{max-width:72ch}
       that reason. CrossDesk produces that price, signs it K-of-N, and creates and redeems fund shares
       against it. One ledger, no reconciliation.</p>
     <div class="cta-row">
-      <a class="btn" href="/pitch/">Watch the 3-min demo →</a>
+      <a class="btn" href="/desk/">Try the desk →</a>
+      <a class="btn ghost" href="/pitch/">Watch the 3-min demo</a>
       <a class="btn ghost" href="#pilot">Run a 90-day pilot</a>
     </div>
-    <p class="note">The recorded walkthrough shows the desk switching parties — the venue sees the whole
-      book, each trader sees only its own, the auditor sees none of it. The shared HackCanton
-      participant the hosted desk ran on went offline when the season ended, so
-      <a href="mailto:s.borjas@lucilla.ca?subject=CrossDesk%20live%20demo">ask for a live demo</a> and
-      I will run it from a local node. Source-available, not open source —
+    <p class="note"><strong>The desk is live and you can use it.</strong> It runs against a Canton
+      sandbox carried inside the demo container — a real ledger executing real Daml, seeded with a
+      demo book, not a mock and not a recording. State resets when the instance recycles, so
+      everyone starts from the same book. <strong>That is a sandbox, not a participant</strong>: it
+      proves the software, not the network integration. The shared HackCanton participant the
+      hosted desk originally ran on went offline when the season ended.
+      Source-available, not open source —
       <a href="https://github.com/superbigroach/canton-dvp-settlement-desk">read the code</a>.</p>
   </div>
 </section>

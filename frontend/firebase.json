@@ -10,7 +10,7 @@
       {
         "source": "/api/**",
         "run": {
-          "serviceId": "crossdesk-devnet-api",
+          "serviceId": "crossdesk-demo",
           "region": "us-central1"
         }
       },
