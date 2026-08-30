@@ -189,6 +189,23 @@ td{padding:14px 16px 14px 0;border-bottom:1px solid var(--border);vertical-align
 tr:last-child td{border-bottom:none}
 td.mono{font-family:var(--mono);font-size:0.82rem;color:var(--text);white-space:nowrap}
 
+/* ---- the live-desk callout ---------------------------------------------
+   This sentence is the difference between a visitor reading about a product and
+   a visitor using one, so it does not sit in the same grey as the fine print. */
+.live-note{
+  display:grid;grid-template-columns:auto 1fr;gap:6px 14px;align-items:start;
+  background:var(--surface);border:1px solid var(--border-2);
+  border-left:2px solid var(--good);border-radius:10px;
+  padding:20px 24px;margin-top:26px;max-width:72ch;
+}
+.live-note .dot{
+  width:8px;height:8px;border-radius:50%;background:var(--good);
+  margin-top:9px;grid-row:1/3;
+  box-shadow:0 0 0 4px rgba(62,155,114,.16);
+}
+.live-note p{margin:0;color:var(--text);font-size:.95rem;max-width:none}
+.live-note p.qual{margin-top:10px;color:var(--muted);font-size:.86rem}
+
 /* ---- founder ----------------------------------------------------------- */
 .founder{
   display:flex;flex-wrap:wrap;align-items:center;gap:14px 26px;
@@ -230,8 +247,8 @@ footer p{max-width:72ch}
       <a href="#markets">Which assets</a>
       <a href="#pricing">Pricing</a>
       <a href="/showcase/">Showcase</a>
-      <a href="/pitch/">Pitch deck</a>
-      <a href="/pitch/" class="btn">Watch the demo</a>
+      <a href="/pitch/">Demo video</a>
+      <a href="/desk/" class="btn">Try the desk</a>
     </nav>
   </div>
 </header>
@@ -251,14 +268,17 @@ footer p{max-width:72ch}
       <a class="btn ghost" href="/pitch/">Watch the 3-min demo</a>
       <a class="btn ghost" href="#pilot">Run a 90-day pilot</a>
     </div>
-    <p class="note"><strong>The desk is live and you can use it.</strong> It runs against a Canton
-      sandbox carried inside the demo container — a real ledger executing real Daml, seeded with a
-      demo book, not a mock and not a recording. State resets when the instance recycles, so
-      everyone starts from the same book. <strong>That is a sandbox, not a participant</strong>: it
-      proves the software, not the network integration. The shared HackCanton participant the
-      hosted desk originally ran on went offline when the season ended.
-      Source-available, not open source —
-      <a href="https://github.com/superbigroach/canton-dvp-settlement-desk">read the code</a>.</p>
+    <div class="live-note">
+      <span class="dot"></span>
+      <p><strong>The desk is live and you can use it right now.</strong> No login. A real Canton
+        ledger executing real Daml, seeded with a demo book — not a mock and not a recording.
+        Everyone shares one ledger, and it resets when the instance recycles, so you always start
+        from the same book.</p>
+      <p class="qual"><strong>It is a sandbox, not a participant</strong> — it proves the software,
+        not the network integration. The shared HackCanton participant the hosted desk originally
+        ran on went offline when the season ended. Source-available, not open source —
+        <a href="https://github.com/superbigroach/canton-dvp-settlement-desk">read the code</a>.</p>
+    </div>
   </div>
 </section>
 
@@ -445,7 +465,10 @@ footer p{max-width:72ch}
       <div class="card"><h3>125 test scripts</h3><p>Every settlement path asserts total cash before equals total cash after.</p></div>
       <div class="card"><h3>crossdesk 2.1.0</h3><p>A legal smart-contract upgrade of 2.0.0 — every new field Optional and appended, so no contract on a participant is orphaned.</p></div>
     </div>
-    <p class="src" style="margin-top:22px">
+    <div class="cta-row" style="margin-top:30px">
+      <a class="btn" href="/desk/">Open the desk and try it →</a>
+    </div>
+    <p class="src" style="margin-top:14px">
       A continuous order book and a cash-settled perpetuals layer are also built and tested, and
       neither is sold. Operating a market and running leverage are licensed activities; publishing
       a number and having a committee sign a valuation are not. That line is deliberate, and it is
