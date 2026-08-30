@@ -413,6 +413,27 @@ template OperatorCommittee
     -- The corrected recipe is supplied in full — base, rate, convention, origin —
     -- rather than as a delta, so what each member confirms is the whole replacement
     -- number and not an adjustment they have to compute themselves.
+    -- PUBLISH A CESSATION NOTICE — retire this fixing with the §8 window served.
+    -- Sits on the committee because that is where a fixing's identity lives (the
+    -- roster and threshold it is struck under), even though only the administrator
+    -- signs the notice itself. See CessationNotice for why the committee does not.
+    nonconsuming choice PublishCessation : ContractId CessationNotice
+      with
+        instrumentId : Text
+        session      : Text
+        finalStrike  : Time
+        successor    : Optional Text
+        reason       : Text
+        notifyTo     : [Party]
+      controller admin
+      do
+        now <- getTime
+        create CessationNotice with
+          admin; auditor; instrumentId; session
+          publishedAt = now
+          finalStrike; successor; reason
+          notifyTo = dedup notifyTo
+
     nonconsuming choice ProposeRestatement : ContractId RestatementProposal
       with
         proposer     : Party
@@ -452,6 +473,7 @@ template OperatorCommittee
           referencePrice = original.referencePrice
           wrapperFactor = original.wrapperFactor
           attestations = original.attestations
+          tier = original.tier
 
     nonconsuming choice ProposeFixing : ContractId FixingProposal
       with
@@ -480,6 +502,7 @@ template OperatorCommittee
           referencePrice = None
           wrapperFactor = None
           attestations = None
+          tier = Some "committee"
 
     -- PROPOSE A WRAPPED-ASSET FIXING — the benchmark, and the factor that is the product.
     -- ------------------------------------------------------------------------
@@ -526,6 +549,7 @@ template OperatorCommittee
           referencePrice = Some benchmarkPrice
           wrapperFactor = Some parFactor
           attestations = None
+          tier = Some "committee"
 
     -- PROPOSE AN ACCRUING FIXING — attest the INPUTS to a value that keeps moving.
     -- ------------------------------------------------------------------------
@@ -581,6 +605,7 @@ template OperatorCommittee
           referencePrice = None
           wrapperFactor = None
           attestations = None
+          tier = Some "committee"
 
 -- ---------------------------------------------------------------------------
 -- FixingProposal — an in-progress price attestation gathering member signatures.
@@ -627,6 +652,12 @@ template FixingProposal
     referencePrice : Optional Decimal      -- underlying benchmark, e.g. CME CF BRR
     wrapperFactor  : Optional Decimal      -- attested price / referencePrice
     attestations   : Optional [SignerCheck]  -- per-signer protocol evidence
+    -- WHICH TIER OF THE WATERFALL PRODUCED THIS, docs/FIXING_METHODOLOGY.md §3.
+    -- The methodology requires every published fixing to carry the tier used, and a
+    -- number whose provenance is unstated is one a consumer cannot weigh: an auction
+    -- uncross and a committee attestation are both official and are NOT the same
+    -- evidence. `None` is a fixing struck before the field existed.
+    tier           : Optional Text          -- "auction" | "committee"
   where
     -- The approvers gathered so far ALL sign — this is the accumulating multisig.
     signatory approvers
@@ -725,6 +756,9 @@ template FixingProposal
           -- the proposal the members confirmed, for the same reason the accrual
           -- recipe does: nothing about what was attested is re-decided at finalise.
           referencePrice; wrapperFactor; attestations
+          -- A fixing reached through this module is a COMMITTEE attestation by
+          -- definition. Tier 1 is the auction's uncross, which prints elsewhere.
+          tier = Some "committee"
 
     -- WITHDRAW — the proposer abandons an un-finalised fix (e.g. a stale price).
     -- No official fix is produced.
@@ -791,6 +825,7 @@ template RestatementProposal
     referencePrice  : Optional Decimal
     wrapperFactor   : Optional Decimal
     attestations    : Optional [SignerCheck]
+    tier            : Optional Text
   where
     signatory approvers
     observer (auditor :: members)
@@ -859,6 +894,8 @@ template RestatementProposal
           supersedes = Some supersedes
           restatementReason = Some reason
           referencePrice; wrapperFactor; attestations
+          -- A correction is attested the same way the original was.
+          tier = Some "committee"
 
     -- WITHDRAW — abandon a correction before it reaches quorum. The original fixing
     -- is untouched and remains the official number.
@@ -924,6 +961,7 @@ template NavFixing
     referencePrice : Optional Decimal
     wrapperFactor  : Optional Decimal
     attestations   : Optional [SignerCheck]
+    tier           : Optional Text   -- "auction" | "committee"; §3 waterfall provenance
   where
     signatory attestors
     -- The auditor and the published-to venues observe the official fix; the fix is
@@ -969,3 +1007,89 @@ template NavFixing
 -- committee actually signed, and named honestly rather than removed.
 navPriceOf : NavFixing -> Decimal
 navPriceOf f = f.price
+
+-- ===========================================================================
+-- CESSATION — retiring a fixing without stranding the contracts that use it.
+-- ===========================================================================
+-- docs/FIXING_METHODOLOGY.md §8, which until now was a process with nothing
+-- behind it. A benchmark that can simply stop is a benchmark nobody can safely
+-- reference: a margin agreement naming "the 16:00 CDX-CBTC-D fixing" needs time
+-- to be amended, and the amendment is a negotiation between two institutions,
+-- not a config change. Sixty days is the window that makes referencing it a
+-- survivable decision.
+--
+-- WHY THE ADMINISTRATOR SIGNS THIS AND NOT THE COMMITTEE. A restatement is a new
+-- assertion about VALUE, so it carries exactly the authority the original did —
+-- the same K of N. Cessation asserts nothing about value. It is an operational
+-- commitment by the administrator to keep striking until a named date, and the
+-- administrator is the only party who can make that promise or be held to it.
+-- Requiring committee sign-off would also let members who want the fixing gone
+-- block the very notice that protects its consumers.
+--
+-- THE NOTICE PERIOD IS ENFORCED, unlike the restatement window in §6, and the
+-- difference is deliberate. The restatement window is two BUSINESS days, which
+-- needs a holiday calendar this package does not carry. Sixty CALENDAR days needs
+-- no calendar at all, so there is no reason to leave it to policy — and a
+-- cessation notice served short is precisely the failure that strands a contract.
+
+-- The minimum notice, in microseconds. 60 days, per §8.
+minCessationNoticeMicros : Int
+minCessationNoticeMicros = 60 * 24 * 60 * 60 * 1000000
+
+template CessationNotice
+  with
+    admin        : Party
+    auditor      : Party
+    instrumentId : Text
+    session      : Text            -- "Open" | "Close": which fixing is ceasing
+    publishedAt  : Time            -- when notice was served
+    finalStrike  : Time            -- the last strike this fixing will produce
+    successor    : Optional Text   -- a recommended replacement identifier, if one exists
+    reason       : Text            -- never blank; a silent withdrawal is the thing §8 prevents
+    notifyTo     : [Party]         -- everyone disclosed the fixing, so nobody learns late
+  where
+    signatory admin
+    -- The auditor and every consuming desk observe it. A notice the consumers
+    -- cannot see is not a notice, and disclosure is the entire product here.
+    observer (auditor :: notifyTo)
+
+    ensure reason /= ""
+        && (session == "Open" || session == "Close")
+        && instrumentId /= ""
+        -- SIXTY DAYS, CHECKED. Serving a short notice would satisfy the letter of
+        -- "we announced it" while denying counterparties the window the number was
+        -- referenced on the strength of.
+        && convertRelTimeToMicroseconds (subTime finalStrike publishedAt)
+             >= minCessationNoticeMicros
+
+    -- EXTEND — push the final strike further out. Only ever later, never sooner:
+    -- a consumer that has begun amending its contracts against a published date
+    -- can absorb more time and cannot absorb less.
+    choice ExtendCessation : ContractId CessationNotice
+      with
+        newFinalStrike : Time
+        note           : Text
+      controller admin
+      do
+        assertMsg "a cessation date may only be moved later, never sooner"
+          (convertRelTimeToMicroseconds (subTime newFinalStrike finalStrike) > 0)
+        assertMsg "an extension must say why" (note /= "")
+        create this with finalStrike = newFinalStrike; reason = reason <> " | extended: " <> note
+
+    -- WITHDRAW — the fixing will continue after all. Consuming rather than
+    -- archiving-and-forgetting, so the withdrawal is itself an event the observers
+    -- see, rather than a notice that quietly vanishes from their view.
+    choice WithdrawCessation : ()
+      with
+        note : Text
+      controller admin
+      do
+        assertMsg "a withdrawal must say why" (note /= "")
+        pure ()
+
+-- daysUntilCessation — how long a consumer still has, at a given instant.
+-- Negative once the final strike has passed. Exposed because "is this fixing
+-- still safe to reference" is the only question a consumer asks of this contract.
+daysUntilCessation : CessationNotice -> Time -> Int
+daysUntilCessation n at =
+  convertRelTimeToMicroseconds (subTime n.finalStrike at) / (24 * 60 * 60 * 1000000)

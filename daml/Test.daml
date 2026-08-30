@@ -2143,6 +2143,111 @@ testSignerProtocolEvidence = do
     (any (\c -> c.role == "venue" && c.observedLow == Some 99500.0) sigs)
 
 -- ---------------------------------------------------------------------------
+-- TEST 8d — CESSATION: retiring a fixing without stranding what references it.
+-- ---------------------------------------------------------------------------
+-- docs/FIXING_METHODOLOGY.md §8, which was a process with nothing behind it until
+-- now. A margin agreement naming "the 16:00 CDX-CBTC-D fixing" has to be amended
+-- before that fixing stops, and the amendment is a negotiation between two
+-- institutions rather than a config change. Sixty days is what makes referencing
+-- the number a survivable decision, so the window is CHECKED and not merely stated.
+testCessationNoticeServesItsWindow : Script ()
+testCessationNoticeServesItsWindow = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  let members = [venue, bank, agent]
+  committeeCid <- submit issuer do
+    createCmd OperatorCommittee with
+      admin = issuer; members; threshold = 2; auditor
+      label = "cBTC Wrapper Committee"
+
+  now <- getTime
+
+  -- A notice served 30 days out is refused. This is the failure that strands a
+  -- contract, and "we announced it" is exactly the defence it must not permit.
+  submitMustFail issuer do
+    exerciseCmd committeeCid PublishCessation with
+      instrumentId = "CBTC"; session = "Close"
+      finalStrike = addRelTime now (days 30)
+      successor = None
+      reason = "short notice"
+      notifyTo = [venue]
+
+  -- A notice with no stated reason is refused: a silent withdrawal is the thing
+  -- §8 exists to prevent.
+  submitMustFail issuer do
+    exerciseCmd committeeCid PublishCessation with
+      instrumentId = "CBTC"; session = "Close"
+      finalStrike = addRelTime now (days 90)
+      successor = None
+      reason = ""
+      notifyTo = [venue]
+
+  -- Ninety days, with a reason and a named successor, stands.
+  noticeCid <- submit issuer do
+    exerciseCmd committeeCid PublishCessation with
+      instrumentId = "CBTC"; session = "Close"
+      finalStrike = addRelTime now (days 90)
+      successor = Some "CDX-CBTC-D-v2"
+      reason = "superseded by a methodology change under §9"
+      notifyTo = [venue]
+
+  Some notice <- queryContractId venue noticeCid
+  notice.successor === Some "CDX-CBTC-D-v2"
+  assertMsg "a consumer must be able to see how long it still has"
+    (daysUntilCessation notice now >= 89)
+
+  -- THE CONSUMERS SEE IT. A notice the referencing desks cannot read is not a
+  -- notice, and disclosure is the entire product of this contract.
+  assertMsg "the auditor must see the cessation notice"
+    . isSome =<< queryContractId auditor noticeCid
+  assertMsg "an outsider must NOT see it"
+    . isNone =<< queryContractId eve noticeCid
+
+  -- A cessation date may be moved LATER — a consumer part-way through amending
+  -- its contracts can absorb more time and cannot absorb less.
+  submitMustFail issuer do
+    exerciseCmd noticeCid ExtendCessation with
+      newFinalStrike = addRelTime now (days 60)
+      note = "pulling it in"
+  extendedCid <- submit issuer do
+    exerciseCmd noticeCid ExtendCessation with
+      newFinalStrike = addRelTime now (days 120)
+      note = "a referencing desk asked for longer"
+  Some extended <- queryContractId venue extendedCid
+  assertMsg "an extension must lengthen the window"
+    (daysUntilCessation extended now >= 119)
+
+-- ---------------------------------------------------------------------------
+-- TEST 8e — TIER: every published fixing says which tier of §3 produced it.
+-- ---------------------------------------------------------------------------
+-- A number whose provenance is unstated is one a consumer cannot weigh. An auction
+-- uncross and a committee attestation are both official and are NOT the same
+-- evidence, so the methodology requires the tier to travel with the fixing.
+testFixingCarriesItsTier : Script ()
+testFixingCarriesItsTier = do
+  Parties{..} <- setup
+  setupInstruments issuer
+
+  let members = [venue, bank, agent]
+  committeeCid <- submit issuer do
+    createCmd OperatorCommittee with
+      admin = issuer; members; threshold = 2; auditor
+      label = "Lucilla NAV Committee"
+
+  propCid <- submit venue do
+    exerciseCmd committeeCid ProposeFixing with
+      proposer = venue; instrumentId = ceth; cashInstrument = usdc
+      session = "Close"; price = 2400.0; rationale = "uniform sealed-cross VWAP"
+  propCid2 <- submit bank do exerciseCmd propCid Confirm with member = bank
+  fixCid <- submit venue do exerciseCmd propCid2 FinalizeFixing with publishTo = [venue]
+
+  Some fix <- queryContractId venue fixCid
+  -- Anything finalised through Governance is a committee attestation by definition.
+  -- Tier 1 is the auction's uncross, which prints elsewhere.
+  fix.tier === Some "committee"
+
+-- ---------------------------------------------------------------------------
 -- TEST 9 — COMMITTEE-ATTESTED CLOSE: an auction BOUND to a NavFixing may only run
 -- against the ATTESTED ANCHOR. What the committee fixes is no longer the print.
 -- ---------------------------------------------------------------------------
@@ -2275,6 +2380,8 @@ accrualFixture admin auditor base rate dayCount from = NavFixing with
   -- A native asset with no wrapper and no protocol evidence: the accrual arithmetic
   -- is orthogonal to both, and `None` here is exactly a pre-protocol fixing.
   referencePrice = None; wrapperFactor = None; attestations = None
+  -- A bare record fixture, not a fixing that reached any tier of the waterfall.
+  tier = None
 
 -- ---------------------------------------------------------------------------
 -- TEST 9a — THE ACCRUAL ARITHMETIC, HAND-COMPUTED.

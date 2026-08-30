@@ -47,9 +47,9 @@ import java.util.Set;
 public final class TradeConfirm extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#crossdesk", "ContinuousBook", "TradeConfirm");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("527a2b50430ceabba40484b4518c4d390781e8db6c016ab3ec5528eea36766ea", "ContinuousBook", "TradeConfirm");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("f442ed0a18dad43b70c730775e6991c2bb8ee6bf01385f7c5325552559cafa9b", "ContinuousBook", "TradeConfirm");
 
-  public static final String PACKAGE_ID = "527a2b50430ceabba40484b4518c4d390781e8db6c016ab3ec5528eea36766ea";
+  public static final String PACKAGE_ID = "f442ed0a18dad43b70c730775e6991c2bb8ee6bf01385f7c5325552559cafa9b";
 
   public static final String PACKAGE_NAME = "crossdesk";
 

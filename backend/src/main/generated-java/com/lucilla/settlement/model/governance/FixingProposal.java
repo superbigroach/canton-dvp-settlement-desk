@@ -52,9 +52,9 @@ import java.util.Set;
 public final class FixingProposal extends Template {
   public static final Identifier TEMPLATE_ID = new Identifier("#crossdesk", "Governance", "FixingProposal");
 
-  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("527a2b50430ceabba40484b4518c4d390781e8db6c016ab3ec5528eea36766ea", "Governance", "FixingProposal");
+  public static final Identifier TEMPLATE_ID_WITH_PACKAGE_ID = new Identifier("f442ed0a18dad43b70c730775e6991c2bb8ee6bf01385f7c5325552559cafa9b", "Governance", "FixingProposal");
 
-  public static final String PACKAGE_ID = "527a2b50430ceabba40484b4518c4d390781e8db6c016ab3ec5528eea36766ea";
+  public static final String PACKAGE_ID = "f442ed0a18dad43b70c730775e6991c2bb8ee6bf01385f7c5325552559cafa9b";
 
   public static final String PACKAGE_NAME = "crossdesk";
 
@@ -135,11 +135,14 @@ public final class FixingProposal extends Template {
 
   public final Optional<List<SignerCheck>> attestations;
 
+  public final Optional<String> tier;
+
   public FixingProposal(String admin, List<String> members, Long threshold, String auditor,
       String proposer, String instrumentId, String cashInstrument, String session, BigDecimal price,
       String rationale, BigDecimal ratePerAnnum, String dayCount, Instant accrualFrom,
       List<String> approvers, Optional<BigDecimal> referencePrice,
-      Optional<BigDecimal> wrapperFactor, Optional<List<SignerCheck>> attestations) {
+      Optional<BigDecimal> wrapperFactor, Optional<List<SignerCheck>> attestations,
+      Optional<String> tier) {
     this.admin = admin;
     this.members = members;
     this.threshold = threshold;
@@ -157,6 +160,7 @@ public final class FixingProposal extends Template {
     this.referencePrice = referencePrice;
     this.wrapperFactor = wrapperFactor;
     this.attestations = attestations;
+    this.tier = tier;
   }
 
   @Override
@@ -251,10 +255,11 @@ public final class FixingProposal extends Template {
       Long threshold, String auditor, String proposer, String instrumentId, String cashInstrument,
       String session, BigDecimal price, String rationale, BigDecimal ratePerAnnum, String dayCount,
       Instant accrualFrom, List<String> approvers, Optional<BigDecimal> referencePrice,
-      Optional<BigDecimal> wrapperFactor, Optional<List<SignerCheck>> attestations) {
+      Optional<BigDecimal> wrapperFactor, Optional<List<SignerCheck>> attestations,
+      Optional<String> tier) {
     return new FixingProposal(admin, members, threshold, auditor, proposer, instrumentId,
         cashInstrument, session, price, rationale, ratePerAnnum, dayCount, accrualFrom, approvers,
-        referencePrice, wrapperFactor, attestations).create();
+        referencePrice, wrapperFactor, attestations, tier).create();
   }
 
   @Override
@@ -272,7 +277,7 @@ public final class FixingProposal extends Template {
   }
 
   public DamlRecord toValue() {
-    ArrayList<DamlRecord.Field> fields = new ArrayList<DamlRecord.Field>(17);
+    ArrayList<DamlRecord.Field> fields = new ArrayList<DamlRecord.Field>(18);
     fields.add(new DamlRecord.Field("admin", new Party(this.admin)));
     fields.add(new DamlRecord.Field("members", this.members.stream().collect(DamlCollectors.toDamlList(v$0 -> new Party(v$0)))));
     fields.add(new DamlRecord.Field("threshold", new Int64(this.threshold)));
@@ -290,6 +295,7 @@ public final class FixingProposal extends Template {
     fields.add(new DamlRecord.Field("referencePrice", DamlOptional.of(this.referencePrice.map(v$0 -> new Numeric(v$0)))));
     fields.add(new DamlRecord.Field("wrapperFactor", DamlOptional.of(this.wrapperFactor.map(v$0 -> new Numeric(v$0)))));
     fields.add(new DamlRecord.Field("attestations", DamlOptional.of(this.attestations.map(v$0 -> v$0.stream().collect(DamlCollectors.toDamlList(v$1 -> v$1.toValue()))))));
+    fields.add(new DamlRecord.Field("tier", DamlOptional.of(this.tier.map(v$0 -> new Text(v$0)))));
     return new DamlRecord(fields);
   }
 
@@ -297,7 +303,7 @@ public final class FixingProposal extends Template {
       IllegalArgumentException {
     return value$ -> {
       Value recordValue$ = value$;
-      List<DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(17,3, recordValue$);
+      List<DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(18,4, recordValue$);
       String admin = PrimitiveValueDecoders.fromParty.decode(fields$.get(0).getValue());
       List<String> members = PrimitiveValueDecoders.fromList(PrimitiveValueDecoders.fromParty)
           .decode(fields$.get(1).getValue());
@@ -322,14 +328,16 @@ public final class FixingProposal extends Template {
       Optional<List<SignerCheck>> attestations = PrimitiveValueDecoders.fromOptional(
             PrimitiveValueDecoders.fromList(SignerCheck.valueDecoder()))
           .decode(fields$.get(16).getValue());
+      Optional<String> tier = PrimitiveValueDecoders.fromOptional(PrimitiveValueDecoders.fromText)
+          .decode(fields$.get(17).getValue());
       return new FixingProposal(admin, members, threshold, auditor, proposer, instrumentId,
           cashInstrument, session, price, rationale, ratePerAnnum, dayCount, accrualFrom, approvers,
-          referencePrice, wrapperFactor, attestations);
+          referencePrice, wrapperFactor, attestations, tier);
     } ;
   }
 
   public static JsonLfDecoder<FixingProposal> jsonDecoder() {
-    return JsonLfDecoders.record(Arrays.asList("admin", "members", "threshold", "auditor", "proposer", "instrumentId", "cashInstrument", "session", "price", "rationale", "ratePerAnnum", "dayCount", "accrualFrom", "approvers", "referencePrice", "wrapperFactor", "attestations"), name -> {
+    return JsonLfDecoders.record(Arrays.asList("admin", "members", "threshold", "auditor", "proposer", "instrumentId", "cashInstrument", "session", "price", "rationale", "ratePerAnnum", "dayCount", "accrualFrom", "approvers", "referencePrice", "wrapperFactor", "attestations", "tier"), name -> {
           switch (name) {
             case "admin": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
             case "members": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(1, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.list(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party));
@@ -348,10 +356,11 @@ public final class FixingProposal extends Template {
             case "referencePrice": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(14, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10)), java.util.Optional.empty());
             case "wrapperFactor": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(15, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10)), java.util.Optional.empty());
             case "attestations": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(16, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.list(new com.lucilla.settlement.model.governance.SignerCheck.JsonDecoder$().get())), java.util.Optional.empty());
+            case "tier": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(17, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.optional(com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text), java.util.Optional.empty());
             default: return null;
           }
         }
-        , (Object[] args) -> new FixingProposal(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6]), JsonLfDecoders.cast(args[7]), JsonLfDecoders.cast(args[8]), JsonLfDecoders.cast(args[9]), JsonLfDecoders.cast(args[10]), JsonLfDecoders.cast(args[11]), JsonLfDecoders.cast(args[12]), JsonLfDecoders.cast(args[13]), JsonLfDecoders.cast(args[14]), JsonLfDecoders.cast(args[15]), JsonLfDecoders.cast(args[16])));
+        , (Object[] args) -> new FixingProposal(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6]), JsonLfDecoders.cast(args[7]), JsonLfDecoders.cast(args[8]), JsonLfDecoders.cast(args[9]), JsonLfDecoders.cast(args[10]), JsonLfDecoders.cast(args[11]), JsonLfDecoders.cast(args[12]), JsonLfDecoders.cast(args[13]), JsonLfDecoders.cast(args[14]), JsonLfDecoders.cast(args[15]), JsonLfDecoders.cast(args[16]), JsonLfDecoders.cast(args[17])));
   }
 
   public static FixingProposal fromJson(String json) throws JsonLfDecoder.Error {
@@ -376,7 +385,8 @@ public final class FixingProposal extends Template {
         JsonLfEncoders.Field.of("approvers", apply(JsonLfEncoders.list(JsonLfEncoders::party), approvers)),
         JsonLfEncoders.Field.of("referencePrice", apply(JsonLfEncoders.optional(JsonLfEncoders::numeric), referencePrice)),
         JsonLfEncoders.Field.of("wrapperFactor", apply(JsonLfEncoders.optional(JsonLfEncoders::numeric), wrapperFactor)),
-        JsonLfEncoders.Field.of("attestations", apply(JsonLfEncoders.optional(JsonLfEncoders.list(SignerCheck::jsonEncoder)), attestations)));
+        JsonLfEncoders.Field.of("attestations", apply(JsonLfEncoders.optional(JsonLfEncoders.list(SignerCheck::jsonEncoder)), attestations)),
+        JsonLfEncoders.Field.of("tier", apply(JsonLfEncoders.optional(JsonLfEncoders::text), tier)));
   }
 
   public static ContractFilter<Contract> contractFilter() {
@@ -409,7 +419,8 @@ public final class FixingProposal extends Template {
         Objects.equals(this.approvers, other.approvers) &&
         Objects.equals(this.referencePrice, other.referencePrice) &&
         Objects.equals(this.wrapperFactor, other.wrapperFactor) &&
-        Objects.equals(this.attestations, other.attestations);
+        Objects.equals(this.attestations, other.attestations) &&
+        Objects.equals(this.tier, other.tier);
   }
 
   @Override
@@ -417,16 +428,16 @@ public final class FixingProposal extends Template {
     return Objects.hash(this.admin, this.members, this.threshold, this.auditor, this.proposer,
         this.instrumentId, this.cashInstrument, this.session, this.price, this.rationale,
         this.ratePerAnnum, this.dayCount, this.accrualFrom, this.approvers, this.referencePrice,
-        this.wrapperFactor, this.attestations);
+        this.wrapperFactor, this.attestations, this.tier);
   }
 
   @Override
   public String toString() {
-    return String.format("com.lucilla.settlement.model.governance.FixingProposal(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+    return String.format("com.lucilla.settlement.model.governance.FixingProposal(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         this.admin, this.members, this.threshold, this.auditor, this.proposer, this.instrumentId,
         this.cashInstrument, this.session, this.price, this.rationale, this.ratePerAnnum,
         this.dayCount, this.accrualFrom, this.approvers, this.referencePrice, this.wrapperFactor,
-        this.attestations);
+        this.attestations, this.tier);
   }
 
   public static final class ContractId extends com.daml.ledger.javaapi.data.codegen.ContractId<FixingProposal> implements Exercises<ExerciseCommand> {
