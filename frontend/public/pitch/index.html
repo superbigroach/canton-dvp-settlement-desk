@@ -21,6 +21,12 @@
   --accent:#4C82F7; --gold:#E6B450; --buy:#3E9B72; --sell:#C65B5B;
   --ui:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
   --mono:ui-monospace,'SF Mono','Cascadia Code',Menlo,monospace;
+  /* The site's display face is Newsreader, served from Google Fonts. This deck
+     states at the top of the file that it carries no CDN and no external font,
+     because it has to render on a stage with no network and a missing face on
+     slide one is unrecoverable. So it takes the nearest resident serif instead:
+     the same typographic character, none of the dependency. */
+  --display:Georgia,'Iowan Old Style','Times New Roman',serif;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{background:#000;color:var(--text);font-family:var(--ui)}
@@ -41,8 +47,8 @@ html,body{background:#000;color:var(--text);font-family:var(--ui)}
 
 .kicker{font-family:var(--mono);font-size:1.05vw;letter-spacing:.22em;text-transform:uppercase;
         color:var(--faint);margin-bottom:2.2vh}
-h1{font-size:6.4vw;line-height:1.02;letter-spacing:-.03em;font-weight:700}
-h2{font-size:3.5vw;line-height:1.12;letter-spacing:-.02em;font-weight:650;margin-bottom:3vh}
+h1{font-family:var(--display);font-size:6.4vw;line-height:1.04;letter-spacing:-.028em;font-weight:400}
+h2{font-family:var(--display);font-weight:400;font-size:3.5vw;line-height:1.12;letter-spacing:-.02em;font-weight:650;margin-bottom:3vh}
 h3{font-size:2.1vw;line-height:1.2;font-weight:600;margin-bottom:1.6vh}
 p,li{font-size:1.55vw;line-height:1.55;color:var(--muted)}
 strong{color:var(--text);font-weight:650}
@@ -148,6 +154,27 @@ li::before{content:'';position:absolute;left:0;top:.75em;width:1.1vw;height:2px;
   .media .ph{font-size:7pt}.shots .media{height:44mm}
 }
 .hint{position:fixed;right:1.4vw;top:1.4vh;font-family:var(--mono);font-size:.8vw;color:var(--faint);z-index:50}
+
+/* ---- founder contact ----------------------------------------------------
+   The deck carried none, which is a poor property for a deck whose entire
+   purpose is that somebody follows up afterwards. Fixed to the viewport so it
+   survives every slide, and hidden in print — a PDF has the final slide for it
+   and a strip burned onto all eleven pages reads as a watermark. */
+.contact{
+  position:fixed;left:18px;bottom:14px;z-index:90;
+  display:flex;flex-wrap:wrap;align-items:center;gap:7px;
+  font-family:var(--mono);font-size:10px;letter-spacing:.06em;
+}
+.contact .who{color:var(--faint);margin-right:3px}
+.contact a{
+  color:var(--muted);text-decoration:none;
+  background:rgba(10,11,15,.82);border:1px solid var(--border2);
+  border-radius:999px;padding:4px 11px;
+  transition:color 140ms ease,border-color 140ms ease;
+}
+.contact a:hover{color:var(--text);border-color:var(--accent)}
+.contact a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media print{.contact{display:none!important}}
 </style>
 </head>
 <body>
@@ -412,19 +439,12 @@ li::before{content:'';position:absolute;left:0;top:.75em;width:1.1vw;height:2px;
 })();
 </script>
 
-<!-- Founder contact. The deck had none, which is a bad thing for a deck whose whole
-     purpose is that somebody follows up afterwards. -->
-<div style="position:fixed;bottom:12px;left:14px;z-index:90;display:flex;gap:7px;
-            font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:10px;letter-spacing:.05em">
-  <a href="mailto:s.borjas@lucilla.ca" style="text-decoration:none;color:#8A909C;
-     background:rgba(10,11,15,.82);border:1px solid #262A35;border-radius:999px;padding:4px 10px">
-     Sebastian Borjas</a>
-  <a href="https://t.me/sb_lucilla" rel="noopener" style="text-decoration:none;color:#8A909C;
-     background:rgba(10,11,15,.82);border:1px solid #262A35;border-radius:999px;padding:4px 10px">
-     @sb_lucilla</a>
-  <a href="https://www.linkedin.com/in/sborjasto/" rel="noopener" style="text-decoration:none;color:#8A909C;
-     background:rgba(10,11,15,.82);border:1px solid #262A35;border-radius:999px;padding:4px 10px">
-     LinkedIn</a>
+
+<div class="contact">
+  <span class="who">Sebastian Borjas &middot; Founder</span>
+  <a href="mailto:s.borjas@lucilla.ca">s.borjas@lucilla.ca</a>
+  <a href="https://t.me/sb_lucilla" rel="noopener">&commat;sb_lucilla</a>
+  <a href="https://www.linkedin.com/in/sborjasto/" rel="noopener">LinkedIn</a>
 </div>
 </body>
 </html>
