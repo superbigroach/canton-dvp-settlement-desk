@@ -506,6 +506,32 @@ export default function App() {
   const showLpPanel = false;   // retired from the desk screen - see the note above
   const isMandatedLp = holdsMandate && !!imbalance?.disclosed;
 
+  // WHAT THIS DESK SELLS, AND WHAT IT MERELY CONTAINS.
+  //
+  // Three jobs are the product: discover a price (the sealed auction), attest it
+  // (the K-of-N committee), settle against it (in-kind create/redeem). The
+  // continuous book and the cash-settled perpetuals are BUILT, TESTED and STAYING
+  // — they are simply not what is sold, and a screen that offers them says
+  // otherwise to every customer who opens it.
+  //
+  // The reason is regulatory and it is the strategy, not a limitation. Operating a
+  // continuous market and running leverage are licensed activities in every
+  // jurisdiction that matters. Publishing a number, and a committee signing a
+  // valuation, is the part that is not. Cutting these two from the OFFERING is
+  // what keeps the company on the unregulated side of that line.
+  //
+  // They are gated here rather than deleted, in both directions deliberately:
+  //   - the Daml templates cannot be withdrawn from the package at all. `crossdesk`
+  //     is package-NAME scoped (#crossdesk), so removing a template fails the
+  //     upgrade check against 2.0.0 with NOT_VALID_UPGRADE_PACKAGE and orphans
+  //     every contract already on a participant;
+  //   - and the panels stay compiled and importable so the demo path still exists
+  //     for anyone who asks to see them, which is a stronger answer than a gap.
+  // Flip either flag to show that panel again. See
+  // PITCH-MEETINGS-CLIENTS/04_WHAT_WE_DO_NOT_SELL.md.
+  const showContinuousBook = false;  // sold by Temple Trading, a funded institutional CLOB
+  const showPerpetuals = false;      // leverage is a licensed activity; not the product
+
   // THE VENUE'S OWN IMBALANCE — arithmetic, not a disclosure.
   //
   // The venue signs every sealed order, so it already holds the whole book; summing it
@@ -569,18 +595,36 @@ export default function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand">
+        {/* The desk lives at /desk/; the marketing site is at /. Without this the only
+            way back is editing the URL bar, which is how a visitor ends up stuck on an
+            app with no ledger behind it and no idea what the product is. */}
+        <a className="brand" href="/" title="Back to crossdesk.app" style={{ textDecoration: 'none', color: 'inherit' }}>
           <span className="logo" aria-hidden>◈</span>
           <div className="brand-text">
             <span className="brand-name">CANTON DvP DESK</span>
             <span className="brand-sub">Delivery-versus-Payment · Sealed Opening &amp; Closing Cross</span>
           </div>
-        </div>
+        </a>
         <div className="topbar-right">
-          <span className="live" title="Connected to the Canton Ledger API">
-            <span className="dot" /> live · {window.location.hostname === 'localhost'
-              ? 'local sandbox ledger'
-              : 'Canton devnet · hackcanton-01'}
+          {/* THE HEADER MUST NOT ASSERT A LEDGER IT CANNOT REACH.
+              This used to read "live · Canton devnet · hackcanton-01" unconditionally,
+              which stopped being true when the shared participant went offline at the
+              end of Season 2 — the desk then rendered a confident "live" badge above
+              panels that had nothing in them, which reads as a broken product rather
+              than an absent node. `parties` is the cheapest honest signal available:
+              it is the first thing loaded, and it comes back empty exactly when the
+              ledger is unreachable. */}
+          <span
+            className="live"
+            title={parties.length
+              ? 'Connected to the Canton Ledger API'
+              : 'No ledger reachable — see GET /api/diag'}
+            style={parties.length ? undefined : { opacity: 0.55 }}
+          >
+            <span className="dot" style={parties.length ? undefined : { background: '#8A909C' }} />
+            {parties.length
+              ? `live · ${window.location.hostname === 'localhost' ? 'local sandbox ledger' : 'Canton ledger'}`
+              : 'no ledger connected'}
           </span>
           <label className="party-switch">
             <span>Acting as</span>
@@ -1223,8 +1267,10 @@ export default function App() {
             inherits one from resting limit interest. This is where that interest
             rests, matched by price then time, settling at the MAKER's price. It is
             also the clearest demonstration of the privacy property: the book is
-            dark pre-trade (even to the auditor), the tape is public post-trade. */}
-        <ContinuousBookPanel
+            dark pre-trade (even to the auditor), the tape is public post-trade.
+
+            PARKED — see showContinuousBook above. Built and tested; not sold. */}
+        {showContinuousBook && <ContinuousBookPanel
           parties={parties}
           instruments={instruments}
           acting={acting}
@@ -1235,15 +1281,17 @@ export default function App() {
             void loadReceipts(acting);
           }}
           flash={flash}
-        />
+        />}
 
         {/* -------- Leverage · cash-settled perpetuals --------
             The one place exposure is taken WITHOUT holding the asset: post cash,
             get a view, settle in cash. It completes the arbitrage loop the fund
             layer starts — a share that drifts from NAV is only corrected if
             somebody can cheaply take the other side, and synthetic is cheaper
-            than funding the whole basket. */}
-        <PerpetualPanel
+            than funding the whole basket.
+
+            PARKED — see showPerpetuals above. Built and tested; not sold. */}
+        {showPerpetuals && <PerpetualPanel
           parties={parties}
           instruments={instruments}
           acting={acting}
@@ -1254,7 +1302,7 @@ export default function App() {
             void loadReceipts(acting);
           }}
           flash={flash}
-        />
+        />}
 
         {/* -------- Decentralised operator · committee-attested NAV -------- */}
         <CommitteePanel parties={parties} instruments={instruments} asset={asset} flash={flash} />

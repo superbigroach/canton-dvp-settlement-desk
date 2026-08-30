@@ -108,7 +108,7 @@ database** (you'd have to trust the operator). That combination is the entire te
 
 ## 5. What is actually built
 
-### Daml — 16 files, ~15,700 lines, 30 templates, 60 choices, 213 test scenarios
+### Daml — 16 files, 15,984 lines, 38 templates, 79 choices, 121 test scripts
 
 | File | Lines | Templates |
 |---|---|---|
@@ -197,7 +197,7 @@ new one. Switching the hosted desk to 2.0.0 therefore requires a full re-bootstr
 | Job | Price | Source |
 |---|---|---|
 | **Calculating** a NAV | **0.325 bps** of AUM | BBH Trust, Form N-CSR FY2023 — disclosed because BBH is both custodian and fund accountant. It *fell* from 0.40 bps in 2023. |
-| Producing an **official price** | **3 bps + $600,000/yr** | What State Street pays S&P Dow Jones for the right to reference the S&P 500 in SPY |
+| Producing an **official price** | **3 bps + $600,000/yr** | What the SPY trust pays S&P Dow Jones for the right to reference the S&P 500. State Street is Trustee; the Sponsor is PDR Services LLC |
 | Administering **hard-to-value** assets | **6–12 bps** | Aetos / HedgeServ administration agreement, SEC-filed |
 
 **The same computation is worth 10–15x more as an official price than as an accounting output.**

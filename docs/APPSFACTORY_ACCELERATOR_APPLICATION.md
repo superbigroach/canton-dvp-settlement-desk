@@ -52,7 +52,7 @@ is why CrossDesk is a market-structure product rather than a blockchain demo.
 It runs on the shared HackCanton participant today, package crossdesk 2.0.0. A sealed closing
 auction, a K-of-N committee that signs a valuation recipe rather than a static number, atomic
 in-kind create and redeem, and cash-settled perpetuals. Four of the six builder lanes, 30 Daml
-templates, 213 test scenarios where every settlement path proves cash is conserved. Real
+templates, 121 test scripts where every settlement path proves cash is conserved. Real
 BitSafe cBTC claimed through the CIP-56 registry flow.
 
 The property only Canton gives you: the resting order book is invisible even to the auditor,

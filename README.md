@@ -179,6 +179,31 @@ Devnet access, no credentials, no coins.
 
 ---
 
+## What is sold, and what is merely built
+
+This repository contains more than the product. The distinction is deliberate and it is worth
+stating before the feature list below is read as an offering.
+
+**The product is three jobs:** discover a price (the sealed closing auction), attest it (the
+K-of-N committee), settle against it (in-kind creation and redemption).
+
+**Built, tested, and NOT sold:** the continuous order book (`daml/ContinuousBook.daml`),
+cash-settled perpetuals (`daml/Perpetual.daml`), and the liquidity mandate
+(`daml/LiquidityMandate.daml`). All three work and all three keep their test suites. None is
+on the price list, and all three are gated off the desk screen by flags in
+`frontend/src/App.tsx`.
+
+**Why:** operating a continuous market and running leverage are licensed activities. Publishing
+a number, and a committee signing a valuation, is the part that is not. Cutting these from the
+*offering* is the compliance strategy, not a gap in the build.
+
+**Why they are not deleted:** `crossdesk` is package-**name** scoped (`#crossdesk`), so
+withdrawing a template fails the upgrade check against 2.0.0 with `NOT_VALID_UPGRADE_PACKAGE`
+and orphans every contract already on a participant. Templates published once stay published.
+
+Scope, pricing and the counterparty map live in
+[`../PITCH-MEETINGS-CLIENTS/`](../PITCH-MEETINGS-CLIENTS/) alongside this repository.
+
 ## Where to look
 
 | If you want… | Read |

@@ -45,7 +45,7 @@ endpoint queries the ledger **as** the acting party.
 
 ---
 
-## 3. Daml — 16 files, ~15,700 lines, 213 test scenarios
+## 3. Daml — 16 files, 15,984 lines, 121 test scripts
 
 | File | Lines | Templates |
 |---|---|---|
@@ -67,7 +67,7 @@ endpoint queries the ledger **as** the acting party.
 | `PerpetualTest.daml` | 417 | — |
 | `TokenStandardTest.daml` | 352 | — |
 
-**30 templates, 60 distinct choices.** Every settlement path in `PerpetualTest` asserts
+**38 templates, 60 distinct choices.** Every settlement path in `PerpetualTest` asserts
 `totalCash` before == after.
 
 > The Daml SDK is **not installed on this machine** (`~/.daml` absent), so `daml test` could

@@ -341,7 +341,7 @@ Refusing to give numbers reads as not having done the work — fatal in front of
 1. **"Calculating a NAV costs 0.325 basis points. BBH discloses it in their N-CSR."**
    Leading with the number that *hurts* you is the single highest-credibility move available. It tells every finance person in the room that you know the industry and are not selling them a fantasy.
 
-2. **"An official price costs 3 basis points plus $600,000 a year. That is what State Street pays S&P Dow Jones for SPY."**
+2. **"An official price costs 3 basis points plus $600,000 a year. That is what the SPY trust pays S&P Dow Jones."**
    This is the whole business in one sentence. The same computation is worth 10–15x more as an official price than as an accounting output.
 
 3. **"So the question isn't whether this is worth building — it's which of those two things a K-of-N attested fixing is. I think it's the second. I'll know when someone pays me."**

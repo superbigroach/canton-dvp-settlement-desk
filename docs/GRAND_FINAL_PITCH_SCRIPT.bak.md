@@ -80,7 +80,7 @@ cannot play the video.
 > plus six hundred thousand a year** — just for the right to reference a number. And he pays a
 > fund accountant **nought point three two five** to actually calculate the NAV.
 >
-> Three companies. Three fees. **One number.** Index providers alone take **a third of every ETF
+> Three companies. Three fees. **One number.** ~~Index providers alone take a third of every ETF
 > management fee on earth.** [beat]
 
 **▸ SLIDE 8 — the pricing and the bet**
@@ -104,7 +104,7 @@ cannot play the video.
 >
 > That's shares minted at the signed NAV, hedged straight into the close.
 
-**▸ SLIDE 10 — four lanes, the CIP-56 claim, 213 tests, package 2.0.0**
+**▸ SLIDE 10 — four lanes, the CIP-56 claim, 121 test scripts, package 2.0.0**
 
 > And I claimed **real BitSafe cBTC** through the CIP-56 registry flow — four point one six,
 > on their templates. That integration is done.
@@ -153,7 +153,7 @@ Answers only. `>` = say it roughly like this.
 ### "What's this worth — 0.325 bps or 3 bps?"
 > "That's the whole company in one question. Calculating a NAV pays **0.325 basis points** —
 > Brown Brothers discloses it, and it fell 19% at the last renewal. An **official price** pays
-> **3 bps plus six hundred thousand a year** — what State Street pays S&P Dow Jones for SPY.
+> **3 bps plus six hundred thousand a year** — what the SPY trust pays S&P Dow Jones.
 > Same computation, ten to fifteen times the money, depending purely on which box a buyer files
 > me under. **I think it's the second. I'll know when somebody pays me.**"
 

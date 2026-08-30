@@ -120,6 +120,7 @@ a.inline:hover{text-decoration:underline}
     <nav>
       <a href="#problem">Problem</a>
       <a href="#how">How it works</a>
+      <a href="#markets">Which assets</a>
       <a href="#pricing">Pricing</a>
       <a href="/pitch/">Pitch deck</a>
       <a href="/pitch/" class="btn" style="padding:9px 16px;font-size:14px">Watch the demo</a>
@@ -130,7 +131,7 @@ a.inline:hover{text-decoration:underline}
 <!-- ---------------- hero ---------------- -->
 <section class="hero">
   <div class="wrap">
-    <div class="pill"><span class="dot"></span> Live on the Canton Network · package crossdesk 2.0.0</div>
+    <div class="pill"><span class="dot"></span> HackCanton Season 2 — Best Financial Application · package crossdesk 2.1.0</div>
     <h1>A sealed auction that prints an&nbsp;official&nbsp;price.<br>Then the fund layer that settles against it.</h1>
     <p class="lede">An asset can trade in fifteen places and still settle no contracts, because
       settlement needs a <em>fixing</em> — one struck price, at a defined time, that neither side can
@@ -204,11 +205,6 @@ a.inline:hover{text-decoration:underline}
         <p>In kind, atomically, all-or-nothing. Deliver the underlyings, receive shares — or the
           reverse. The mechanism that keeps a fund glued to its NAV.</p>
       </div></div>
-      <div class="step"><div>
-        <h3>Cash-settled perpetuals hedge the wait</h3>
-        <p>A market maker can be flat on price between creating and selling, which turns the
-          arbitrage into a fully-hedged basis trade rather than a directional bet.</p>
-      </div></div>
     </div>
   </div>
 </section>
@@ -229,7 +225,59 @@ a.inline:hover{text-decoration:underline}
       <div class="eye zero"><div class="who">Auditor</div><div class="n">0</div><div class="sub">every fill · not one order</div></div>
     </div>
     <p class="punch">Unbuildable on a public chain. Unprovable in a private database.</p>
-    <p class="src">Verified on the shared Canton participant. Every fill still prints to a public tape that names nobody.</p>
+    <p class="src">Every fill still prints to a public tape that names nobody. Observed on the shared
+      Canton participant during Season 2; that node went offline when the season closed.</p>
+  </div>
+</section>
+
+<!-- ---------------- markets ---------------- -->
+<section id="markets">
+  <div class="wrap">
+    <div class="kicker">Which assets need this</div>
+    <h2>If somebody already publishes the number, walk away.</h2>
+    <p style="max-width:70ch">Most assets already have an official price and do not need a new one.
+      Apple has a closing auction. Bitcoin has the CME CF reference rate. Gold has the LBMA
+      auction. Those are solved, and solved well. The gap is narrower and more permanent than
+      that: <strong>every leg of a bespoke basket has an official price, and the basket itself
+      has none.</strong></p>
+
+    <div class="grid g3" style="margin-top:3vh">
+      <div class="card"><h3>A single liquid asset</h3>
+        <p>Bitcoin, Apple, a wrapped token at 1:1. An exchange or an index provider already
+          publishes the number, and convertibility keeps the wrapper in line.
+          <strong>No gap. Not a customer.</strong></p></div>
+      <div class="card buy"><h3>A basket</h3>
+        <p>Two stocks and some bitcoin, as one share. No exchange lists it. No index provider
+          covers it. Traditional index providers do not touch digital assets and digital-asset
+          index providers do not touch equities, so a basket spanning both has no home at all.
+          <strong>It has to be computed and signed.</strong></p></div>
+      <div class="card buy"><h3>A market that is shut</h3>
+        <p>A tokenised equity fund trades around the clock. Its constituents trade about 32 hours
+          of every 168. On Monday morning several of them have not printed since Friday.
+          <strong>No feed can relay a price that does not exist.</strong></p></div>
+    </div>
+
+    <p class="punch">Every leg has a price. The combination has none, and never will.</p>
+
+    <div class="grid g4" style="margin-top:3vh">
+      <div class="card"><h3>Tokenised funds &amp; ETPs</h3>
+        <p>A share is worth what the fund holds, divided by shares outstanding. Only the issuer
+          knows both numbers, and today only the issuer says them.</p></div>
+      <div class="card"><h3>Tokenised equities</h3>
+        <p>Composable by design, but nothing composes them. There is no NAV for a custom
+          combination of tokenised stocks, so nobody can build on top of them.</p></div>
+      <div class="card"><h3>Wrapped digital assets</h3>
+        <p>A wrapper is not the asset it wraps. It carries custody and redemption risk that
+          nothing prices, and it settles contracts that need one struck moment.</p></div>
+      <div class="card"><h3>Collateral</h3>
+        <p>A liquidation engine consumes a mark it cannot audit, produced by the party whose
+          collateral it is about to sell.</p></div>
+    </div>
+
+    <p class="src">A price feed relays a number that exists. When the market is shut, or when the
+      instrument is one person's bespoke combination, there is nothing to relay and somebody has
+      to attest a value instead of reporting one. That is the one job a feed structurally cannot
+      do.</p>
   </div>
 </section>
 
@@ -248,18 +296,18 @@ a.inline:hover{text-decoration:underline}
       <div class="card hi">
         <div class="lab">Publishing an official price</div>
         <div class="fig">3<small> bps + $600k/yr</small></div>
-        <p>What State Street pays S&amp;P Dow Jones for SPY. Index providers take roughly a third
-          of every ETF management fee on earth.</p>
+        <p>What the SPY trust pays S&amp;P Dow Jones — 0.03% of the daily size of the trust plus
+          an annual licence fee of $600,000, stated verbatim in the trust's own filing.</p>
       </div>
     </div>
     <p class="punch">One is accounting. One is a benchmark. Ten to fifteen times the money.</p>
-    <p class="src">BBH Trust, Form N-CSR FY2023 · An, Benetton &amp; Song, <em>Journal of Financial Economics</em></p>
+    <p class="src">0.325 bps: BBH Trust, Form N-CSR · 3 bps + $600,000: SPDR S&amp;P 500 ETF Trust, Form N-30D</p>
 
     <table>
       <thead><tr><th>Line</th><th>Who pays</th><th>Price</th></tr></thead>
       <tbody>
         <tr><td><strong>NAV-as-a-service</strong> — a private, auditable daily strike</td><td>the issuer</td><td class="mono">$50–150k/yr flat → 1–3 bps at scale</td></tr>
-        <tr><td><strong>Execution</strong> — notional crossed at the close</td><td>traders</td><td class="mono">bps on notional</td></tr>
+        <tr><td><strong>Creation &amp; redemption</strong> — a flat fee per order</td><td>the authorised participant</td><td class="mono">flat, per creation unit</td></tr>
         <tr><td><strong>Platform licence</strong> — run the venue for your own members</td><td>market infrastructure</td><td class="mono">annual licence</td></tr>
       </tbody>
     </table>
@@ -273,17 +321,23 @@ a.inline:hover{text-decoration:underline}
     <div class="kicker">What's running today</div>
     <h2>Not a mockup.</h2>
     <div class="grid g4">
-      <div class="card buy"><h3>Order books</h3><p>A continuous book with price-time priority, plus the sealed cross.</p></div>
+      <div class="card buy"><h3>The sealed cross</h3><p>A closing auction that uncrosses the whole book at one uniform price.</p></div>
+      <div class="card buy"><h3>K-of-N committee</h3><p>An attested fixing, provable from the contract's own signatures.</p></div>
+      <div class="card buy"><h3>Create &amp; redeem</h3><p>In-kind, atomic — deliver the underlyings, receive shares.</p></div>
       <div class="card buy"><h3>Private OTC</h3><p>Bilateral atomic delivery-versus-payment.</p></div>
-      <div class="card buy"><h3>Leverage</h3><p>Cash-settled perpetuals — margin, funding rate, liquidation.</p></div>
-      <div class="card buy"><h3>Treasury tools</h3><p>An accruing money-market NAV and in-kind create &amp; redeem.</p></div>
     </div>
     <div class="grid g4" style="margin-top:18px">
       <div class="card"><h3>4.16 cBTC</h3><p>Real BitSafe cBTC claimed through the CIP-56 registry flow, on their own templates.</p></div>
-      <div class="card"><h3>30 templates</h3><p>Around 15,700 lines of Daml across the settlement, auction, committee and perpetual layers.</p></div>
-      <div class="card"><h3>213 scenarios</h3><p>Every settlement path asserts total cash before equals total cash after.</p></div>
-      <div class="card"><h3>crossdesk 2.0.0</h3><p>Registered on a shared Canton participant, running against the real Ledger API.</p></div>
+      <div class="card"><h3>38 templates</h3><p>15,984 lines of Daml across the settlement, auction, committee and perpetual layers.</p></div>
+      <div class="card"><h3>121 test scripts</h3><p>Every settlement path asserts total cash before equals total cash after.</p></div>
+      <div class="card"><h3>crossdesk 2.1.0</h3><p>A legal smart-contract upgrade of 2.0.0 — every new field Optional and appended, so no contract on a participant is orphaned.</p></div>
     </div>
+    <p class="src" style="margin-top:22px">
+      A continuous order book and a cash-settled perpetuals layer are also built and tested, and
+      neither is sold. Operating a market and running leverage are licensed activities; publishing
+      a number and having a committee sign a valuation are not. That line is deliberate, and it is
+      what keeps this operable by a small team.
+    </p>
   </div>
 </section>
 

@@ -76,7 +76,7 @@ Previous draft kept at `GRAND_FINAL_PITCH_SCRIPT.bak.md`.
 >
 > **Calculating** a NAV pays about **a third of one basis point** — Brown Brothers discloses it.
 > **Publishing an official price** pays **three basis points plus six hundred thousand a year** —
-> what State Street pays S&P Dow Jones for SPY.
+> what the SPY trust pays S&P Dow Jones.
 >
 > **Same computation. Ten to fifteen times the money.**
 
@@ -105,7 +105,7 @@ Previous draft kept at `GRAND_FINAL_PITCH_SCRIPT.bak.md`.
 > indicative price **above** the official NAV. She **shorts the perpetual** and takes the
 > arbitrage with a **market-on-close**. The hedge **unwinds itself when the venue crosses.**
 
-**▸ SLIDE 10 — four lanes · the CIP-56 claim · 213 tests · package 2.0.0**
+**▸ SLIDE 10 — four lanes · the CIP-56 claim · 121 test scripts · package 2.0.0**
 
 > **Four of your six builder lanes**, live — order books, private OTC, leverage, treasury tools.
 > On **cETH**, **cBTC** and the fund itself.

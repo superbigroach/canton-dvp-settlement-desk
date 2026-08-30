@@ -132,9 +132,15 @@ single-key party submits alone; a Decentralized Party's submission must satisfy 
 is exactly what Decentralization Manager's coordinator exists to do — collect the required signatures
 before ledger submission. So:
 
-- **`RunClose`, `ProcessCreation`, `ProcessRedemption` and `FinalizeFixing`** are operator- or
+- **`CloseBidding`, `RunClose`, `ProcessCreation` and `ProcessRedemption`** are operator- or
   administrator-controlled writes. Under a decentralized operator each becomes a coordinated
   submission rather than a direct one.
+- 🔴 **`FinalizeFixing` is deliberately NOT in that list.** It is `controller proposer`
+  (`Governance.daml:542`) — a committee member, not the operator — and the backend submits it
+  as that member. An earlier version of this document had it wrong.
+- ⚠️ **A close is TWO operator submissions** (`CloseBidding` then `RunClose`), and creation
+  and redemption are two administrator submissions each (approve, then process). Any latency
+  budget assuming one submission per operation has half the headroom it thought.
 - That changes **how the backend submits**, not what the Daml says.
 - 🔴 **This cannot be designed on paper alone and must not be claimed as working.** It needs a
   participant, a Decentralized Party, and DM running, and it needs the latency measured — a
