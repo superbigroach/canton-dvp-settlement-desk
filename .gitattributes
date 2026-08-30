@@ -1,0 +1,10 @@
+# Shell scripts and Gradle wrappers MUST stay LF on checkout, on every platform.
+# A CR in a shebang makes the kernel look for an interpreter named "bash\r", and
+# the failure is opaque: "cannot execute: required file not found" for a file
+# that is plainly there. This already cost a debugging round on ./gradlew in this
+# repo, and deploy/demo/entrypoint.sh would fail the same way inside a container
+# where there is nothing to debug with.
+*.sh        text eol=lf
+gradlew     text eol=lf
+Dockerfile  text eol=lf
+*.conf      text eol=lf
