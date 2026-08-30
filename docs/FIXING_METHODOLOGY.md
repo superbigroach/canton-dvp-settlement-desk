@@ -185,6 +185,12 @@ closed and someone still has to settle"* is the definition of a doubted mark.
 - **Tier 2 inputs** are the recipe fields signed by the committee.
 - **Indicative value inputs** are external market data (currently Coinbase spot). External data
   is **never** an input to an official fixing. It informs the indicative value only.
+- **A wrapped asset's mark is two inputs, not one.** Where the instrument is a claim on an asset
+  priced elsewhere (cBTC on BTC, cETH on ETH), the fixing carries the **benchmark print**
+  (`referencePrice`) and the **par ratio** the committee attested (`wrapperFactor`) as separate
+  signed fields, and the struck price is their product. The benchmark is an input nobody argues
+  about; the ratio is the judgement, and it is the one number no external administrator produces.
+  A pair that does not reconcile cannot exist on-ledger. See `docs/SIGNER_PROTOCOL.md` §2a.
 - **Incomplete inputs:** if a required component has no current fixing, the dependent fixing is
   **not published**. A gap is published as a gap. A fixing is never estimated to fill one.
 
@@ -227,6 +233,17 @@ closed and someone still has to settle"* is the definition of a doubted mark.
   of disinterested referees would never be assembled or funded.
 - **Every signature is attributable and permanent.** Who signed which fixing is on the ledger
   forever.
+- **What each signer asserts is defined, not left to judgement.** `docs/SIGNER_PROTOCOL.md` sets
+  out, per role, the named conditions a member verifies before confirming — redemption integrity
+  for the issuer, book acceptance for the lender, the observed traded range for the venue. No
+  member is asked for an opinion about the price. This is what keeps an unpaid committee from
+  decaying into a rubber stamp, and it is what makes a refusal actionable: a signer declines by
+  naming a condition that failed, not by disagreeing.
+- **The composition must be opposed.** The `N` are not merely interested, they are interested in
+  *different directions* — the issuer favours par, the lender favours prudence, the venue favours
+  the observed print. A committee whose members share a direction of interest is the failure mode
+  this design is most often accused of; `docs/SIGNER_PROTOCOL.md` §6 states that objection at
+  full strength and answers it.
 - **The administrator does not trade the instruments it prices.** A benchmark administrator that
   takes positions in what it prices has no credibility. This is a hard constraint on CrossDesk's
   own business model, not a preference.
@@ -275,6 +292,9 @@ route must be resolved first.
 | §4 Scheduled strike at a fixed time | **not implemented** — strikes are triggered manually |
 | §5 Gap-rather-than-estimate | implemented (`navPerShare` returns `None` on a missing mark) |
 | §6 Restatement | implemented, tested — `RestatementProposal`, same K-of-N as a fixing. The two-business-day window is policy, not code (see §6) |
+| §5 Wrapper mark as two signed fields (`referencePrice`, `wrapperFactor`) | implemented, tested — reconciliation enforced on-ledger (`testWrapperMarkAttested`) |
+| §7 Per-signer protocol evidence on the published fixing | implemented, tested — `ConfirmWithChecks` (`testSignerProtocolEvidence`). The venue's observed range is enforced; the issuer's and lender's claims are recorded but not machine-checked (`docs/SIGNER_PROTOCOL.md` §7) |
+| §7 Fund behaviour when `K` is not reached | **not specified** — belongs to the fund's governing documents, not the administrator's |
 | §8 Cessation notice | **not implemented** — process only |
 | §10 Lookup by identifier and date | **not implemented** — `GET /fixings` returns contracts, not a dated series |
 
