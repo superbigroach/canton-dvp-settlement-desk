@@ -31,6 +31,14 @@
         "destination": "/participate/index.html"
       },
       {
+        "source": "/showcase",
+        "destination": "/showcase/index.html"
+      },
+      {
+        "source": "/participate/**",
+        "destination": "/participate/index.html"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }
@@ -92,6 +100,24 @@
       },
       {
         "source": "/participate/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, max-age=0, must-revalidate"
+          }
+        ]
+      },
+      {
+        "source": "/showcase",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, max-age=0, must-revalidate"
+          }
+        ]
+      },
+      {
+        "source": "/showcase/**",
         "headers": [
           {
             "key": "Cache-Control",
