@@ -230,6 +230,44 @@ export interface FixingProposalResponse {
   accruing: boolean;
 }
 
+// ---- The signer protocol: what each seat asserts --------------------------
+// docs/SIGNER_PROTOCOL.md, served as data so the screen and the rule cannot drift.
+
+/** One named condition, and the plain statement of when it passes. */
+export interface SignerCondition {
+  name: string;
+  passesWhen: string;
+}
+
+/** One seat: what only it can see, and what it is therefore able to attest. */
+export interface SignerRole {
+  key: string; // issuer | lender | venue | operator
+  title: string;
+  uniquelyKnows: string;
+  conditions: SignerCondition[];
+  /** Venue only. Its traded range is the one assertion the ledger checks. */
+  requiresObservedRange: boolean;
+}
+
+export interface SignerProtocolResponse {
+  version: string;
+  roles: SignerRole[];
+}
+
+/** A wrapped-asset proposal, with the factor visible rather than folded into the price. */
+export interface WrappedFixingProposalResponse {
+  contractId: string;
+  instrumentId: string;
+  cashInstrument: string;
+  session: string;
+  benchmarkPrice: string;
+  parFactor: string;
+  strikePrice: string;
+  /** (1 - parFactor) × 10000. "20bp below par" is what a risk committee argues about. */
+  discountBps: string;
+  rationale: string;
+}
+
 /** An official NavFixing with its accrual recipe, plus the value now. */
 export interface FixingResponse {
   contractId: string;
@@ -702,10 +740,30 @@ export interface BookConfirm {
   tradedAt: string;
 }
 
+/**
+ * A gRPC channel failure arrives as a wall of Netty internals:
+ *
+ *   UNAVAILABLE: io exception Channel Pipeline: [SslHandler#0,
+ *   ProtocolNegotiators$ClientTlsHandler#0, WriteBufferingAndExceptionHandler#0,
+ *   DefaultChannelPipeline$TailContext#0] (while reading instruments for
+ *   issuer-crossdesk::122003aa7c491e00a453145c4d2cd3dbf5db8908b4e663c9944baed57fd66effa668)
+ *
+ * That is a stack trace wearing a message, and it is the FIRST thing a visitor sees when
+ * the participant is down. It says nothing a reader can act on and reads as a crash rather
+ * than an absent dependency. Collapse it to the one fact that matters, and keep the
+ * diagnostic pointer for whoever actually needs it.
+ */
+function humaniseLedgerError(msg: string): string | null {
+  if (!/UNAVAILABLE|io exception|Channel Pipeline|DEADLINE_EXCEEDED/i.test(msg)) return null;
+  return 'No Canton participant is reachable, so the desk has no ledger to read. '
+       + 'The shared HackCanton node is offline — see GET /api/diag.';
+}
+
 export function errorMessage(e: unknown): string {
-  if (e instanceof ApiError) return e.message;
-  if (e instanceof Error) return asText(e.message) || e.name || 'the request failed';
-  return asText(e) || 'the request failed';
+  const raw = e instanceof ApiError ? e.message
+    : e instanceof Error ? (asText(e.message) || e.name || 'the request failed')
+    : (asText(e) || 'the request failed');
+  return humaniseLedgerError(raw) ?? raw;
 }
 
 /** Parse, or null. A malformed body must not turn into a JSON syntax error on screen. */
@@ -995,6 +1053,62 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ member }),
     }),
+
+  /**
+   * The signer protocol as data — every seat and the named conditions it verifies.
+   *
+   * <p>FETCHED, NOT HARD-CODED. If the panel carried its own copy of the conditions it
+   * would drift from what `/confirm-checked` accepts, and a signer ticking a box the
+   * backend then refuses is the fastest way to teach someone their seat is decorative.
+   */
+  signerProtocol: () => req<SignerProtocolResponse>('/signer-protocol'),
+
+  /**
+   * Confirm WITH the protocol evidence — which named conditions this member verified,
+   * and for a venue the range its own book actually traded.
+   *
+   * A separate call from `confirmFixing`, matching the separate Daml choice. The venue's
+   * range is enforced on-ledger: a price outside it is refused on-chain, not in the UI.
+   */
+  confirmFixingWithChecks: (
+    proposalCid: string,
+    body: {
+      member: string;
+      role: string;
+      checksPassed: string[];
+      protocolRef?: string;
+      observedLow?: number | string;
+      observedHigh?: number | string;
+    },
+  ) =>
+    req<CidResponse>(`/fixing/${encodeURIComponent(proposalCid)}/confirm-checked`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  /**
+   * Propose a WRAPPED-ASSET fix — the benchmark print and the par ratio, signed apart.
+   *
+   * CF Benchmarks prices BTC and has never priced cBTC. The struck price is computed
+   * on-ledger as their product, so an issuer declining to attest par declines in a field
+   * rather than inside a number nobody decomposed.
+   */
+  proposeWrappedFixing: (
+    committeeCid: string,
+    body: {
+      proposer: string;
+      instrumentId: string;
+      benchmarkPrice: number | string;
+      parFactor: number | string;
+      rationale: string;
+      cashInstrument?: string;
+      session?: Session;
+    },
+  ) =>
+    req<WrappedFixingProposalResponse>(
+      `/committee/${encodeURIComponent(committeeCid)}/propose-wrapped`,
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
 
   finalizeFixing: (proposalCid: string, proposer: string, publishTo: string[]) =>
     req<CidResponse>(`/fixing/${encodeURIComponent(proposalCid)}/finalize`, {

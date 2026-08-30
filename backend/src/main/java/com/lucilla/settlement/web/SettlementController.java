@@ -4,6 +4,7 @@ import com.daml.ledger.javaapi.data.Transaction;
 import com.lucilla.settlement.ledger.Accrual;
 import com.lucilla.settlement.ledger.LedgerCommands;
 import com.lucilla.settlement.ledger.LedgerService;
+import com.lucilla.settlement.ledger.SignerProtocol;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -1300,11 +1301,42 @@ public class SettlementController {
      * venue supplying a range that does not contain the price is refused ON-LEDGER, so
      * the one seat holding real transaction data cannot rubber-stamp.
      */
+    /**
+     * The signer protocol as data — every seat, what it uniquely knows, and the named
+     * conditions it verifies.
+     *
+     * <p>The UI renders its checkboxes from THIS, rather than hard-coding a list that
+     * would drift from what {@code /confirm-checked} accepts. One source of truth, so a
+     * signer ticks exactly what the backend will take.
+     */
+    @GetMapping("/signer-protocol")
+    public Dtos.SignerProtocolResponse signerProtocol() {
+        return new Dtos.SignerProtocolResponse(
+                SignerProtocol.VERSION,
+                SignerProtocol.roles().stream()
+                        .map(r -> new Dtos.SignerRoleView(
+                                r.key(), r.title(), r.uniquelyKnows(),
+                                r.conditions().stream()
+                                        .map(c -> new Dtos.SignerConditionView(c.name(), c.passesWhen()))
+                                        .toList(),
+                                r.requiresObservedRange()))
+                        .toList());
+    }
+
     @PostMapping("/fixing/{cid}/confirm-checked")
     public ResponseEntity<Dtos.CidResponse> confirmFixingWithChecks(
             @PathVariable String cid, @Valid @RequestBody Dtos.ConfirmWithChecksRequest req) {
+        // REFUSE BEFORE SUBMITTING. The ledger enforces the venue's range and that at
+        // least one condition is named; it cannot know whether `book-acceptance` is a
+        // check the venue seat is entitled to claim. That belongs to the protocol
+        // version, which lives at the edge — see SignerProtocol's class comment.
+        String bad = SignerProtocol.rejectionReason(req.role(), req.checksPassed(),
+                req.observedLow() != null, req.observedHigh() != null);
+        if (bad != null) {
+            throw new IllegalArgumentException(bad);
+        }
         String member = ledger.resolveParty(req.member());
-        String ref = blankTo(req.protocolRef(), "SIGNER_PROTOCOL v1 " + req.role());
+        String ref = blankTo(req.protocolRef(), SignerProtocol.refFor(req.role()));
         String next = ledger.submitForCreated(member,
                 LedgerCommands.confirmFixingWithChecks(cid, member, req.role(), ref,
                         req.checksPassed(),

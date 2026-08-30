@@ -1014,3 +1014,110 @@ button.link:hover { filter: brightness(1.2); }
 .receipt-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .arb-actions button { display: flex; flex-direction: column; align-items: center; gap: 2px; }
 .arb-actions .rec { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; opacity: .8; font-weight: 500; }
+
+/* =========================================================================
+   THE SIGNER PROTOCOL — what a committee member asserts, not what it thinks.
+   docs/SIGNER_PROTOCOL.md. Rendered from GET /signer-protocol, never from a
+   local copy, so the boxes on screen are exactly the ones the API accepts.
+   Styled as a form rather than a confirmation dialog on purpose: this is a
+   checklist against your own systems, not a prompt asking whether you agree.
+   ========================================================================= */
+
+.member-chip-pair {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.signer-protocol {
+  margin-top: 14px;
+  padding: 14px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+}
+
+.signer-protocol .sp-head {
+  font-size: 13px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.signer-protocol .sp-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.signer-protocol .sp-row > span {
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 48px;
+}
+
+.signer-protocol select,
+.signer-protocol input[type='text'],
+.signer-protocol .sp-range input {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  padding: 6px 9px;
+  font-family: var(--ui);
+  font-size: 13px;
+}
+
+.signer-protocol .sp-checks {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+
+.signer-protocol .sp-checks li {
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.signer-protocol .sp-checks li:last-child { border-bottom: none; }
+
+.signer-protocol .sp-checks label {
+  display: block;
+  cursor: pointer;
+  line-height: 1.5;
+}
+
+/* The condition NAME is the thing that lands on the ledger, so it reads as a
+   token rather than prose — a signer should recognise it in the record later. */
+.signer-protocol .sp-checks code {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--accent);
+}
+
+/* The venue's range is the one assertion the ledger checks against reality, so
+   it is set apart from the tick-boxes rather than sitting among them. */
+.signer-protocol .sp-range {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border-2);
+}
+
+.signer-protocol .sp-range label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.signer-protocol .sp-range .warn {
+  flex-basis: 100%;
+  margin: 0;
+}

@@ -458,6 +458,33 @@ public final class Dtos {
             String rationale) {
     }
 
+    /**
+     * The signer protocol as data, so the UI renders exactly what the API will accept.
+     *
+     * <p>Hard-coding the conditions in the frontend would let the screen drift from the
+     * rule, and a signer ticking a box that the backend then refuses is the fastest way
+     * to teach someone their seat is decorative.
+     */
+    public record SignerProtocolResponse(
+            String version,
+            List<SignerRoleView> roles) {
+    }
+
+    /** One seat: what only it can see, and what it is therefore able to attest. */
+    public record SignerRoleView(
+            String key,                      // issuer | lender | venue | operator
+            String title,
+            String uniquelyKnows,
+            List<SignerConditionView> conditions,
+            boolean requiresObservedRange) { // venue only — the range the ledger checks
+    }
+
+    /** One named condition, and the plain statement of when it passes. */
+    public record SignerConditionView(
+            String name,
+            String passesWhen) {
+    }
+
     /** Another member adds its attestation. */
     public record ConfirmFixingRequest(
             @NotBlank String member) {

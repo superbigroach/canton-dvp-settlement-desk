@@ -25,6 +25,7 @@
 // a number.
 
 import { useEffect, useState } from 'react';
+import type { SignerRole } from './api';
 import AccrualTicker from './AccrualTicker';
 import {
   api,
@@ -155,6 +156,20 @@ export default function CommitteePanel({ parties, instruments, asset, flash }: P
   const strikeNoun = accruing ? 'NAV' : 'mark';
   const strikeNounCaps = accruing ? 'NAV' : 'MARK';
 
+  // ---- The signer protocol -------------------------------------------------
+  // FETCHED, NOT HARD-CODED. The backend validates against the same list, so a box
+  // that appears here is a box `/confirm-checked` will accept. A local copy would
+  // drift from the rule, and a signer ticking something the API then refuses learns
+  // that their seat is decorative.
+  const [protocolVersion, setProtocolVersion] = useState<string>('');
+  const [signerRoles, setSignerRoles] = useState<SignerRole[]>([]);
+  // Which member is filling in evidence right now, and what they have ticked.
+  const [signingMember, setSigningMember] = useState<string>('');
+  const [signingRole, setSigningRole] = useState<string>('');
+  const [ticked, setTicked] = useState<string[]>([]);
+  const [obsLow, setObsLow] = useState<string>('');
+  const [obsHigh, setObsHigh] = useState<string>('');
+
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>('');
 
@@ -273,6 +288,56 @@ export default function CommitteePanel({ parties, instruments, asset, flash }: P
         ? `${proposer} proposed ${instrumentId} ${session}: base ${p}, accruing ${rate} ${dayCount} — 1 of ${threshold}.`
         : `${proposer} proposed ${instrumentId} ${session} @ ${p} — 1 of ${threshold} attestations.`,
     );
+  }
+
+  useEffect(() => {
+    // Best-effort: an older backend has no /signer-protocol, and the panel must still
+    // work on the plain Confirm path rather than breaking on a 404.
+    api
+      .signerProtocol()
+      .then((p) => {
+        setProtocolVersion(p.version);
+        setSignerRoles(p.roles);
+      })
+      .catch(() => setSignerRoles([]));
+  }, []);
+
+  const activeRole = signerRoles.find((r) => r.key === signingRole);
+
+  /** Open the evidence form for one member. Nothing is submitted until they attest. */
+  function beginSigning(member: string) {
+    setSigningMember(member);
+    setSigningRole(signerRoles[0]?.key ?? '');
+    setTicked([]);
+    setObsLow('');
+    setObsHigh('');
+  }
+
+  /**
+   * Attest WITH evidence. The member names the conditions it verified rather than
+   * clicking yes to a price — the difference between an oversight record and a
+   * signature count.
+   */
+  async function confirmWithChecks() {
+    if (!proposalCid || !signingMember || !activeRole) return;
+    const res = await run(() =>
+      api.confirmFixingWithChecks(proposalCid, {
+        member: signingMember,
+        role: activeRole.key,
+        checksPassed: ticked,
+        ...(activeRole.requiresObservedRange
+          ? { observedLow: obsLow.trim(), observedHigh: obsHigh.trim() }
+          : {}),
+      }),
+    );
+    if (!res) return;
+    setProposalCid(res.contractId);
+    const next = [...attestors, signingMember];
+    setAttestors(next);
+    flash(
+      `${signingMember} attested as ${activeRole.key} (${ticked.length} condition(s)) — ${next.length} of ${threshold}.`,
+    );
+    setSigningMember('');
   }
 
   async function confirm(member: string) {
@@ -553,11 +618,109 @@ export default function CommitteePanel({ parties, instruments, asset, flash }: P
           </div>
           <div className="member-chips">
             {pending.map((m) => (
-              <button key={m} className="chip confirm" disabled={busy} onClick={() => confirm(m)}>
-                {m} confirms
-              </button>
+              <span key={m} className="member-chip-pair">
+                <button className="chip confirm" disabled={busy} onClick={() => confirm(m)}>
+                  {m} confirms
+                </button>
+                {signerRoles.length > 0 && (
+                  <button
+                    className="chip"
+                    disabled={busy}
+                    title="Attest naming the conditions this seat verified"
+                    onClick={() => beginSigning(m)}
+                  >
+                    {m} attests with evidence
+                  </button>
+                )}
+              </span>
             ))}
           </div>
+
+          {/* THE SIGNER PROTOCOL FORM.
+              No member is asked whether it agrees with the price. Each is asked to
+              assert a fact only its seat can see, which is what keeps an unpaid
+              committee from decaying into a rubber stamp. */}
+          {signingMember && activeRole && (
+            <div className="signer-protocol">
+              <div className="sp-head">
+                <strong>{signingMember}</strong> attests ·{' '}
+                <span className="subtle">{protocolVersion}</span>
+              </div>
+
+              <label className="sp-row">
+                <span>Seat</span>
+                <select
+                  value={signingRole}
+                  onChange={(e) => {
+                    setSigningRole(e.target.value);
+                    setTicked([]);
+                  }}
+                >
+                  {signerRoles.map((r) => (
+                    <option key={r.key} value={r.key}>
+                      {r.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <p className="subtle">
+                What only this seat can see: <em>{activeRole.uniquelyKnows}</em>
+              </p>
+
+              <ul className="sp-checks">
+                {activeRole.conditions.map((c) => (
+                  <li key={c.name}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={ticked.includes(c.name)}
+                        onChange={(e) =>
+                          setTicked((t) =>
+                            e.target.checked ? [...t, c.name] : t.filter((x) => x !== c.name),
+                          )
+                        }
+                      />{' '}
+                      <code>{c.name}</code>
+                      <span className="subtle"> — {c.passesWhen}</span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+
+              {activeRole.requiresObservedRange && (
+                <div className="sp-range">
+                  <label>
+                    <span>Traded low</span>
+                    <input value={obsLow} onChange={(e) => setObsLow(e.target.value)} />
+                  </label>
+                  <label>
+                    <span>Traded high</span>
+                    <input value={obsHigh} onChange={(e) => setObsHigh(e.target.value)} />
+                  </label>
+                  <p className="warn subtle">
+                    Enforced on-ledger: a price outside this range is refused on-chain, not
+                    here. The one seat with real transaction data cannot rubber-stamp.
+                  </p>
+                </div>
+              )}
+
+              <div className="member-chips">
+                <button
+                  className="primary"
+                  disabled={busy || ticked.length === 0}
+                  onClick={confirmWithChecks}
+                >
+                  {ticked.length === 0
+                    ? 'Name at least one condition'
+                    : `Attest as ${activeRole.key} · ${ticked.length} condition(s)`}
+                </button>
+                <button className="chip" disabled={busy} onClick={() => setSigningMember('')}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
           <button className="primary" disabled={busy || !enoughAttestors} onClick={finalize}>
             {enoughAttestors
               ? `Finalise · strike the official ${strikeNoun} (${attestors.length}-of-${members.length})`
