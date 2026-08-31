@@ -52,8 +52,9 @@ published with it.
 ### Tier 1 — Sealed auction uniform price (preferred)
 Where an auction session is held for the instrument, the fixing is the **uniform clearing price**
 at which the auction uncrosses, determined from the sealed orders themselves. All executions at
-that strike occur at that single price; the heavy side is rationed pro-rata. Unpriced
-market-on-close orders are allocated ahead of limit orders.
+that strike occur at that single price. Unpriced market-on-close orders are allocated first; priced
+orders through the print fill in full, in price priority; only the marginal at-the-print level is
+rationed, earliest-submitted first — at most one order is ever partially filled.
 
 **Minimum quality conditions.** The auction price is used only if, at uncrossing:
 - at least **two** orders rest on the book, and
@@ -248,7 +249,7 @@ closed and someone still has to settle"* is the definition of a doubted mark.
   takes positions in what it prices has no credibility. This is a hard constraint on CrossDesk's
   own business model, not a preference.
 
-## 8. Cessation — *specified, not yet implemented*
+## 8. Cessation — *implemented and enforced on-ledger; see §12*
 
 If a fixing is to be discontinued, the administrator publishes a cessation notice **no less than
 60 calendar days** before the final strike, naming the final strike date and, where one exists, a

@@ -108,7 +108,7 @@ database** (you'd have to trust the operator). That combination is the entire te
 
 ## 5. What is actually built
 
-### Daml — 16 files, 15,984 lines, 38 templates, 79 choices, 121 test scripts
+### Daml — 16 files, 16,573 lines, 39 templates, 84 choices, 125 test scripts
 
 | File | Lines | Templates |
 |---|---|---|

@@ -73,7 +73,7 @@ convenience.
 
 | Check | Result |
 |---|---|
-| `daml test` | **121 scripts, 0 failures** |
+| `daml test` | **125 scripts, 0 failures** |
 | `backend-devnet` tests | **92, 0 failures** |
 | `backend` tests | **103, 0 failures** |
 | Upgrade check (`--upgrades=crossdesk-2.0.0.dar`) | **0 errors** — 2.1.0 legally upgrades 2.0.0 |

@@ -142,6 +142,21 @@ export default function CommitteePanel({ parties, instruments, asset, flash }: P
   const [rate, setRate] = useState<string>('0.036');
   const [dayCount, setDayCount] = useState<DayCountConvention>('ACT/360');
 
+  // A WRAPPED ASSET IS PRICED AS TWO SIGNED FIELDS, NOT ONE NUMBER. cBTC is a claim on
+  // BTC held under an attestor multisig: its value is the benchmark print (CME CF BRR —
+  // free, public, nobody argues) times the market's confidence that redemption works
+  // (the par factor — the thing the committee actually decides). The ledger multiplies
+  // them, so the factor can never disagree with the price it produced, and an issuer
+  // that will not attest par has to refuse in a field rather than inside a number.
+  const wrapped = kindOf === 'CryptoWrapped';
+  const [benchmark, setBenchmark] = useState<string>('');
+  const [parFactor, setParFactor] = useState<string>('0.998');
+  const benchmarkNum =
+    Number(benchmark) || (instruments.find((i) => i.id === instrumentId)?.referencePrice ?? 0);
+  const parFactorNum = Number(parFactor) || 0;
+  const wrappedStrike = benchmarkNum * parFactorNum;
+  const wrappedBps = (1 - parFactorNum) * 10000;
+
   // CANDIDATE marks from an outside feed. These are NOT prices — nothing values
   // against them until this committee signs. They exist so a member proposes today's
   // real number rather than one typed from memory. The feed proposes; the committee
@@ -253,8 +268,35 @@ export default function CommitteePanel({ parties, instruments, asset, flash }: P
     const proposer = members[0];
     const p = Number(price) || priceOf(instrumentId) || 0;
 
-    // TWO DIFFERENT DAML CHOICES. The snapshot path is unchanged and still takes
-    // exactly the arguments it always took; the accruing path attests three more.
+    // THREE DIFFERENT DAML CHOICES. The snapshot path is unchanged and still takes
+    // exactly the arguments it always took; the accruing path attests three more; the
+    // wrapped path attests a benchmark and a par factor and lets the ledger multiply.
+    if (wrapped) {
+      const b = benchmarkNum;
+      const f = parFactorNum;
+      const w = await run(() =>
+        api.proposeWrappedFixing(committeeCid, {
+          proposer,
+          instrumentId,
+          benchmarkPrice: b,
+          parFactor: f,
+          cashInstrument: CASH,
+          session,
+          rationale: `benchmark print ${b} (CME CF BRR-style, 16:00 London) × par factor ${f}`,
+        }),
+      );
+      if (!w) return;
+      setProposalCid(w.contractId);
+      setAttestors([proposer]);
+      setFixCid('');
+      const bps = Number(w.discountBps);
+      flash(
+        `${proposer} proposed ${instrumentId} ${session}: ${b.toLocaleString()} × ${f} = ` +
+          `${Number(w.strikePrice).toLocaleString()} — ${Math.abs(bps).toFixed(0)} bp ` +
+          `${bps >= 0 ? 'below' : 'above'} par, struck on-ledger — 1 of ${threshold}.`,
+      );
+      return;
+    }
     const res = await run(() =>
       accruing
         ? api.proposeAccruingFixing(committeeCid, {
@@ -307,7 +349,14 @@ export default function CommitteePanel({ parties, instruments, asset, flash }: P
   /** Open the evidence form for one member. Nothing is submitted until they attest. */
   function beginSigning(member: string) {
     setSigningMember(member);
-    setSigningRole(signerRoles[0]?.key ?? '');
+    // DEFAULT THE SEAT FROM THE MEMBER, where the demo roster makes it obvious: the
+    // Venue party is the venue seat, the Issuer the issuer, the Bank the lender.
+    // A signer can still change it — but the protocol refuses a condition claimed by
+    // the wrong seat, and a demo should not open on a form that is about to be refused.
+    const guessed: Record<string, string> = { Venue: 'venue', Issuer: 'issuer', Bank: 'lender' };
+    const guess = guessed[member];
+    const known = guess && signerRoles.some((r) => r.key === guess) ? guess : undefined;
+    setSigningRole(known ?? signerRoles[0]?.key ?? '');
     setTicked([]);
     setObsLow('');
     setObsHigh('');
@@ -486,6 +535,41 @@ export default function CommitteePanel({ parties, instruments, asset, flash }: P
                 </div>
               )}
             </div>
+            {wrapped ? (
+              <div className="field" style={{ flex: '1 1 100%' }}>
+                <span>Benchmark × par factor ({CASH})</span>
+                <div className="row tight">
+                  <input
+                    className="mono"
+                    type="number"
+                    min="0"
+                    step="any"
+                    placeholder={suggested != null ? String(suggested) : 'benchmark print'}
+                    title="The underlying benchmark print — e.g. CME CF BRR at 16:00 London. Free, public, nobody argues."
+                    value={benchmark}
+                    disabled={busy}
+                    onChange={(e) => setBenchmark(e.target.value)}
+                  />
+                  <span className="mono">×</span>
+                  <input
+                    className="mono"
+                    type="number"
+                    min="0"
+                    max="2"
+                    step="0.001"
+                    title="The par factor — 1.000 attests the wrapper at par; 0.998 is 20 bp below. This is the product."
+                    value={parFactor}
+                    disabled={busy}
+                    onChange={(e) => setParFactor(e.target.value)}
+                  />
+                </div>
+                <p className="hint subtle">
+                  = <strong className="mono">{wrappedStrike.toLocaleString(undefined, { maximumFractionDigits: 2 })}</strong>
+                  {' '}· {Math.abs(wrappedBps).toFixed(0)} bp {wrappedBps >= 0 ? 'below' : 'above'} par ·
+                  the ledger multiplies, so the factor cannot disagree with the price.
+                </p>
+              </div>
+            ) : (
             <label className="field small">
               <span>{accruing ? `Base NAV (${CASH})` : `Price (${CASH})`}</span>
               <input
@@ -516,6 +600,7 @@ export default function CommitteePanel({ parties, instruments, asset, flash }: P
                 </button>
               )}
             </label>
+            )}
           </div>
 
           {/* WHAT IS BEING ATTESTED — derived from the instrument, stated not asked.
@@ -524,7 +609,14 @@ export default function CommitteePanel({ parties, instruments, asset, flash }: P
           <div className="field">
             <span>What is being attested</span>
             <p className="hint attest-mode">
-              {accruing ? (
+              {wrapped ? (
+                <>
+                  <strong>A benchmark and a factor, signed apart.</strong> {instrumentId} is a
+                  wrapper: its value is the benchmark print times the market&rsquo;s confidence
+                  that redemption works. Marking it at par is an assertion, not a fact — so par
+                  is a field the committee signs, and refusing it is something a seat can do.
+                </>
+              ) : accruing ? (
                 <>
                   <strong>A recipe</strong> — base, rate and day count. {instrumentId} earns
                   continuously, so the ledger derives its value every second from here.
@@ -588,7 +680,7 @@ export default function CommitteePanel({ parties, instruments, asset, flash }: P
                 typo is a rejection and never a silent mis-accrual.
               </p>
             </>
-          ) : (
+          ) : wrapped ? null : (
             <p className="hint subtle">
               A snapshot is true at one instant and stale at every instant after it. Correct
               for anything whose value is <em>discovered</em> — an equity, cETH, a volatile
@@ -597,7 +689,7 @@ export default function CommitteePanel({ parties, instruments, asset, flash }: P
           )}
 
           <button className="primary" disabled={busy} onClick={propose}>
-            {members[0]} proposes the {session} {accruing ? 'accrual' : 'fix'}
+            {members[0]} proposes the {session} {wrapped ? 'wrapped mark' : accruing ? 'accrual' : 'fix'}
           </button>
         </div>
       )}

@@ -45,29 +45,29 @@ endpoint queries the ledger **as** the acting party.
 
 ---
 
-## 3. Daml — 16 files, 15,984 lines, 121 test scripts
+## 3. Daml — 16 files, 16,573 lines, 125 test scripts
 
 | File | Lines | Templates |
 |---|---|---|
-| `MarketOnClose.daml` | 2821 | `ClosingAuction`, `SealedOrder`, `ImbalanceDisclosure` |
+| `MarketOnClose.daml` | 2856 | `ClosingAuction`, `SealedOrder`, `ImbalanceDisclosure` |
 | `ContinuousBook.daml` | 1123 | `ContinuousBook`, `RestingOrder`, `TapePrint`, `TradeConfirm` |
 | `LiquidityMandate.daml` | 682 | `MandateTerms`, `LiquidityMandate`, `MandatePerformance` |
 | `TokenStandardDvp.daml` | 637 | `TokenStandardHolding`, `TokenStandardTransferOffer`, `TokenStandardAllocation`, `TokenStandardRegistry`, `TokenStandardDvpProposal`, `TokenStandardDvp` |
 | `TokenSettlement.daml` | 634 | `AuctionAllocationRequest`, `MatchSettlement`, `AuctionCross` |
 | `Perpetual.daml` | 603 | `PerpMarket`, `PerpPosition` |
-| `Governance.daml` | 592 | `OperatorCommittee`, `FixingProposal`, `NavFixing` |
-| `Basket.daml` | 357 | `BasketDefinition`, `CreationOrder`, `CreationAgreement`, `RedemptionOrder`, `RedemptionAgreement`, `BasketReceipt` |
+| `Governance.daml` | 1095 | `OperatorCommittee`, `FixingProposal`, `RestatementProposal`, `NavFixing`, `CessationNotice` |
+| `Basket.daml` | 497 | `BasketDefinition`, `CreationOrder`, `CreationAgreement`, `RedemptionOrder`, `RedemptionAgreement`, `BasketReceipt` |
 | `Settlement.daml` | 309 | `DvPProposal`, `DvPAgreement`, `SettlementReceipt`, `SettlementBatch` |
 | `Holding.daml` | 190 | `Holding` |
 | `Agent.daml` | 133 | `TradingMandate` |
 | `Instrument.daml` | 82 | `Instrument` |
 | **Tests** | | |
-| `Test.daml` | 5235 | — |
+| `Test.daml` | 5894 | — |
 | `ContinuousBookTest.daml` | 1069 | — |
 | `PerpetualTest.daml` | 417 | — |
 | `TokenStandardTest.daml` | 352 | — |
 
-**38 templates, 60 distinct choices.** Every settlement path in `PerpetualTest` asserts
+**39 templates, 84 distinct choices.** Every settlement path in `PerpetualTest` asserts
 `totalCash` before == after.
 
 > The Daml SDK is **not installed on this machine** (`~/.daml` absent), so `daml test` could
