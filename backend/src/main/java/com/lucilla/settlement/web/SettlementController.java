@@ -60,13 +60,21 @@ public class SettlementController {
     private final LedgerService ledger;
     private final com.lucilla.settlement.ledger.MarketData marketData;
     private final org.springframework.context.ApplicationEventPublisher events;
+    // Optional, resolved lazily: the @WebMvcTest slices construct this controller with only
+    // the ledger mocked, and an ObjectProvider is satisfied by an empty context.
+    private final org.springframework.beans.factory.ObjectProvider<com.lucilla.settlement.scheduler.ScheduleStore> scheduleStore;
+    private final org.springframework.beans.factory.ObjectProvider<com.lucilla.settlement.ledger.StrikeCalendars> strikeCalendars;
 
     public SettlementController(LedgerService ledger,
                                 com.lucilla.settlement.ledger.MarketData marketData,
-                                org.springframework.context.ApplicationEventPublisher events) {
+                                org.springframework.context.ApplicationEventPublisher events,
+                                org.springframework.beans.factory.ObjectProvider<com.lucilla.settlement.scheduler.ScheduleStore> scheduleStore,
+                                org.springframework.beans.factory.ObjectProvider<com.lucilla.settlement.ledger.StrikeCalendars> strikeCalendars) {
         this.ledger = ledger;
         this.marketData = marketData;
         this.events = events;
+        this.scheduleStore = scheduleStore;
+        this.strikeCalendars = strikeCalendars;
     }
 
     /**
@@ -1366,7 +1374,8 @@ public class SettlementController {
                         .map(r -> new Dtos.SignerRoleView(
                                 r.key(), r.title(), r.uniquelyKnows(),
                                 r.conditions().stream()
-                                        .map(c -> new Dtos.SignerConditionView(c.name(), c.passesWhen()))
+                                        .map(c -> new Dtos.SignerConditionView(c.name(), c.passesWhen(),
+                                                com.lucilla.settlement.ledger.SignerEvidence.schemaOf(c.evidence())))
                                         .toList(),
                                 r.requiresObservedRange()))
                         .toList());
@@ -1386,6 +1395,31 @@ public class SettlementController {
         }
         String member = ledger.resolveParty(req.member());
         String ref = blankTo(req.protocolRef(), SignerProtocol.refFor(req.role()));
+
+        // VERIFY THE NUMBERS BEFORE SUBMITTING. When an issuer or lender brings per-condition
+        // evidence, the desk applies the protocol's rule to it here — against the proposal's
+        // own price — and refuses with the specific failure. `verified: true` on the event
+        // means THIS code checked the numbers, never that the caller said so.
+        com.lucilla.settlement.ledger.SignerEvidence.Result verified = null;
+        if (req.evidence() != null && com.lucilla.settlement.ledger.SignerEvidence.required(req.role())) {
+            BigDecimal proposalPrice = ledger.fixingProposalsVisibleTo(member).stream()
+                    .filter(p -> p.contractId().equals(cid))
+                    .map(LedgerService.FixingProposalView::price)
+                    .findFirst().orElse(null);
+            int markBps = req.toleranceBps() == null ? SignerProtocol.DEFAULT_TOLERANCE_BPS : req.toleranceBps();
+            int liqBps = req.liquidationToleranceBps() == null ? markBps : req.liquidationToleranceBps();
+            verified = com.lucilla.settlement.ledger.SignerEvidence.verify(req.role(), req.checksPassed(),
+                    req.evidence(), proposalPrice,
+                    new com.lucilla.settlement.ledger.SignerEvidence.Tolerances(markBps, liqBps), Instant.now());
+            if (!verified.ok()) {
+                throw new com.lucilla.settlement.ledger.SignerEvidence.Rejected(
+                        "evidence refused for the " + req.role().trim().toLowerCase() + " seat: "
+                                + String.join("; ", verified.problems()),
+                        req.role().trim().toLowerCase(), verified.problems(),
+                        com.lucilla.settlement.ledger.SignerEvidence.schemaFor(req.role(), req.checksPassed()));
+            }
+        }
+
         String next = ledger.submitForCreated(member,
                 LedgerCommands.confirmFixingWithChecks(cid, member, req.role(), ref,
                         req.checksPassed(),
@@ -1396,6 +1430,13 @@ public class SettlementController {
         evidence.put("protocolRef", ref);
         if (req.observedLow() != null) evidence.put("observedLow", String.valueOf(req.observedLow()));
         if (req.observedHigh() != null) evidence.put("observedHigh", String.valueOf(req.observedHigh()));
+        if (verified != null) {
+            evidence.put("verified", true);
+            evidence.put("verifiedBy", "server");
+            evidence.put("evidence", verified.verified());
+        } else if (com.lucilla.settlement.ledger.SignerEvidence.required(req.role())) {
+            evidence.put("verified", false);   // the operator desk's tick path: recorded, not checked
+        }
         announce(new com.lucilla.settlement.events.LifecycleEvent(
                 com.lucilla.settlement.events.FixingEvent.Kinds.PROPOSAL_CONFIRMED, null,
                 cid, next, member, req.role().trim().toLowerCase(), null, null, null, null,
@@ -1578,9 +1619,24 @@ public class SettlementController {
      * — it makes "we forgot" a visible, actionable fact and feeds §3's carry-forward.
      */
     @GetMapping("/fixing-schedule")
-    public Dtos.FixingScheduleResponse fixingSchedule(@RequestParam(required = false) String actingAs) {
+    public Dtos.FixingScheduleResponse fixingSchedule(@RequestParam(required = false) String actingAs,
+                                                      @RequestParam(required = false) String asOf) {
         String acting = ledger.resolveParty(blankTo(actingAs, "Auditor"));
+        // `asOf` (an ISO-8601 instant, or a yyyy-MM-dd date read as 18:00 UTC that day) asks
+        // the same question about another moment — "does CBTC strike on Saturday?" — with
+        // the fixings known now. It changes nothing.
         Instant now = Instant.now();
+        if (asOf != null && !asOf.isBlank()) {
+            try {
+                now = Instant.parse(asOf.trim());
+            } catch (RuntimeException notInstant) {
+                try {
+                    now = java.time.LocalDate.parse(asOf.trim()).atTime(18, 0).toInstant(java.time.ZoneOffset.UTC);
+                } catch (RuntimeException notDate) {
+                    throw new IllegalArgumentException("asOf must be an ISO-8601 instant or a yyyy-MM-dd date: " + asOf);
+                }
+            }
+        }
 
         // The most recent STRIKE (accrualFrom, the attested instant) per identifier —
         // not finalizedAt, which is when the ledger saw it. A mark struck as of 16:00
@@ -1595,13 +1651,46 @@ public class SettlementController {
             }
         }
 
+        // The configured schedule (GET /api/admin/schedule) when the store is wired — so the
+        // calendar shown here is the one the runner strikes on — else the declared defaults.
+        com.lucilla.settlement.scheduler.ScheduleStore store = scheduleStore.getIfAvailable();
+        com.lucilla.settlement.ledger.StrikeCalendars calendars = store != null ? store.calendars()
+                : strikeCalendars.getIfAvailable(com.lucilla.settlement.ledger.StrikeCalendars::defaults);
+        List<FixingSchedule.Declared> declared = store == null ? FixingSchedule.defaults()
+                : store.all().stream().map(s -> new FixingSchedule.Declared(s.getInstrumentId(), s.getSession(),
+                        s.strikeTime(), s.zone(), Math.max(1, s.getWindowMinutes()), s.effectiveCalendar())).toList();
+        // A fund strikes only on days ALL its components strike (the intersection rule the
+        // runner applies) — so a fund of an NYSE-listed component reads NOT_DUE_TODAY on an
+        // NYSE holiday even though its own calendar is daily.
+        Map<String, List<String>> componentCalendars = new java.util.HashMap<>();
+        if (store != null) {
+            for (var s : store.all()) {
+                List<String> cals = new java.util.ArrayList<>();
+                for (String dep : s.getDependsOn()) {
+                    store.byInstrument(dep).ifPresent(d -> cals.add(d.effectiveCalendar()));
+                }
+                componentCalendars.put(s.getInstrumentId(), cals);
+            }
+        }
+        final Instant at = now;
         List<Dtos.ScheduleStatusView> views = FixingSchedule
-                .statuses(FixingSchedule.defaults(), now, lastStruck).stream()
-                .map(st -> new Dtos.ScheduleStatusView(
-                        st.declared().instrumentId(), st.declared().session(),
-                        st.declared().strikeAt().toString(), st.declared().zone().getId(),
-                        st.declared().graceMinutes(), st.state().name(),
-                        st.expectedAt().toString(), st.minutesLate(), st.note()))
+                .statuses(calendars, declared, now, lastStruck).stream()
+                .map(st -> {
+                    var d = st.declared();
+                    java.time.LocalDate day = at.atZone(d.zone()).toLocalDate();
+                    List<String> deps = componentCalendars.getOrDefault(d.instrumentId(), List.of());
+                    String closed = deps.stream().filter(c -> !calendars.strikes(c, day)).findFirst().orElse(null);
+                    boolean strikeDay = st.state() != FixingSchedule.State.NOT_DUE_TODAY && closed == null;
+                    String state = strikeDay || st.state() == FixingSchedule.State.NOT_DUE_TODAY
+                            ? st.state().name() : FixingSchedule.State.NOT_DUE_TODAY.name();
+                    String note = strikeDay || st.state() == FixingSchedule.State.NOT_DUE_TODAY ? st.note()
+                            : "a component's " + closed + " calendar does not strike today; a fund strikes only "
+                            + "on days all its components strike";
+                    return new Dtos.ScheduleStatusView(
+                            d.instrumentId(), d.session(), d.strikeAt().toString(), d.zone().getId(),
+                            d.graceMinutes(), d.calendar(), strikeDay, state,
+                            st.expectedAt().toString(), strikeDay ? st.minutesLate() : 0, note);
+                })
                 .toList();
 
         long overdue = views.stream()

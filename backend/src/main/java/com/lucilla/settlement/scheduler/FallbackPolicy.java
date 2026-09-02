@@ -9,17 +9,22 @@ import java.math.RoundingMode;
  * ledger or a clock.
  *
  * <pre>
- *   tier 2  alternate seats            — not configured (stub), always skipped
- *   tier 3  benchmark × last factor    — automatic, wrapped assets only, needs both inputs
- *   tier 4  prior fixing, flagged      — needs a prior published value
- *   tier 5  missed                     — a gap is published as a gap
+ *   tier 2  escalation inside the window  — reminders at ½, alternates at ¾; see
+ *                                           {@link EscalationPolicy}. Runs BEFORE this
+ *                                           decision, never produces a price
+ *   tier 3  benchmark × last factor       — automatic, wrapped assets only, needs both inputs
+ *   tier 4  prior fixing, flagged         — needs a prior published value
+ *   tier 5  missed                        — a gap is published as a gap
  * </pre>
  */
 public final class FallbackPolicy {
 
     private FallbackPolicy() {}
 
-    public static final String TIER2_STATUS = "not-configured";
+    /** What {@code tier2} reads in a status or fallback record when it is switched on. */
+    public static final String TIER2_STATUS = "escalation-before-fallback";
+    /** …and when it is switched off for the instrument. */
+    public static final String TIER2_DISABLED = "disabled";
 
     /** What the runner should publish. {@code price} is null for tier 5. */
     public record Decision(int tier, BigDecimal price, String note, boolean tier2Requested) {
@@ -56,8 +61,9 @@ public final class FallbackPolicy {
                         + tier2Note(tier2), tier2);
     }
 
-    private static String tier2Note(boolean requested) {
-        return requested ? "; tier 2 alternate seats requested but " + TIER2_STATUS : "";
+    private static String tier2Note(boolean enabled) {
+        return enabled ? "; tier 2 escalation ran inside the window (" + TIER2_STATUS + ")"
+                : "; tier 2 escalation " + TIER2_DISABLED + " for this instrument";
     }
 
     private static String plain(BigDecimal d) {

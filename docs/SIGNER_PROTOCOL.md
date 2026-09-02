@@ -183,6 +183,11 @@ seat that is automated is a seat that is still honest in month six.
 tolerances to make a check pass.** Both are silent conversions of this protocol back into a
 rubber stamp, and both are invisible on the ledger because the signature looks identical.
 
+**Reference implementation.** [`signer-service/README.md`](../signer-service/README.md) is a
+checker that does exactly this: it reads each condition from a data source the signer declares
+(a value, an HTTP endpoint, or a command against its own systems), confirms with evidence when
+all pass, refuses naming the condition when one fails, and halts when one cannot be evaluated.
+
 **Escalation.** A checker that halts notifies the administrator with the failed condition named.
 The administrator either restrikes with a corrected input, or the fixing does not happen (§5).
 
@@ -238,11 +243,13 @@ An EU- or UK-supervised entity referencing a CrossDesk fixing must resolve
 |---|---|
 | §2 role definitions and named conditions | **implemented, tested at the edge** — `SignerProtocol.java` is this document as data. `POST /fixing/{cid}/confirm-checked` refuses a condition that does not belong to the declared seat, an unknown role, an empty or repeated checklist, a venue without a range, and a non-venue with one. `checksPassed` stays free text *on-ledger* by design (the protocol versions faster than the DAR), so the constraint lives where it can be versioned with this document |
 | §2 the conditions a signer is shown | **implemented** — `GET /signer-protocol` serves the same list the validator uses, and the desk UI renders its checkboxes from it rather than a local copy, so a box on screen is a box the API accepts |
-| §2c venue range enforcement | **implemented, tested** — `ConfirmWithChecks` refuses a price outside the range, an inverted range, or a half-specified one (`testSignerProtocolEvidence`) |
+| §2a / §2b issuer and lender evidence, checked before submission | **implemented, tested (2 Sep 2026)** — `POST /api/proposals/{cid}/confirm` no longer accepts a tick from these seats. Each checked condition needs its numbers, in the shape `GET /api/signer-protocol` publishes under `evidence` per condition, and `SignerEvidence` applies the rule server-side before the on-ledger confirm: `attestor-quorum` `{quorumSigners, quorumThreshold}` with signers ≥ threshold; `reserves-current` `{reservesAsOf}` within 24h; `reserves-cover-supply` `{reserves, supply}` with reserves ≥ supply; `redemption-queue-clear` `{queueDepth, maxQueueDepth}`; `independent-mark-within-tolerance` `{independentMark}` with \|mark − proposal\| / proposal ≤ the lender's declared `tolerances.markBps` (default 25 bp); `liquidations-consistent` `{liquidationsToday, worstDeviationBps}` ≤ `tolerances.liquidationBps`; `book-acceptance` `{acceptedAt}`. A missing block or a failing number is a **422** naming the number and carrying the schema; a pass is recorded on the `proposal.confirmed` event as `verified: true` with the numbers and what was derived (deviation in bp, age in hours). The operator desk's legacy `/fixing/{cid}/confirm-checked` still takes a tick and records `verified: false` |
+| §2c venue range enforcement | **implemented, tested** — `ConfirmWithChecks` refuses a price outside the range, an inverted range, or a half-specified one (`testSignerProtocolEvidence`). The portal path for the venue is unchanged: `evidence: {low, high}` |
 | §2 one attestation per member, signed by the confirming member | implemented, tested |
 | §3 wrapper mark as an explicit field | **implemented, tested** — `ProposeWrappedFixing`, `wrapperConsistent` (`testWrapperMarkAttested`) |
 | §3 evidence survives finalisation onto `NavFixing` | implemented, tested |
-| §4 reference checker implementations | **not built** — each signer writes its own against its own systems |
+| §4 reference checker implementations | **not built** — each signer writes its own against its own systems. What a checker must send is now machine-readable (`evidence` per condition in `GET /api/signer-protocol`), so a checker is a query against the signer's systems plus one POST |
+| §4 escalation when a seat is silent | **implemented, tested (2 Sep 2026)** — tier 2 of the fallback waterfall runs *inside* the window: at half the window every seat that has not confirmed gets a `proposal.reminder` webhook and event with `escalation: 1`; at three quarters the same seats get `escalation: 2` and the `alternates` configured per seat on `/api/admin/schedule` are brought in (an alternate who is not a committee member on-ledger is named in the event and skipped). Only after the window closes do tiers 3–5 run. On by default |
 | §5 fund behaviour when `K` is not reached | **not specified** — belongs to the fund's governing documents |
 | §2d operator-exit rule | **policy only** — `role = "operator"` makes it visible; nothing enforces the exit |
 
@@ -250,12 +257,17 @@ An EU- or UK-supervised entity referencing a CrossDesk fixing must resolve
 
 1. **The ledger enforces** the venue's traded range and the arithmetic of the wrapper mark. A
    price outside the range, or a factor that does not reconcile, cannot exist on-chain.
-2. **The API enforces** that a claimed condition belongs to the seat claiming it. A lender cannot
-   file the issuer's evidence.
-3. **Nothing enforces** that the issuer's attestor quorum really was met, or that the lender will
-   really mark its book at that level. Those rest on the signer's own systems and on the fact
-   that a false attestation is permanent, attributable, and made against their own money.
+2. **The API enforces** that a claimed condition belongs to the seat claiming it, and — for the
+   issuer and the lender — that the numbers behind it were supplied and pass the rule stated in
+   §2 before anything is submitted. A lender cannot file the issuer's evidence, and neither can
+   confirm with a tick.
+3. **Nothing enforces** the provenance of those numbers: the desk cannot query the issuer's
+   attestor set or the lender's book, so it checks what the signer reports, not what is true.
+   That rests on the signer's own systems and on the fact that a false number is permanent,
+   attributable, and made against their own money.
 
 Layer 3 is the residual trust in this design. It is deliberate — the alternative is auditing every
 signer's internal systems daily, which is the disinterested-referee model that cannot be funded —
-and it should be disclosed to anyone taking a seat rather than glossed.
+and it should be disclosed to anyone taking a seat rather than glossed. What the evidence rule
+changes is the *shape* of a false attestation: it is no longer a box that was ticked, it is a
+number that was typed, and a number can be checked after the fact.

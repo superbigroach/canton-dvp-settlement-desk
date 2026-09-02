@@ -1,0 +1,57 @@
+# CrossDesk signer - LENDER seat (docs/SIGNER_PROTOCOL.md §2b).
+# Asserts: the mark is safe to lend against. book-acceptance is the one that carries weight -
+# it says you will mark your own collateral here. Wire it to the system that actually does.
+#
+#   CROSSDESK_SANDBOX_USER=lender@sandbox.crossdesk node dist/index.js --config examples/lender.yml
+
+crossdesk:
+  baseUrl: https://crossdesk-devnet-app.web.app
+  apiKey: ${CROSSDESK_API_KEY}
+  sandboxUser: ${CROSSDESK_SANDBOX_USER}       # lender@sandbox.crossdesk
+  webhookSecret: ${CROSSDESK_WEBHOOK_SECRET}
+  poll:
+    enabled: true
+    intervalSeconds: 20
+
+server:
+  port: ${PORT:-8788}
+
+state:
+  file: ${SIGNER_STATE:-./signer-state.lender.json}
+
+seat: lender
+instruments: [CBTC, cETH]
+
+tolerances:
+  markToleranceBps: 25            # independent-mark-within-tolerance (protocol recommends 25bp)
+  liquidationToleranceBps: 100    # liquidations-consistent: worst clearing deviation allowed
+  bookAcceptanceMaxAgeMinutes: 60 # book-acceptance: how fresh the acceptance stamp must be
+
+conditions:
+  independent-mark-within-tolerance:
+    # Your own valuation of the wrapper - NOT read from CrossDesk. The sandbox has no lender
+    # risk system, so this stand-in fetches spot independently from Coinbase (the same public
+    # input the sandbox operator strikes from), mapping the wrapper to its underlying pair.
+    # Replace with e.g.:
+    #   kind: http
+    #   url: https://risk.example.com/marks/{instrument}
+    #   bearer: ${RISK_TOKEN}
+    #   pointer: /mark
+    independentMark:
+      kind: command
+      command: node -e "const m={CBTC:'BTC-USD',cETH:'ETH-USD'};fetch('https://api.coinbase.com/v2/prices/'+m['{instrument}']+'/spot').then(r=>r.json()).then(j=>console.log(JSON.stringify({mark:Number(j.data.amount)})))"
+      pointer: /mark
+  liquidations-consistent:
+    liquidationsToday:
+      kind: static
+      value: 0
+    worstDeviationBps:
+      kind: static
+      value: 0
+  book-acceptance:
+    # A command is the natural fit: it asks your risk system to accept {price} for
+    # {instrument} and prints the acceptance stamp. The sandbox stand-in accepts unconditionally.
+    acceptedAt:
+      kind: command
+      command: node -e "console.log(JSON.stringify({accepted:true,instrument:'{instrument}',price:{price},acceptedAt:new Date().toISOString()}))"
+      pointer: /acceptedAt

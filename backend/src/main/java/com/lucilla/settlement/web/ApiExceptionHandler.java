@@ -85,6 +85,26 @@ public class ApiExceptionHandler {
         return body(e.status(), e.getMessage(), null, null);
     }
 
+    /**
+     * An issuer or lender confirm without verifiable evidence — a bare tick, a missing
+     * block, or numbers that fail the protocol's rule. 422 because the request was
+     * understood and refused, carrying the schema so the caller learns what to send.
+     */
+    @ExceptionHandler(com.lucilla.settlement.ledger.SignerEvidence.Rejected.class)
+    public ResponseEntity<Map<String, Object>> handleEvidence(com.lucilla.settlement.ledger.SignerEvidence.Rejected e) {
+        log.info("API 422 evidence refused ({}): {}", e.seat(), e.getMessage());
+        ResponseEntity<Map<String, Object>> base = body(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage(), null, null);
+        Map<String, Object> out = new LinkedHashMap<>(base.getBody());
+        out.put("seat", e.seat());
+        out.put("problems", e.problems());
+        Map<String, Object> ev = new LinkedHashMap<>();
+        ev.put("required", true);
+        ev.put("shape", "{ checks: [condition], evidence: { <condition>: { <field>: <value> } } }");
+        ev.put("conditions", e.schema());
+        out.put("evidence", ev);
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(out);
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, Object>> handleBadArg(IllegalArgumentException e) {
         log.info("API 400 bad request: {}", e.getMessage());

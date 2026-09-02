@@ -70,12 +70,17 @@ export const fmtTime = (iso: string | null | undefined) => {
 export const shortCid = (cid: string | null | undefined) =>
   !cid ? '—' : cid.length > 18 ? `${cid.slice(0, 8)}…${cid.slice(-6)}` : cid;
 
+/** Gold is for a committee-attested value and nothing else (§8). */
+export const isOfficial = (tier: number | null | undefined) => tier === 1;
+
 /** "attested by K of N" ONLY when K real signatures exist (§8). */
-export function TierTag({ tier, k, n }: { tier?: number; k?: number; n?: number }) {
+export function TierTag({ tier, k, n, label }: { tier?: number; k?: number; n?: number; label?: string }) {
   if (tier === 1 && k && n) return <span className="tag attested">attested {k} of {n}</span>;
-  if (tier === undefined) return null;
-  const label = tier === 2 ? 'tier 2 · alternate seats' : tier === 3 ? 'tier 3 · benchmark × factor' : tier === 4 ? 'tier 4 · prior fixing' : tier === 5 ? 'tier 5 · missed' : `tier ${tier}`;
-  return <span className="tag fallback">{label}</span>;
+  if (tier === undefined || tier === null) return null;
+  const word = label ?? (tier === 2 ? 'alternate seats' : tier === 3 ? 'benchmark × factor' : tier === 4 ? 'prior fixing' : tier === 5 ? 'missed' : undefined);
+  // Tier 0 is the backend's seed ("seed" is its own label for it): say what that means.
+  const text = tier === 0 ? `${label && label !== 'seed' ? label : 'seed'} · not attested` : word ? `tier ${tier} · ${word}` : `tier ${tier}`;
+  return <span className="tag fallback" title={tier === 0 ? 'A seeded value: no committee has attested it, so it is not official.' : undefined}>{text}</span>;
 }
 
 // ---- countdown --------------------------------------------------------------
@@ -95,6 +100,8 @@ export function Countdown({ to }: { to: string }) {
   const m = Math.floor(s / 60);
   const rest = s % 60;
   const cls = s < 300 ? 'countdown urgent' : 'countdown';
+  // Under an hour: m:ss, the restrike window. Longer (a cutoff tomorrow): hours and minutes.
+  if (m >= 60) return <span className={`mono ${cls}`}>{Math.floor(m / 60)}h {(m % 60).toString().padStart(2, '0')}m left</span>;
   return <span className={`mono ${cls}`}>{m}:{rest.toString().padStart(2, '0')} left</span>;
 }
 

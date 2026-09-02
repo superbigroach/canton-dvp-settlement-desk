@@ -12,10 +12,12 @@ interface Props {
   proposal: Proposal;
   role: SignerRole | null;          // my seat's protocol entry (names + passesWhen)
   onChanged: (next: Proposal) => void;
+  /** Re-read the list from the backend — after the ledger says no, the card is stale. */
+  onRefresh?: () => void;
   readOnly?: boolean;
 }
 
-export default function ProposalCard({ proposal: p, role, onChanged, readOnly }: Props) {
+export default function ProposalCard({ proposal: p, role, onChanged, onRefresh, readOnly }: Props) {
   const conditionNames = p.conditions.length ? p.conditions : role?.conditions.map((c) => c.name) ?? [];
   const needsRange = p.requiresObservedRange || role?.requiresObservedRange || false;
   const passesWhen = (name: string) => role?.conditions.find((c) => c.name === name)?.passesWhen;
@@ -57,6 +59,8 @@ export default function ProposalCard({ proposal: p, role, onChanged, readOnly }:
     } catch (e) {
       onChanged(p);
       setError(errorMessage(e));
+      // "already attested", "outside the window": the ledger knows more than this card did.
+      onRefresh?.();
     } finally {
       setBusy(null);
     }
@@ -75,6 +79,7 @@ export default function ProposalCard({ proposal: p, role, onChanged, readOnly }:
     } catch (e) {
       onChanged(p);
       setError(errorMessage(e));
+      onRefresh?.();
     } finally {
       setBusy(null);
     }
@@ -89,7 +94,11 @@ export default function ProposalCard({ proposal: p, role, onChanged, readOnly }:
         </h2>
         <div className="proposal-meta mono">
           {p.status === 'open' ? <Countdown to={p.deadline} /> : <span className={`tag status ${p.status}`}>{p.status}</span>}
-          <span className="muted">{p.confirmed.length} of {p.k} needed · {p.n} seats</span>
+          <span className="muted">
+            {p.confirmed.length >= p.k
+              ? `${p.confirmed.length} signed · ${p.k} needed`
+              : `${p.confirmed.length} of ${p.k} needed`} · {p.n} seats
+          </span>
         </div>
       </div>
 
@@ -107,6 +116,7 @@ export default function ProposalCard({ proposal: p, role, onChanged, readOnly }:
           </span>
         )}
       </div>
+      {p.rationale && <p className="hint subtle proposal-rationale">{p.rationale}</p>}
       <div className="proposal-facts mono muted">
         <span>proposed {fmtTs(p.proposedAt)}{p.proposedBy ? ` by ${p.proposedBy}` : ''}</span>
         <span>window ends {fmtTime(p.deadline)}</span>
@@ -114,6 +124,14 @@ export default function ProposalCard({ proposal: p, role, onChanged, readOnly }:
         {p.confirmed.length > 0 && <span>attested: {p.confirmed.join(', ')}</span>}
       </div>
 
+      {(p.refusals ?? []).filter((r) => !(p.mine?.action === 'refused' && r.seat && r.seat === role?.key)).map((r, i) => (
+        <div key={i} className="banner warn" role="status">
+          <span>
+            <strong>{r.actor ?? r.seat ?? 'a seat'}</strong> refused{r.condition ? <> on <code>{r.condition}</code></> : ''}
+            {r.reason ? ` — ${r.reason}` : ''}{r.ts ? ` · ${fmtTime(r.ts)}` : ''}
+          </span>
+        </div>
+      ))}
       {p.mine && (
         <div className={`banner ${p.mine.action === 'confirmed' ? 'ok' : 'warn'}`} role="status">
           <span>
@@ -215,9 +233,10 @@ export default function ProposalCard({ proposal: p, role, onChanged, readOnly }:
                     <span className={`tag ev ${e.kind.replace(/\W+/g, '-')}`}>{e.kind}</span>
                     <span className="msglog-text">
                       {e.actor && <strong>{e.actor}{e.seat ? ` (${e.seat})` : ''}</strong>}
-                      {e.price !== undefined && <span className="mono"> {fmtN(e.price)}</span>}
+                      {e.price !== undefined && e.price !== null && <span className="mono"> {fmtN(e.price)}</span>}
+                      {/* The backend's `detail` usually restates `reason`; say each thing once. */}
                       {e.detail && <span> — {e.detail}</span>}
-                      {e.reason && <span> — {e.reason}</span>}
+                      {e.reason && !(e.detail ?? '').includes(e.reason) && <span> — {e.reason}</span>}
                       {e.cid && <span className="mono muted"> · {shortCid(e.cid)}</span>}
                     </span>
                   </li>

@@ -1,6 +1,6 @@
 // AP portal · Receipts — every creation and redemption I have done.
 import { desk, type Receipt } from '../../desk';
-import { fmtN, fmtQty, fmtTs, LoadState, shortCid, useAsync } from '../../components/ui';
+import { fmtN, fmtQty, fmtTs, isOfficial, LoadState, shortCid, useAsync } from '../../components/ui';
 
 export function ReceiptTable({ rows, showParty }: { rows: Receipt[]; showParty?: boolean }) {
   return (
@@ -12,12 +12,12 @@ export function ReceiptTable({ rows, showParty }: { rows: Receipt[]; showParty?:
         <tbody>
           {rows.map((r) => (
             <tr key={r.id}>
-              <td className="mono">{fmtTs(r.ts)}</td>
+              <td className="mono when">{fmtTs(r.ts)}</td>
               {showParty && <td>{r.party ?? '—'}</td>}
               <td>{r.fundId}</td>
               <td><span className={`tag status ${r.kind}`}>{r.kind}</span></td>
               <td className="num mono">{fmtQty(r.shares)}</td>
-              <td className="num mono official">{fmtN(r.nav)}</td>
+              <td className={`num mono${isOfficial(r.navTier) ? ' official' : ''}`}>{fmtN(r.nav)}</td>
               <td className="mono small">{r.units.map((u) => `${fmtQty(u.amount)} ${u.instrumentId}`).join(', ')}</td>
               <td className="num mono">{fmtN(r.fee)}{r.feeCurrency ? ` ${r.feeCurrency}` : ''}</td>
               <td><span className={`tag status ${r.status}`}>{r.status}</span></td>

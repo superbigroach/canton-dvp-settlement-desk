@@ -67,6 +67,11 @@ dependencies {
         exclude group: 'com.google.cloud', module: 'google-cloud-firestore'
         exclude group: 'com.google.cloud', module: 'google-cloud-storage'
     }
+    // firebase-admin builds its FirebaseOptions with JacksonFactory from the google-http-client
+    // jackson2 module, which the exclusions above stop arriving transitively. Without it every
+    // request carrying a Firebase token dies with ClassNotFoundException (seen live 2 Sep 2026).
+    implementation 'com.google.http-client:google-http-client-jackson2:1.45.0'
+    implementation 'com.google.api-client:google-api-client:2.7.0'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'

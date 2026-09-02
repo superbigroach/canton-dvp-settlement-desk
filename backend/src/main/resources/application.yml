@@ -99,6 +99,11 @@ scheduler:
   enabled: ${SCHEDULER_ENABLED:true}
   # How often the runner looks at the clock, in milliseconds.
   tick-ms: ${SCHEDULER_TICK_MS:60000}
+  # Strike calendars (docs/FIXING_METHODOLOGY.md §4). The build carries
+  # calendars/{nyse,lse}.yml with the exchanges' published 2026–2027 closures;
+  # point CALENDARS_DIR at a directory of <name>.yml files to replace either, or to
+  # add a calendar under a new name, without a rebuild.
+  calendars-dir: ${CALENDARS_DIR:}
 
 spring:
   application:

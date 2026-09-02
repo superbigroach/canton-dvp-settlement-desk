@@ -51,12 +51,12 @@ export function EventsView({ base }: { base: 'admin' | 'audit' }) {
             <tbody>
               {(list.data ?? []).map((e, i) => (
                 <tr key={e.id ?? i}>
-                  <td className="mono">{fmtTs(e.ts)}</td>
+                  <td className="mono when">{fmtTs(e.ts)}</td>
                   <td className="mono">{e.instrument}</td>
                   <td><span className={`tag ev ${e.kind.replace(/\W+/g, '-')}`}>{e.kind}</span>{e.tier !== undefined && e.tier !== 1 && <span className="tag fallback"> tier {e.tier}</span>}</td>
                   <td>{e.actor ?? '—'}</td>
                   <td className="num mono">{e.price !== undefined ? fmtN(e.price) : '—'}</td>
-                  <td className="small">{e.reason ?? '—'}</td>
+                  <td className="small wrap">{e.reason ?? '—'}</td>
                   <td className="mono muted" title={e.proposalCid}>{shortCid(e.proposalCid)}</td>
                   <td className="mono muted" title={e.cid}>{shortCid(e.cid)}</td>
                 </tr>

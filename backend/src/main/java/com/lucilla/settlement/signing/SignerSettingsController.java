@@ -129,7 +129,17 @@ public class SignerSettingsController {
         out.put("instruments", u.getInstruments());
         SignerProtocol.Role r = SignerProtocol.role(u.getSeat());
         out.put("conditions", r == null ? java.util.List.of()
-                : r.conditions().stream().map(c -> Map.of("name", c.name(), "passesWhen", c.passesWhen())).toList());
+                : r.conditions().stream().map(c -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("name", c.name());
+                    m.put("passesWhen", c.passesWhen());
+                    m.put("evidence", com.lucilla.settlement.ledger.SignerEvidence.schemaOf(c.evidence()));
+                    return m;
+                }).toList());
+        out.put("requiresEvidence", r != null && r.requiresEvidence());
+        // What the lender's evidence is judged against; absent keys mean the defaults.
+        out.put("toleranceDefaults", Map.of(SignerProtocol.TOLERANCE_MARK_KEY, SignerProtocol.DEFAULT_TOLERANCE_BPS,
+                SignerProtocol.TOLERANCE_LIQUIDATION_KEY, SignerProtocol.DEFAULT_TOLERANCE_BPS));
         return out;
     }
 }

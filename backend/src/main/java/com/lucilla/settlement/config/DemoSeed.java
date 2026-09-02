@@ -43,8 +43,8 @@ public class DemoSeed {
     public static final String BASKET_ID = "LX1";
     public static final String DESCRIPTION = "Lucilla Crypto Index (cETH + CBTC)";
 
-    private static final int ATTEMPTS = 10;
-    private static final long PAUSE_MS = 3_000;
+    private static final int ATTEMPTS = 40;   // a cold sandbox needs minutes, not seconds
+    private static final long PAUSE_MS = 5_000;
 
     /** The committee the signer portal signs against on a fresh sandbox. */
     public static final String COMMITTEE_LABEL = "CrossDesk NAV Committee";
@@ -116,7 +116,7 @@ public class DemoSeed {
      * on the label, so a committee the operator desk stood up by hand is left alone
      * and a second boot does not mint a second roster.
      */
-    void seedCommitteeOnce() {
+    public synchronized void seedCommitteeOnce() {
         String issuer = ledger.resolveParty("Issuer");
         boolean exists = ledger.committeesVisibleTo(issuer).stream()
                 .anyMatch(c -> COMMITTEE_LABEL.equals(c.label()));

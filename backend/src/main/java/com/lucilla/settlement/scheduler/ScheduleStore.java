@@ -2,6 +2,8 @@ package com.lucilla.settlement.scheduler;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.lucilla.settlement.ledger.SignerProtocol;
+import com.lucilla.settlement.ledger.StrikeCalendars;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,6 +15,7 @@ import java.time.ZoneId;
 import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -24,16 +27,26 @@ public class ScheduleStore {
     private static final Logger log = LoggerFactory.getLogger(ScheduleStore.class);
 
     private final Path file;
+    private final StrikeCalendars calendars;
     private final ObjectMapper json = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
     private List<StrikeSchedule> entries = StrikeSchedule.defaults();
 
     public ScheduleStore(Path dataDir) {
+        this(dataDir, StrikeCalendars.defaults());
+    }
+
+    public ScheduleStore(Path dataDir, StrikeCalendars calendars) {
         this.file = dataDir == null ? null : dataDir.resolve("schedule.json");
+        this.calendars = calendars == null ? StrikeCalendars.defaults() : calendars;
         load();
     }
 
     public static ScheduleStore inMemory() {
         return new ScheduleStore(null);
+    }
+
+    public StrikeCalendars calendars() {
+        return calendars;
     }
 
     private void load() {
@@ -87,6 +100,18 @@ public class ScheduleStore {
             }
             if (!"Close".equalsIgnoreCase(s.getSession()) && !"Open".equalsIgnoreCase(s.getSession())) {
                 throw new IllegalArgumentException("session must be Open or Close");
+            }
+            if (!calendars.has(s.effectiveCalendar())) {
+                throw new IllegalArgumentException("unknown calendar '" + s.getCalendar() + "' for "
+                        + s.getInstrumentId() + "; expected one of " + new java.util.TreeSet<>(calendars.names()));
+            }
+            if (s.getAlternates() != null) {
+                for (Map.Entry<String, List<String>> e : s.getAlternates().entrySet()) {
+                    if (SignerProtocol.role(e.getKey()) == null) {
+                        throw new IllegalArgumentException("alternates for " + s.getInstrumentId()
+                                + " name an unknown seat '" + e.getKey() + "'; expected issuer | lender | venue");
+                    }
+                }
             }
             clean.add(s.copy());
         }

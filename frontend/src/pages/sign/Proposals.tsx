@@ -30,7 +30,7 @@ export default function Proposals() {
       <LoadState loading={list.loading} error={list.error} onRetry={list.reload}
         empty={list.data && open.length === 0 ? 'Nothing waiting for your signature. Proposals appear here at the strike time and by webhook/email.' : null}>
         <div className="proposal-list">
-          {open.map((p) => <ProposalCard key={p.cid} proposal={p} role={role} onChanged={replace} />)}
+          {open.map((p) => <ProposalCard key={p.cid} proposal={p} role={role} onChanged={replace} onRefresh={list.reload} />)}
         </div>
       </LoadState>
     </div>

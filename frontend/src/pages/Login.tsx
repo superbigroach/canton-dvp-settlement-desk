@@ -83,12 +83,14 @@ export default function Login() {
             </p>
             <div className="sandbox-list" role="list">
               {SANDBOX_USERS.map((u) => (
-                <button key={u.email} type="button" role="listitem" className="sandbox-user" disabled={busy !== null}
-                  onClick={() => void run('sandbox', () => auth.signInSandbox(u.email))}>
-                  <span className="sandbox-name">{u.displayName}</span>
-                  <span className="sandbox-note mono">{u.note}</span>
-                  <span className="sandbox-email muted">{u.email}</span>
-                </button>
+                <div key={u.email} role="listitem">
+                  <button type="button" className="sandbox-user" disabled={busy !== null}
+                    onClick={() => void run('sandbox', () => auth.signInSandbox(u.email))}>
+                    <span className="sandbox-name">{u.displayName}</span>
+                    <span className="sandbox-note mono">{u.note}</span>
+                    <span className="sandbox-email muted">{u.email}</span>
+                  </button>
+                </div>
               ))}
             </div>
             <form className="login-form" onSubmit={(e) => { e.preventDefault(); if (email.trim()) void run('sandbox', () => auth.signInSandbox(email.trim())); }}>

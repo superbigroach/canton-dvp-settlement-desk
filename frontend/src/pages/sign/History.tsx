@@ -23,7 +23,7 @@ export default function History() {
             <tbody>
               {rows.map((p) => (
                 <tr key={p.cid}>
-                  <td className="mono">{fmtTs(p.mine?.at ?? p.proposedAt)}</td>
+                  <td className="mono when">{fmtTs(p.mine?.at ?? p.proposedAt)}</td>
                   <td>{p.instrument}{p.session ? ` · ${p.session}` : ''}</td>
                   <td className="num mono">{fmtN(p.price)}</td>
                   <td>{p.mine ? <span className={`tag status ${p.mine.action}`}>{p.mine.action}</span> : <span className="muted">—</span>}</td>

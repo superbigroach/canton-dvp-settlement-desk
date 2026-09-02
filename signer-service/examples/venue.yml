@@ -1,0 +1,61 @@
+# CrossDesk signer - VENUE seat (docs/SIGNER_PROTOCOL.md §2c).
+# Asserts: the mark sits where the asset traded. The traded range is enforced on-ledger.
+#
+# Try it now against the hosted sandbox, no account needed:
+#   CROSSDESK_SANDBOX_USER=venue@sandbox.crossdesk node dist/index.js --config examples/venue.yml
+# In production replace sandboxUser with apiKey (CROSSDESK_API_KEY from the signer portal)
+# and point each source at your own book.
+
+crossdesk:
+  baseUrl: https://crossdesk-devnet-app.web.app
+  apiKey: ${CROSSDESK_API_KEY}                 # production: Authorization: Bearer ck_...
+  sandboxUser: ${CROSSDESK_SANDBOX_USER}       # sandbox only: X-Sandbox-User (venue@sandbox.crossdesk)
+  webhookSecret: ${CROSSDESK_WEBHOOK_SECRET}   # the secret you saved in the signer portal
+  poll:
+    enabled: true            # the fallback when CrossDesk cannot reach a public URL of yours
+    intervalSeconds: 20
+
+server:
+  port: ${PORT:-8787}
+  webhookPath: /webhook
+
+state:
+  file: ${SIGNER_STATE:-./signer-state.venue.json}
+
+seat: venue
+instruments: [CBTC, cETH]
+
+tolerances:
+  maxSpreadBps: 50       # spread-within-tolerance: best bid/ask at the strike, in bp of mid
+  minVolume: 1           # sufficient-volume: units traded in the window
+
+conditions:
+  # The service computes low/high from the prints (numbers, or objects with price/px/p),
+  # or you may return {low, high} directly. The confirm carries {low, high} and the ledger
+  # refuses it if the proposed price is outside, inverted, or half-specified.
+  traded-range:
+    prints:
+      # Sandbox stand-in: CBTC is seeded at 65000 and cETH at 2400. A real venue points
+      # this at its trade tape for the strike window, e.g.:
+      #   kind: http
+      #   url: https://book.example.com/v1/trades?symbol={instrument}&window=strike
+      #   bearer: ${BOOK_TOKEN}
+      #   pointer: /trades          # -> [{ price, size, ts }, ...]
+      kind: command
+      command: node -e "const p=Number('{price}');console.log(JSON.stringify([p*0.999,p*1.0004,p*1.0012,p*0.9996]))"
+      # ^ the sandbox has no venue book, so this synthesises four prints around the proposal.
+      #   Replace it. A checker that reads the proposal to build its own evidence is a rubber stamp.
+  spread-within-tolerance:
+    # Either spreadBps directly, or bid+ask (the service computes bp of mid).
+    bid:
+      kind: command
+      command: node -e "const p=Number('{price}');console.log(JSON.stringify({bid:p*0.9995,ask:p*1.0005}))"
+      pointer: /bid
+    ask:
+      kind: command
+      command: node -e "const p=Number('{price}');console.log(JSON.stringify({bid:p*0.9995,ask:p*1.0005}))"
+      pointer: /ask
+  sufficient-volume:
+    volume:
+      kind: static
+      value: 12.5

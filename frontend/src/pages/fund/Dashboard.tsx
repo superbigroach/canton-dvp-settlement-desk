@@ -16,7 +16,9 @@ export default function FundDashboard() {
   const d = useAsync<Dash>(() => desk.fundDashboard(fundId), [fundId]);
   const data = d.data;
   const last = data?.series[0];
-  const points = data ? [...data.series].reverse().map((r) => ({ x: r.date, y: r.price, tier: r.tier, restated: r.restated })) : [];
+  const points = data ? [...data.series].reverse().map((r) => ({ x: r.date, y: r.price, tier: r.tier, tierLabel: r.tierLabel, restated: r.restated })) : [];
+  const fallback = data ? data.series.filter((r) => r.tier >= 2).length : 0;
+  const seeded = data ? data.series.filter((r) => r.tier === 0).length : 0;
 
   return (
     <div className="page">
@@ -29,12 +31,12 @@ export default function FundDashboard() {
         {data && (
           <>
             <div className="stat-row">
-              <Stat label="Last official NAV" gold value={last ? fmtN(last.price) : '—'}
-                sub={last ? <><TierTag tier={last.tier} k={last.k} n={last.n} /> <span className="mono muted">{fmtTs(last.asOf)}</span></> : 'no fixing yet'} />
+              <Stat label={last && last.tier === 1 ? 'Last official NAV' : 'Last NAV'} gold={last?.tier === 1} value={last ? fmtN(last.price) : '—'}
+                sub={last ? <><TierTag tier={last.tier} k={last.k} n={last.n} label={last.tierLabel} /> <span className="mono muted">{fmtTs(last.asOf)}</span></> : 'no fixing yet'} />
               <Stat label="Shares outstanding" value={fmtQty(data.sharesOutstanding)} />
               <Stat label="Fees accrued" value={`${fmtN(data.fees.accrued)} ${data.fees.currency}`} />
               <Stat label="Fixings" value={data.series.length}
-                sub={`${data.series.filter((r) => r.tier !== 1).length} by fallback · ${data.series.filter((r) => r.restated).length} restated`} />
+                sub={`${fallback} by fallback${seeded ? ` · ${seeded} seeded` : ''} · ${data.series.filter((r) => r.restated).length} restated`} />
             </div>
             <div className="card">
               <h2>NAV series</h2>
@@ -43,11 +45,11 @@ export default function FundDashboard() {
                 <table className="blotter">
                   <thead><tr><th>Date</th><th className="num">NAV</th><th>Attestation</th><th>Signers</th><th>Fixing cid</th><th></th></tr></thead>
                   <tbody>
-                    {data.series.slice(0, 30).map((r) => (
-                      <tr key={r.fixingCid + r.date}>
+                    {data.series.slice(0, 30).map((r, i) => (
+                      <tr key={`${r.fixingCid ?? r.asOf}-${i}`}>
                         <td className="mono">{r.date}</td>
                         <td className={`num mono${r.tier === 1 ? ' official' : ''}`}>{fmtN(r.price)}</td>
-                        <td><TierTag tier={r.tier} k={r.k} n={r.n} /></td>
+                        <td><TierTag tier={r.tier} k={r.k} n={r.n} label={r.tierLabel} /></td>
                         <td className="small">{r.signers.join(', ') || '—'}</td>
                         <td className="mono muted" title={r.fixingCid}>{shortCid(r.fixingCid)}</td>
                         <td>{r.restated && <span className="tag">restated</span>}</td>

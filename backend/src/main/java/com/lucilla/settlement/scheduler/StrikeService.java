@@ -1,14 +1,17 @@
 package com.lucilla.settlement.scheduler;
 
 import com.lucilla.settlement.auth.AuthProperties;
+import com.lucilla.settlement.auth.Role;
+import com.lucilla.settlement.auth.UserRecord;
+import com.lucilla.settlement.auth.UserStore;
 import com.lucilla.settlement.benchmarks.SeriesRow;
 import com.lucilla.settlement.benchmarks.SeriesService;
 import com.lucilla.settlement.events.EventStore;
 import com.lucilla.settlement.events.FixingEvent;
-import com.lucilla.settlement.ledger.FixingSchedule;
 import com.lucilla.settlement.ledger.LedgerCommands;
 import com.lucilla.settlement.ledger.LedgerService;
 import com.lucilla.settlement.ledger.MarketData;
+import com.lucilla.settlement.ledger.StrikeCalendars;
 import com.lucilla.settlement.web.Dtos;
 import com.lucilla.settlement.web.SettlementController;
 import com.lucilla.settlement.webhooks.WebhookDispatcher;
@@ -23,20 +26,29 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * The strike runner's brain — docs/PRODUCT-PLAN.md §4 as a state machine over the
- * clock, the ledger and the event log:
+ * clock, the calendar, the ledger and the event log:
  *
  * <pre>
- *   strike time  → PROPOSE  operator computes benchmark × last factor (wrapped) or
- *                           Σ units × marks (fund) and opens the on-ledger proposal
- *   K reached    → FINALIZE as the proposer; funds re-mark; tier-1 row
- *   window end   → FALLBACK tier 3 / 4 / 5 as a series row + event (+ webhook on 5)
+ *   strike time  → PROPOSE   operator computes benchmark × last factor (wrapped) or
+ *                            Σ units × marks (fund) and opens the on-ledger proposal
+ *   ½ window     → REMIND    tier 2, escalation 1: every seat not yet confirmed
+ *   ¾ window     → REMIND    tier 2, escalation 2: the same seats plus their alternates
+ *   K reached    → FINALIZE  as the proposer; funds re-mark; tier-1 row
+ *   window end   → FALLBACK  tier 3 / 4 / 5 as a series row + event (+ webhook on 5)
  * </pre>
+ *
+ * <p>A day is a strike day when the instrument's calendar says so AND, for a fund,
+ * every component's calendar says so too ({@link StrikeCalendars}; the intersection
+ * rule). A day that is not a strike day is not a missed strike — nothing is proposed,
+ * nothing falls back, and the status reads {@code NOT_DUE_TODAY}.
  *
  * <p>Every ledger step goes through the SAME controller methods the operator desk
  * uses, so a scheduled strike and a hand-struck one are indistinguishable on the
@@ -57,10 +69,14 @@ public class StrikeService {
     private final AuthProperties props;
     private final SettlementController desk;
     private final WebhookDispatcher webhooks;
+    private final UserStore users;
+    private final org.springframework.beans.factory.ObjectProvider<com.lucilla.settlement.config.DemoSeed> demoSeed;
 
     public StrikeService(LedgerService ledger, MarketData marketData, SeriesService series,
             ScheduleStore schedules, EventStore events, AuthProperties props,
-            SettlementController desk, WebhookDispatcher webhooks) {
+            SettlementController desk, WebhookDispatcher webhooks, UserStore users,
+            org.springframework.beans.factory.ObjectProvider<com.lucilla.settlement.config.DemoSeed> demoSeed) {
+        this.demoSeed = demoSeed;
         this.ledger = ledger;
         this.marketData = marketData;
         this.series = series;
@@ -69,6 +85,7 @@ public class StrikeService {
         this.props = props;
         this.desk = desk;
         this.webhooks = webhooks;
+        this.users = users;
     }
 
     // ---- the tick ---------------------------------------------------------------
@@ -123,7 +140,7 @@ public class StrikeService {
 
     void evaluate(StrikeSchedule s, Instant now) {
         LocalDate today = s.dateOf(now);
-        if (!FixingSchedule.isBusinessDay(today)) return;
+        if (!strikesOn(s, today)) return;
         Instant strike = s.strikeInstantOn(today);
         if (now.isBefore(strike)) return;
         Instant windowEnd = strike.plus(Duration.ofMinutes(s.getWindowMinutes()));
@@ -142,9 +159,13 @@ public class StrikeService {
             var p = open.get();
             if (p.quorumReached()) {
                 finalize(p, "scheduler");
-            } else if (now.isAfter(windowEnd) && !fallbackPublished) {
-                fallback(s, now, "window closed with " + p.approvers().size() + " of "
-                        + p.threshold() + " signatures on " + p.contractId());
+            } else if (now.isAfter(windowEnd)) {
+                if (!fallbackPublished) {
+                    fallback(s, now, "window closed with " + p.approvers().size() + " of "
+                            + p.threshold() + " signatures on " + p.contractId(), p.contractId());
+                }
+            } else if (s.tierEnabled(2)) {
+                escalate(s, p, strike, windowEnd, now);
             }
             return;
         }
@@ -160,7 +181,156 @@ public class StrikeService {
             }
             return;
         }
-        fallback(s, now, "no proposal reached the ledger inside the window");
+        fallback(s, now, "no proposal reached the ledger inside the window", null);
+    }
+
+    // ---- calendars ----------------------------------------------------------------
+
+    /**
+     * Does {@code s} strike on {@code date}? Its own calendar must say yes and, for a
+     * fund, so must every component's (the intersection rule): a fund cannot re-mark on
+     * a day one of its holdings has no close.
+     */
+    public boolean strikesOn(StrikeSchedule s, LocalDate date) {
+        return strikesOn(s, date, 0);
+    }
+
+    private boolean strikesOn(StrikeSchedule s, LocalDate date, int depth) {
+        StrikeCalendars cals = schedules.calendars();
+        if (!cals.strikes(s.effectiveCalendar(), date)) return false;
+        if (depth > 4) return true;   // a cycle in dependsOn is a config error, not a reason to hang
+        for (String dep : s.getDependsOn()) {
+            Optional<StrikeSchedule> d = schedules.byInstrument(dep);
+            if (d.isPresent() && !d.get().getInstrumentId().equalsIgnoreCase(s.getInstrumentId())
+                    && !strikesOn(d.get(), date, depth + 1)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** The calendars that decide a schedule's strike days: its own, then its components'. */
+    List<String> effectiveCalendars(StrikeSchedule s) {
+        Set<String> out = new LinkedHashSet<>();
+        out.add(s.effectiveCalendar());
+        for (String dep : s.getDependsOn()) {
+            schedules.byInstrument(dep).ifPresent(d -> out.addAll(effectiveCalendars(d)));
+        }
+        return new ArrayList<>(out);
+    }
+
+    /** The next strike day on or after {@code date}. */
+    public LocalDate nextStrikeDay(StrikeSchedule s, LocalDate date) {
+        LocalDate x = date;
+        for (int i = 0; i < 400; i++) {
+            if (strikesOn(s, x)) return x;
+            x = x.plusDays(1);
+        }
+        return x;
+    }
+
+    // ---- tier 2: escalation before fallback -----------------------------------------
+
+    /**
+     * Remind the seats that have not confirmed — at half the window with
+     * {@code escalation: 1}, at three quarters with {@code escalation: 2} and the
+     * configured alternates brought in. Idempotent per level: the event log says what
+     * has already gone out, and a tick a minute later sends nothing new.
+     */
+    void escalate(StrikeSchedule s, LedgerService.FixingProposalView p, Instant strike, Instant windowEnd,
+            Instant now) {
+        int due = EscalationPolicy.levelDue(strike, windowEnd, now);
+        if (due == 0) return;
+        int sent = escalationSent(s.getInstrumentId(), p.contractId(), strike);
+        if (sent >= due) return;
+        String id = s.getInstrumentId();
+        String root = events.rootOf(p.contractId());
+        Set<String> approvers = new LinkedHashSet<>(p.approvers().stream().map(LedgerService::labelOf).toList());
+        Set<String> memberLabels = new LinkedHashSet<>(p.members().stream().map(LedgerService::labelOf).toList());
+        int reminded = 0;
+        for (String member : p.members()) {
+            String label = LedgerService.labelOf(member);
+            if (approvers.contains(label)) continue;
+            List<UserRecord> seatUsers = users.byParty(label).stream()
+                    .filter(u -> u.roleEnum() == Role.SIGNER).toList();
+            String seat = seatUsers.stream().map(UserRecord::getSeat)
+                    .filter(x -> x != null && !x.isBlank()).findFirst().orElse(null);
+            List<UserRecord> targets = new ArrayList<>(seatUsers);
+            List<String> alternates = new ArrayList<>();
+            List<Map<String, String>> skipped = new ArrayList<>();
+            if (due >= 2 && seat != null) {
+                for (String email : s.alternatesFor(seat)) {
+                    Optional<UserRecord> alt = users.byEmail(email);
+                    if (alt.isEmpty()) {
+                        skipped.add(Map.of("email", email, "why", "not in the user roster (users.yml)"));
+                        continue;
+                    }
+                    String altParty = alt.get().getParty() == null ? null : LedgerService.labelOf(alt.get().getParty());
+                    if (altParty == null || !memberLabels.contains(altParty)) {
+                        skipped.add(Map.of("email", email, "why", "not a committee member on-ledger"
+                                + (altParty == null ? " (no party mapped)" : " (party " + altParty + " is not on "
+                                + p.contractId() + ")")));
+                        continue;
+                    }
+                    if (targets.stream().noneMatch(t -> t.getUid() != null && t.getUid().equals(alt.get().getUid()))) {
+                        targets.add(alt.get());
+                    }
+                    alternates.add(email);
+                }
+            }
+            Map<String, Object> extra = new LinkedHashMap<>();
+            extra.put("escalation", due);
+            extra.put("seat", seat);
+            extra.put("signatures", p.approvers().size());
+            extra.put("threshold", p.threshold());
+            extra.put("windowEndsAt", windowEnd.toString());
+            int queued = webhooks.dispatchTo(targets, WebhookDispatcher.PROPOSAL_REMINDER, id, p.contractId(),
+                    p.price(), p.referencePrice(), p.wrapperFactor(), windowEnd, extra);
+            Map<String, Object> d = new LinkedHashMap<>();
+            d.put("escalation", due);
+            d.put("party", label);
+            d.put("users", seatUsers.stream().map(UserRecord::getEmail).filter(e -> e != null).toList());
+            if (due >= 2) {
+                d.put("alternates", alternates);
+                d.put("alternatesSkipped", skipped);
+            }
+            d.put("webhooksQueued", queued);
+            d.put("signatures", p.approvers().size());
+            d.put("threshold", p.threshold());
+            d.put("deadline", windowEnd.toString());
+            String why = "tier 2 escalation " + due + ": " + label + " has not confirmed ("
+                    + p.approvers().size() + " of " + p.threshold() + " signatures, window ends " + windowEnd + ")"
+                    + (due >= 2 ? "; alternates " + (alternates.isEmpty() ? "none available" : alternates) : "");
+            events.append(FixingEvent.of(FixingEvent.Kinds.PROPOSAL_REMINDER, id, p.contractId(), root,
+                    "scheduler", seat, null, why, p.price(), null, null, d));
+            reminded++;
+        }
+        log.info("STRIKE {} escalation {} sent to {} unconfirmed seat(s) on {}", id, due, reminded, p.contractId());
+    }
+
+    /**
+     * The highest escalation already recorded (0 if none) — on the proposal's own lineage
+     * when a cid is known, and on the instrument since today's strike otherwise.
+     */
+    int escalationSent(String instrument, String proposalCid, Instant strike) {
+        int max = 0;
+        List<FixingEvent> seen = new ArrayList<>(events.query(instrument, strike, null));
+        if (proposalCid != null) seen.addAll(events.byProposal(proposalCid));
+        for (FixingEvent e : seen) {
+            if (!FixingEvent.Kinds.PROPOSAL_REMINDER.equals(e.kind())) continue;
+            Object lvl = e.details() == null ? null : e.details().get("escalation");
+            int n = lvl instanceof Number num ? num.intValue() : lvl == null ? 0 : parseIntOr(lvl.toString(), 0);
+            if (n > max) max = n;
+        }
+        return max;
+    }
+
+    private static int parseIntOr(String s, int dflt) {
+        try {
+            return Integer.parseInt(s.trim());
+        } catch (RuntimeException e) {
+            return dflt;
+        }
     }
 
     // ---- propose / finalize / fallback -------------------------------------------
@@ -168,10 +338,32 @@ public class StrikeService {
     /** Open today's proposal now. {@code actor} is who asked (an admin's e-mail, or "scheduler"). */
     public Map<String, Object> propose(StrikeSchedule s, String actor) {
         String operator = ledger.resolveParty(props.getOperatorParty());
-        LedgerService.CommitteeView committee = committeeFor(operator).orElseThrow(() ->
+        // ON THE SANDBOX THE COMMITTEE IS SEEDED; a strike that arrives before the seed thread
+        // has finished (or after it gave up) stands it up on demand rather than telling the
+        // operator to. On a real participant demo seeding is off and this does nothing.
+        LedgerService.CommitteeView committee = committeeFor(operator).or(() -> {
+            var seed = demoSeed.getIfAvailable();
+            if (seed == null) return Optional.empty();
+            try {
+                seed.seedCommitteeOnce();
+            } catch (RuntimeException e) {
+                log.warn("on-demand committee seed failed: {}", e.toString());
+            }
+            return committeeFor(operator);
+        }).orElseThrow(() ->
                 new IllegalStateException("no OperatorCommittee has " + LedgerService.labelOf(operator)
                         + " as a member — stand one up (POST /api/committee) before striking"));
         String id = s.getInstrumentId();
+        // ONE OPEN PROPOSAL PER INSTRUMENT, SESSION AND DAY. Two "strike now" clicks sixteen
+        // seconds apart produced two open proposals on 2 Sep 2026, and the seats signed
+        // both. A restrike is a deliberate act on a refused proposal, not a second click.
+        Instant since = s.strikeInstantOn(s.dateOf(Instant.now()));
+        openProposalSince(s, since).ifPresent(open -> {
+            throw new IllegalStateException("a " + s.getSession() + " proposal for " + id
+                    + " is already open today (" + open.contractId() + ", "
+                    + open.approvers().size() + " of " + open.threshold()
+                    + " signatures) — let the seats act on it, or refuse it, before striking again");
+        });
         Map<String, Object> inputs = new LinkedHashMap<>();
         String proposalCid;
         BigDecimal price;
@@ -205,6 +397,7 @@ public class StrikeService {
         Map<String, Object> d = new LinkedHashMap<>(inputs);
         d.put("committeeCid", committee.contractId());
         d.put("trigger", actor);
+        d.put("calendar", s.effectiveCalendar());
         events.append(FixingEvent.of(FixingEvent.Kinds.STRIKE_SCHEDULED, id, proposalCid, proposalCid, actor,
                 "operator", null, "strike: proposal opened", price, null, proposalCid, d));
         log.info("STRIKE {} proposal {} price={} by {}", id, proposalCid, price, actor);
@@ -232,7 +425,7 @@ public class StrikeService {
                 resp.getBody() == null ? "?" : resp.getBody().contractId(), actor);
     }
 
-    void fallback(StrikeSchedule s, Instant now, String why) {
+    void fallback(StrikeSchedule s, Instant now, String why, String proposalCid) {
         String id = s.getInstrumentId();
         BigDecimal print = s.isFund() ? null : marketData.liveMarkOf(id).map(MarketData.LiveMark::price).orElse(null);
         BigDecimal factor = s.isFund() ? null : series.lastAttestedFactor(id).orElse(null);
@@ -245,7 +438,10 @@ public class StrikeService {
         Map<String, Object> details = new LinkedHashMap<>();
         details.put("why", why);
         details.put("session", s.getSession());
-        details.put("tier2", FallbackPolicy.TIER2_STATUS);
+        details.put("calendar", s.effectiveCalendar());
+        int escalated = escalationSent(id, proposalCid, s.strikeInstantOn(s.dateOf(now)));
+        details.put("tier2", s.tierEnabled(2) ? FallbackPolicy.TIER2_STATUS : FallbackPolicy.TIER2_DISABLED);
+        details.put("escalationsSent", escalated);
         if (d.tier() == 3) {
             details.put("referencePrice", print.toPlainString());
             details.put("wrapperFactor", factor.toPlainString());
@@ -277,6 +473,7 @@ public class StrikeService {
         LocalDate today = s.dateOf(now);
         Instant strike = s.strikeInstantOn(today);
         Instant windowEnd = strike.plus(Duration.ofMinutes(s.getWindowMinutes()));
+        boolean strikeDay = strikesOn(s, today);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("instrument", s.getInstrumentId());
         out.put("session", s.getSession());
@@ -285,10 +482,20 @@ public class StrikeService {
         out.put("strikeAt", s.getStrikeAt());
         out.put("timezone", s.getTimezone());
         out.put("windowMinutes", s.getWindowMinutes());
+        out.put("calendar", s.effectiveCalendar());
+        out.put("effectiveCalendars", effectiveCalendars(s));
+        out.put("strikesToday", strikeDay);
+        out.put("nextStrikeDate", nextStrikeDay(s, strikeDay && !now.isAfter(windowEnd) ? today : today.plusDays(1)).toString());
         out.put("todayStrikeAt", strike.toString());
         out.put("windowEndsAt", windowEnd.toString());
         out.put("tiersEnabled", s.getTiersEnabled());
-        out.put("tier2", FallbackPolicy.TIER2_STATUS);
+        out.put("tier2", s.tierEnabled(2) ? FallbackPolicy.TIER2_STATUS : FallbackPolicy.TIER2_DISABLED);
+        Map<String, Object> esc = new LinkedHashMap<>();
+        esc.put("enabled", s.tierEnabled(2));
+        esc.put("firstAt", EscalationPolicy.dueAt(strike, windowEnd, 1).toString());
+        esc.put("secondAt", EscalationPolicy.dueAt(strike, windowEnd, 2).toString());
+        esc.put("alternates", s.getAlternates());
+        out.put("escalation", esc);
         out.put("dependsOn", s.getDependsOn());
         String state;
         Optional<SeriesRow> row = Optional.empty();
@@ -298,10 +505,11 @@ public class StrikeService {
             row = todayRow(s.getInstrumentId(), today);
             open = openProposalSince(s, strike);
             deps = dependenciesSettled(s, today);
+            esc.put("sent", escalationSent(s.getInstrumentId(), open.map(LedgerService.FixingProposalView::contractId).orElse(null), strike));
         } catch (RuntimeException e) {
             out.put("error", e.getMessage());
         }
-        if (!FixingSchedule.isBusinessDay(today)) state = "NOT_DUE_TODAY";
+        if (!strikeDay) state = "NOT_DUE_TODAY";
         else if (row.isPresent() && row.get().tier() == 1) state = "STRUCK";
         else if (open.isPresent()) state = open.get().quorumReached() ? "QUORUM"
                 : now.isAfter(windowEnd) && !row.isPresent() ? "FALLBACK_DUE" : "WAITING_SIGNATURES";

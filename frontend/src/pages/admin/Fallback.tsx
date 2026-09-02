@@ -38,7 +38,7 @@ export default function Fallback() {
                     <td className="num mono">{r.minutesLate > 0 ? r.minutesLate : '—'}</td>
                     <td className="small">{r.note || '—'}</td>
                     <td className={`num mono${last && last.tier === 1 ? ' official' : ''}`}>{last ? fmtN(last.price) : '—'}</td>
-                    <td>{last ? <TierTag tier={last.tier} k={last.k} n={last.n} /> : <span className="muted">none</span>}</td>
+                    <td>{last ? <TierTag tier={last.tier} k={last.k} n={last.n} label={last.tierLabel} /> : <span className="muted">none</span>}</td>
                     <td className="mono muted">{last ? `${Math.round(last.ageSeconds / 60)} min` : '—'}</td>
                   </tr>
                 );

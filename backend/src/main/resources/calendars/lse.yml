@@ -1,0 +1,30 @@
+# London Stock Exchange closures — the `lse` strike calendar.
+# ---------------------------------------------------------------------------
+# The LSE closes on the England & Wales bank holidays. Dates are the UK
+# government's published list (https://www.gov.uk/bank-holidays.json, division
+# england-and-wales, read 2 Sep 2026), which LSE's own business-days page
+# follows. Substitute days are listed on the day the market is actually shut.
+#
+# Override without a rebuild: CALENDARS_DIR=/path/to/dir containing lse.yml.
+# Weekends are never strike days on this calendar (weekends: false).
+calendar: lse
+name: London Stock Exchange
+source: https://www.gov.uk/bank-holidays (england-and-wales); https://www.londonstockexchange.com/equities-trading/business-days
+weekends: false
+holidays:
+  2026-01-01: New Year's Day
+  2026-04-03: Good Friday
+  2026-04-06: Easter Monday
+  2026-05-04: Early May bank holiday
+  2026-05-25: Spring bank holiday
+  2026-08-31: Summer bank holiday
+  2026-12-25: Christmas Day
+  2026-12-28: Boxing Day (substitute day; 26 December is a Saturday)
+  2027-01-01: New Year's Day
+  2027-03-26: Good Friday
+  2027-03-29: Easter Monday
+  2027-05-03: Early May bank holiday
+  2027-05-31: Spring bank holiday
+  2027-08-30: Summer bank holiday
+  2027-12-27: Christmas Day (substitute day; 25 December is a Saturday)
+  2027-12-28: Boxing Day (substitute day; 26 December is a Sunday)

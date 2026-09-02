@@ -23,6 +23,8 @@ export interface AuthState {
   me: Me | null;
   /** Why /api/me could not be read, when it could not. */
   meError: string | null;
+  /** HTTP status behind `meError` (0 = unreachable, -1 = a fault in this app), or null. */
+  meStatus: number | null;
   /** True when the identity route was unavailable and `me` is a placeholder. */
   degraded: boolean;
   /** Admin "View as": the real (admin) identity while `me` is the acted-as user. */
@@ -54,6 +56,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [me, setMe] = useState<Me | null>(null);
   const [meError, setMeError] = useState<string | null>(null);
+  const [meStatus, setMeStatus] = useState<number | null>(null);
   const [degraded, setDegraded] = useState(false);
   const [adminMe, setAdminMe] = useState<Me | null>(null);
   const [actAs, setActAs] = useState<string | null>(() => actAsUser());
@@ -79,7 +82,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       const m = await desk.me();
       if (act) {
-        const honoured = (m.actingAs ?? '').toLowerCase() === act.toLowerCase();
+        // Honoured when the backend says so (`actingAs`, string or `{ by }`) or when the
+        // identity it returned IS the requested user.
+        const a = m.actingAs;
+        const honoured = (typeof a === 'string' ? a.toLowerCase() === act.toLowerCase() : !!a)
+          || (m.email ?? '').toLowerCase() === act.toLowerCase();
         setAdminMe(real);
         setActAsUnsupported(!honoured);
         setMe(honoured ? m : real);
@@ -87,9 +94,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setAdminMe(null); setActAsUnsupported(false);
         setMe(m);
       }
-      setMeError(null); setDegraded(false);
+      setMeError(null); setMeStatus(null); setDegraded(false);
     } catch (e) {
-      const st = e instanceof ApiError ? e.status : 0;
+      // Only a transport/route failure means "unavailable". Anything else (a 401/403, a
+      // 500, or a fault in this code) must not be dressed up as a missing route.
+      const st = e instanceof ApiError ? e.status : -1;
+      setMeStatus(st);
       const unavailable = st === 404 || st === 0 || st === 501 || st >= 502;
       if (AUTH_MODE === 'sandbox' && unavailable) {
         // Dev before the identity route lands: the local list IS users.yml's mirror.
@@ -175,7 +185,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     installTokenSource(null);
     setActAsUser(null); setActAs(null); setAdminMe(null); setActAsUnsupported(false);
-    setIdentity(null); setMe(null); setMeError(null); setDegraded(false);
+    setIdentity(null); setMe(null); setMeError(null); setMeStatus(null); setDegraded(false);
     setStatus('signedOut');
   }, []);
 
@@ -196,10 +206,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [identity, loadMe]);
 
   const value = useMemo<AuthState>(() => ({
-    mode: AUTH_MODE, mock: MOCK, status, me, meError, degraded,
+    mode: AUTH_MODE, mock: MOCK, status, me, meError, meStatus, degraded,
     adminMe, actAs, actAsUnsupported, startActAs, stopActAs,
     signInEmail, signInGoogle, signInSandbox, signOut, refreshMe,
-  }), [status, me, meError, degraded, adminMe, actAs, actAsUnsupported, startActAs, stopActAs,
+  }), [status, me, meError, meStatus, degraded, adminMe, actAs, actAsUnsupported, startActAs, stopActAs,
     signInEmail, signInGoogle, signInSandbox, signOut, refreshMe]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

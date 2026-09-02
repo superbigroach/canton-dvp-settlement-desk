@@ -11,7 +11,7 @@ export default function AuditSeries() {
   const chosen = id || bench.data?.[0]?.id || '';
   const series = useAsync<SeriesRow[]>(() => (chosen ? desk.series(chosen, { limit: 250 }) : Promise.resolve([])), [chosen]);
   const [csvError, setCsvError] = useState<string | null>(null);
-  const points = [...(series.data ?? [])].reverse().map((r) => ({ x: r.date, y: r.price, tier: r.tier, restated: r.restated }));
+  const points = [...(series.data ?? [])].reverse().map((r) => ({ x: r.date, y: r.price, tier: r.tier, tierLabel: r.tierLabel, restated: r.restated }));
 
   return (
     <div className="page">
@@ -39,14 +39,14 @@ export default function AuditSeries() {
               <table className="blotter">
                 <thead><tr><th>Date</th><th>As of</th><th className="num">Value</th><th className="num">Reference</th><th className="num">Factor</th><th>Attestation</th><th>Signers</th><th>cid</th><th></th></tr></thead>
                 <tbody>
-                  {(series.data ?? []).map((r) => (
-                    <tr key={r.fixingCid + r.date}>
+                  {(series.data ?? []).map((r, i) => (
+                    <tr key={`${r.fixingCid ?? r.asOf}-${i}`}>
                       <td className="mono">{r.date}</td>
-                      <td className="mono muted">{fmtTs(r.asOf)}</td>
+                      <td className="mono muted when">{fmtTs(r.asOf)}</td>
                       <td className={`num mono${r.tier === 1 ? ' official' : ''}`}>{fmtN(r.price)}</td>
                       <td className="num mono muted">{r.referencePrice !== undefined ? fmtN(r.referencePrice) : '—'}</td>
                       <td className="num mono muted">{r.wrapperFactor !== undefined ? r.wrapperFactor : '—'}</td>
-                      <td><TierTag tier={r.tier} k={r.k} n={r.n} /></td>
+                      <td><TierTag tier={r.tier} k={r.k} n={r.n} label={r.tierLabel} /></td>
                       <td className="small">{r.signers.join(', ') || '—'}</td>
                       <td className="mono muted" title={r.fixingCid}>{shortCid(r.fixingCid)}</td>
                       <td>{r.restated && <span className="tag">restated</span>}</td>

@@ -1,0 +1,6 @@
+node_modules
+dist
+signer.yml
+signer-state.json
+*.log
+.git

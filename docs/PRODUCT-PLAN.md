@@ -69,9 +69,16 @@ schedule (16:00 London per instrument)
               (venue attaches traded range; ledger enforces)
   → RESTRIKE  on refusal, inside the window (default 30 min)
   → FINALIZE  at K; funds re-mark; series row published with tier 1
-  → FALLBACK  if K not reached by window end: tier 2 alternate seats (future), tier 3
-              benchmark × last factor (auto), tier 4 prior fixing flagged, tier 5 missed
+  → ESCALATE  tier 2, inside the window: at ½ remind every seat not yet confirmed
+              (proposal.reminder, escalation 1); at ¾ remind again and bring in the
+              seat's configured alternates (escalation 2)
+  → FALLBACK  if K not reached by window end: tier 3 benchmark × last factor (auto),
+              tier 4 prior fixing flagged, tier 5 missed
 ```
+
+A strike day is decided by the instrument's **calendar** (`daily` for wrapped crypto — the
+reference rate prints every day of the year; `nyse` / `lse` for exchange-listed assets, with the
+exchanges' published holidays; `weekdays`), and a fund strikes only on days all its components do.
 
 Every step writes an **event** (`fixing_events`: instrument, proposalCid, kind, actor, reason,
 ts, on-ledger cid where applicable). The audit export is those events.
@@ -89,7 +96,7 @@ ts, on-ledger cid where applicable). The audit export is those events.
 **Authenticated**
 - `GET /api/me` → `{ uid, email, role, party, seat?, instruments?, org, displayName }`
 - `GET /api/proposals?status=open|all&mine=true` (signer) → proposals for my instruments with my conditions and what I already did
-- `POST /api/proposals/{cid}/confirm` body `{ checks: [condition], evidence?: { low, high } }` (wraps `/fixing/{cid}/confirm-checked` with the caller's party/seat)
+- `POST /api/proposals/{cid}/confirm` body `{ checks: [condition], evidence }` (wraps `/fixing/{cid}/confirm-checked` with the caller's party/seat). Venue: `evidence: { low, high }`, enforced on-ledger. Issuer and lender: `evidence: { "<condition>": { …numbers } }` is **required**, in the shape `/api/signer-protocol` publishes per condition, checked server-side before submission; a bare tick is a 422 carrying the schema
 - `POST /api/proposals/{cid}/refuse` body `{ condition, reason }` → recorded on-ledger where the template supports it, always in events
 - `GET /api/proposals/{cid}/events` → the message log for one proposal
 - `GET /api/signer/settings` / `PUT` → `{ webhookUrl, webhookSecret?, email, tolerances: {…} }`
@@ -98,14 +105,14 @@ ts, on-ledger cid where applicable). The audit export is those events.
 - `POST /api/ap/create` / `POST /api/ap/redeem` body `{ fundId, shares }` → wraps basket create/redeem as the caller's party; returns receipt
 - `GET /api/ap/receipts` → caller's receipts
 - `GET /api/fund/{id}/dashboard` (fund_admin) → NAV series, shares outstanding, create/redeem log, fee accruals, licensees
-- `GET /api/admin/schedule` / `PUT` → per-instrument strike time, window, tiers enabled
+- `GET /api/admin/schedule` / `PUT` → per-instrument strike time, window, `calendar` (daily | weekdays | nyse | lse), tiers enabled, `alternates: { issuer: [emails], lender: [...], venue: [...] }` for tier 2
 - `POST /api/admin/strike/{id}` → run the propose step now
 - `GET /api/admin/committees` → roster per instrument (seats, parties, users, last action)
 - `GET /api/admin/users` / `POST` / `PUT /{uid}` → mapping management
 - `GET /api/admin/events?instrument&from&to` and `.csv` → audit export
 - `GET /api/audit/…` mirrors of the read-only admin routes for role `auditor`
 
-**Webhook to signers** (outbound): `POST {webhookUrl}` body `{ type: "proposal.created"|"proposal.restruck"|"fixing.finalized"|"fixing.missed", instrument, proposalCid, price, referencePrice?, wrapperFactor?, conditions: [names for your seat], deadline }` with header `X-CrossDesk-Signature: sha256=HMAC(secret, body)`.
+**Webhook to signers** (outbound): `POST {webhookUrl}` body `{ type: "proposal.created"|"proposal.restruck"|"proposal.reminder"|"fixing.finalized"|"fixing.missed", instrument, proposalCid, price, referencePrice?, wrapperFactor?, conditions: [names for your seat], deadline, escalation?: 1|2 }` with header `X-CrossDesk-Signature: sha256=HMAC(secret, body)`. `proposal.reminder` goes only to the seats that have not confirmed (and, at `escalation: 2`, their alternates).
 
 **Scheduler**: Spring `@Scheduled`, reads `/api/admin/schedule`; default CBTC & cETH Close 16:00 Europe/London, LX1 NAV immediately after its components. Safe on the sandbox (in-memory; missed = event).
 

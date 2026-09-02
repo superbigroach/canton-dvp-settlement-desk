@@ -96,6 +96,46 @@ real participant. The desk's own state (events, users, schedule) is under
 `/app/data` inside the container and is as ephemeral as the sandbox — consistent, and
 honest.
 
+### What the strike runner does now (2 Sep 2026)
+
+**Strike calendars.** Each row of `GET/PUT /api/admin/schedule` carries a `calendar`:
+`daily` (every calendar day — the default for a wrapped crypto asset, because the CME CF
+reference rate prints every day of the year, and for a fund whose components are all
+crypto), `weekdays`, `nyse` or `lse` (weekdays minus the exchange's published 2026–2027
+closures, from `backend/src/main/resources/calendars/{nyse,lse}.yml`). A fund strikes only
+on days *all* its components strike. `CALENDARS_DIR=/path` replaces either file, or adds a
+calendar under a new name, without a rebuild. The public `/api/fixing-schedule` shows the
+calendar per identifier, and `/api/admin/schedule/status` shows `strikesToday`,
+`nextStrikeDate` and the effective calendar list. CBTC and cETH therefore strike on
+Saturday and Sunday on this image; that is the calendar, not a bug.
+
+**Tier 2 escalation, on by default.** With a proposal open and K not reached, the runner
+sends `proposal.reminder` webhooks (and writes events) to every seat that has not confirmed
+at half the window (`escalation: 1`) and again at three quarters (`escalation: 2`), the
+second time also to any `alternates: { issuer: [...], lender: [...], venue: [...] }` set on
+the schedule row — e-mails from `users.yml` whose party is on the committee on-ledger
+(anyone else is named in the event and skipped). Tiers 3–5 run only after the window
+closes. Switch it off per instrument with `tiers.t2: false`.
+
+**Evidence, not ticks.** `POST /api/proposals/{cid}/confirm` for the issuer and lender
+seats requires `evidence: { "<condition>": { ...numbers } }` in the shape
+`GET /api/signer-protocol` publishes per condition, checks it server-side (the lender's
+mark against its own `tolerances.markBps`, default 25 bp) and refuses with a **422** that
+carries the schema. The venue path is unchanged (`evidence: {low, high}`, enforced by the
+ledger). Try it against the running demo:
+
+```bash
+BASE=https://crossdesk-demo-<hash>-uc.a.run.app
+CID=$(curl -s -H 'X-Sandbox-User: lender' "$BASE/api/proposals" | python -c 'import json,sys;print(json.load(sys.stdin)[0]["cid"])')
+# a bare tick → 422 with the schema
+curl -s -X POST -H 'X-Sandbox-User: lender' -H 'Content-Type: application/json' \
+  "$BASE/api/proposals/$CID/confirm" -d '{"checks":["book-acceptance"]}'
+# the numbers → 200, verified: true
+curl -s -X POST -H 'X-Sandbox-User: lender' -H 'Content-Type: application/json' \
+  "$BASE/api/proposals/$CID/confirm" \
+  -d '{"checks":["book-acceptance"],"evidence":{"book-acceptance":{"acceptedAt":"2026-09-02T16:00:00Z"}}}'
+```
+
 `app.jar` and `crossdesk.dar` are gitignored. They are build output, and a 42 MB
 jar in git history is not worth the convenience of skipping two `cp` commands.
 

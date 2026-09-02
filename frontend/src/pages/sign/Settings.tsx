@@ -33,7 +33,7 @@ export default function Settings() {
     try {
       const body: SignerSettings = { ...form, webhookSecret: secret || undefined };
       const r = await desk.saveSignerSettings(body);
-      setForm({ ...r, apiKey: r.apiKey ?? form.apiKey });
+      setForm({ ...r, apiKey: r.apiKey ?? form.apiKey, webhookSecretSet: r.webhookSecretSet ?? (secret ? true : form.webhookSecretSet) });
       setSecret('');
       setSaved(`Saved at ${new Date().toLocaleTimeString()}`);
     } catch (err) {
@@ -92,17 +92,17 @@ export default function Settings() {
               </p>
               <label className="field" htmlFor="webhookUrl">
                 <span>Webhook URL</span>
-                <input id="webhookUrl" type="url" className="mono" placeholder="https://signer.example.com/crossdesk" value={form.webhookUrl}
+                <input id="webhookUrl" type="url" className="mono" placeholder="https://signer.example.com/crossdesk" value={form.webhookUrl ?? ''}
                   onChange={(e) => setForm({ ...form, webhookUrl: e.target.value })} />
               </label>
               <label className="field" htmlFor="webhookSecret">
-                <span>Webhook secret {form.webhookSecret === undefined ? '(stored, never shown — enter to replace)' : ''}</span>
+                <span>Webhook secret {form.webhookSecretSet ? '(stored, never shown — enter to replace)' : '(none stored)'}</span>
                 <input id="webhookSecret" type="password" className="mono" autoComplete="new-password" value={secret}
-                  placeholder="leave blank to keep the current secret" onChange={(e) => setSecret(e.target.value)} />
+                  placeholder={form.webhookSecretSet ? 'leave blank to keep the current secret' : 'shared secret for the HMAC signature'} onChange={(e) => setSecret(e.target.value)} />
               </label>
               <label className="field" htmlFor="email">
                 <span>Notification email</span>
-                <input id="email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+                <input id="email" type="email" value={form.email ?? ''} onChange={(e) => setForm({ ...form, email: e.target.value })} />
               </label>
 
               <h2 className="section-h">Tolerances</h2>

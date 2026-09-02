@@ -9,6 +9,7 @@ import { findSandboxUser, SANDBOX_USERS } from '../auth/sandboxUsers';
 import { actAsUser, sandboxUser } from '../auth/token';
 import type { DeskClient } from './client';
 import type {
+  BenchmarkLast,
   ApFund, Benchmark, Committee, FixingEvent, FundDashboard, Me, Proposal, ProposalEvent, Receipt,
   ScheduleRow, SeriesRow, SignerSettings, UserRow,
 } from './types';
@@ -86,16 +87,19 @@ const SERIES: Record<string, SeriesRow[]> = {
   LX1: makeSeries(102.4, 40),
 };
 
+/** A series row as a benchmark's `last`: the mock never publishes a gap, but the type allows one. */
+const lastOf = (r: SeriesRow, ageSeconds: number): BenchmarkLast => ({ ...r, price: r.price ?? null, ageSeconds });
+
 const BENCHMARKS: Benchmark[] = [
   { id: 'CBTC', name: 'CBTC Close', kind: 'wrapped', publishTime: '16:00', timezone: 'Europe/London',
     description: 'Closing value of cBTC on Canton: the BTC benchmark print × the last attested wrapper factor.',
-    last: { ...SERIES.CBTC[0], ageSeconds: 4_800 }, referencing: [{ id: 'LX1', name: 'LX1 NAV' }] },
+    last: lastOf(SERIES.CBTC[0], 4_800), referencing: [{ id: 'LX1', name: 'LX1 NAV' }] },
   { id: 'cETH', name: 'cETH Close', kind: 'wrapped', publishTime: '16:00', timezone: 'Europe/London',
     description: 'Closing value of cETH on Canton: the ETH benchmark print × the last attested wrapper factor.',
-    last: { ...SERIES.cETH[0], ageSeconds: 4_800 }, referencing: [{ id: 'LX1', name: 'LX1 NAV' }] },
+    last: lastOf(SERIES.cETH[0], 4_800), referencing: [{ id: 'LX1', name: 'LX1 NAV' }] },
   { id: 'LX1', name: 'LX1 NAV', kind: 'nav', publishTime: '16:05', timezone: 'Europe/London',
     description: 'Net asset value per share of the LX1 basket: Σ units per share × attested component close.',
-    last: { ...SERIES.LX1[0], ageSeconds: 4_500 }, referencing: [] },
+    last: lastOf(SERIES.LX1[0], 4_500), referencing: [] },
 ];
 
 // ---- proposals ----------------------------------------------------------------
@@ -141,8 +145,8 @@ events.push({ ts: iso(daysAgo(9)), instrument: 'cETH', kind: 'fallback.tier3', a
 // ---- funds --------------------------------------------------------------------
 const fund: ApFund = {
   id: 'LX1', name: 'LX1 basket', cash: 'USDC',
-  official: { nav: SERIES.LX1[0].price, asOf: SERIES.LX1[0].asOf, tier: 1, k: 2, n: 3, fixingCid: SERIES.LX1[0].fixingCid },
-  indicative: Math.round(SERIES.LX1[0].price * 1.0021 * 100) / 100,
+  official: { nav: SERIES.LX1[0].price ?? 0, asOf: SERIES.LX1[0].asOf, tier: 1, k: 2, n: 3, fixingCid: SERIES.LX1[0].fixingCid },
+  indicative: Math.round((SERIES.LX1[0].price ?? 0) * 1.0021 * 100) / 100,
   components: [
     { instrumentId: 'CBTC', unitsPerShare: 0.001, mark: 61_402.15 },
     { instrumentId: 'cETH', unitsPerShare: 0.0173, mark: 2_398.6 },
@@ -345,7 +349,7 @@ export const mockClient: DeskClient = {
     if (!b) throw new ApiError(`no instrument ${id}`, 404);
     const p: Proposal = {
       cid: `00s${hex(0xffff)}…`, instrument: id, session: 'Close', kind: b.kind === 'nav' ? 'nav' : 'wrapped',
-      price: b.last ? Math.round(b.last.price * 1.0008 * 100) / 100 : 0, referencePrice: b.last ? b.last.price : undefined,
+      price: b.last?.price ? Math.round(b.last.price * 1.0008 * 100) / 100 : 0, referencePrice: b.last?.price ?? undefined,
       wrapperFactor: b.kind === 'wrapped' ? 0.9985 : undefined,
       proposedBy: 'Operator', proposedAt: iso(new Date()), deadline: minutesFromNow(30), k: 2, n: 3, confirmed: [],
       status: 'open', conditions: [], requiresObservedRange: false, mine: null,

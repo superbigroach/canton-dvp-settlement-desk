@@ -1,7 +1,7 @@
 // AP portal · Funds — one row per fund I am an authorised participant of.
 import { Link } from 'react-router-dom';
 import { desk, type ApFund } from '../../desk';
-import { fmtN, fmtQty, fmtTs, LoadState, TierTag, useAsync } from '../../components/ui';
+import { fmtN, fmtQty, fmtTs, isOfficial, LoadState, TierTag, useAsync } from '../../components/ui';
 
 export default function Funds() {
   const funds = useAsync<ApFund[]>(() => desk.apFunds(), []);
@@ -9,7 +9,7 @@ export default function Funds() {
     <div className="page">
       <div className="page-head">
         <h1>Funds</h1>
-        <p className="hint">Creation and redemption in kind, at the attested NAV. Official values in gold; indicative values are not.</p>
+        <p className="hint">Creation and redemption in kind, at the attested NAV. Only a committee-attested value is gold; a seeded or fallback value is labelled as such.</p>
         <button type="button" className="ghost small" onClick={funds.reload}>Refresh</button>
       </div>
       <LoadState loading={funds.loading} error={funds.error} onRetry={funds.reload}
@@ -17,14 +17,14 @@ export default function Funds() {
         <div className="card table-wrap">
           <table className="blotter">
             <thead>
-              <tr><th>Fund</th><th className="num">Official NAV</th><th>As of</th><th className="num">Indicative</th><th className="num">Shares out</th><th className="num">Fee (bps)</th><th>Cutoff</th><th></th></tr>
+              <tr><th>Fund</th><th className="num">NAV</th><th>As of · attestation</th><th className="num">Indicative</th><th className="num">Shares out</th><th className="num">Fee (bps)</th><th>Cutoff</th><th></th></tr>
             </thead>
             <tbody>
               {(funds.data ?? []).map((f) => (
                 <tr key={f.id}>
                   <td><Link to={`/ap/funds/${encodeURIComponent(f.id)}`} className="strong">{f.name}</Link> <span className="mono muted">{f.id}</span></td>
-                  <td className="num mono official">{f.official ? fmtN(f.official.nav) : '—'}</td>
-                  <td>{f.official ? <><span className="mono muted">{fmtTs(f.official.asOf)}</span> <TierTag tier={f.official.tier} k={f.official.k} n={f.official.n} /></> : <span className="muted">no fixing</span>}</td>
+                  <td className={`num mono${isOfficial(f.official?.tier) ? ' official' : ''}`}>{f.official ? fmtN(f.official.nav) : '—'}</td>
+                  <td>{f.official ? <><span className="mono muted">{fmtTs(f.official.asOf)}</span> <TierTag tier={f.official.tier} k={f.official.k} n={f.official.n} label={f.official.tierLabel} /></> : <span className="muted">no fixing</span>}</td>
                   <td className="num mono muted">{f.indicative !== undefined && f.indicative !== null ? fmtN(f.indicative) : '—'}</td>
                   <td className="num mono">{f.sharesOutstanding !== undefined ? fmtQty(f.sharesOutstanding) : '—'}</td>
                   <td className="num mono">{f.fee.createBps} / {f.fee.redeemBps}</td>

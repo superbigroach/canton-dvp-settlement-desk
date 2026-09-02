@@ -28,12 +28,11 @@ import java.util.Map;
  * honest half of §4 — the half that turns "we forgot" into a visible, actionable fact
  * and feeds §3 Tier 3's carry-forward flag.
  *
- * <p>BUSINESS DAYS ARE APPROXIMATED AS WEEKDAYS, and that is stated rather than hidden.
- * §4 lets each identifier declare its own calendar; this package carries no holiday
- * calendar (the same reason §6's restatement window is policy rather than code), so a
- * public holiday shows as a missed strike. A false "overdue" that a human dismisses is
- * the safe direction to be wrong in — the opposite, silently excusing a genuinely
- * missed strike, is the failure that matters.
+ * <p>BUSINESS DAYS COME FROM THE IDENTIFIER'S DECLARED CALENDAR ({@link StrikeCalendars}):
+ * {@code daily} for a wrapped crypto asset whose reference rate prints every day of the
+ * year, {@code nyse} / {@code lse} for an asset whose market keeps exchange holidays,
+ * {@code weekdays} for the old approximation. The bare {@link #isBusinessDay(LocalDate)}
+ * is that approximation and is kept for callers that have no calendar to hand.
  */
 public final class FixingSchedule {
 
@@ -49,12 +48,18 @@ public final class FixingSchedule {
             String session,      // "Open" | "Close"
             LocalTime strikeAt,  // e.g. 16:00
             ZoneId zone,         // e.g. Europe/London — a fixing without a zone is not a time
-            long graceMinutes) { // how long after the strike before it counts as overdue
+            long graceMinutes,   // how long after the strike before it counts as overdue
+            String calendar) {   // a StrikeCalendars name: daily | weekdays | nyse | lse
+
+        /** The pre-calendar constructor: the weekday approximation. */
+        public Declared(String instrumentId, String session, LocalTime strikeAt, ZoneId zone, long graceMinutes) {
+            this(instrumentId, session, strikeAt, zone, graceMinutes, StrikeCalendars.WEEKDAYS);
+        }
     }
 
     /** How a declared strike stands at a given instant. */
     public enum State {
-        /** Not a business day for this identifier, so nothing is expected. */
+        /** Not a strike day for this identifier's calendar, so nothing is expected. */
         NOT_DUE_TODAY,
         /** Today's strike time has not arrived yet. */
         PENDING,
@@ -82,20 +87,27 @@ public final class FixingSchedule {
      *
      * <p>16:00 Europe/London matches the CME CF Bitcoin Reference Rate window this
      * desk's wrapped-asset fixings reference, so a cBTC mark and the benchmark it is
-     * derived from describe the same moment rather than two moments an hour apart.
+     * derived from describe the same moment rather than two moments an hour apart. The
+     * BRR is calculated every day of the year, so the calendar is {@code daily}; LX1
+     * holds only crypto, so it is daily too.
      */
     public static List<Declared> defaults() {
         ZoneId london = ZoneId.of("Europe/London");
         return List.of(
-                new Declared("CBTC", "Close", LocalTime.of(16, 0), london, 60),
-                new Declared("cETH", "Close", LocalTime.of(16, 0), london, 60),
-                new Declared("LX1", "Close", LocalTime.of(16, 0), london, 60));
+                new Declared("CBTC", "Close", LocalTime.of(16, 0), london, 60, StrikeCalendars.DAILY),
+                new Declared("cETH", "Close", LocalTime.of(16, 0), london, 60, StrikeCalendars.DAILY),
+                new Declared("LX1", "Close", LocalTime.of(16, 0), london, 60, StrikeCalendars.DAILY));
     }
 
-    /** True when {@code date} is a business day under the weekday approximation above. */
+    /** True when {@code date} is a weekday — the approximation for callers with no calendar. */
     public static boolean isBusinessDay(LocalDate date) {
         DayOfWeek d = date.getDayOfWeek();
         return d != DayOfWeek.SATURDAY && d != DayOfWeek.SUNDAY;
+    }
+
+    /** True when {@code calendar} strikes on {@code date}. */
+    public static boolean isBusinessDay(StrikeCalendars calendars, String calendar, LocalDate date) {
+        return calendars.strikes(calendar, date);
     }
 
     /** Today's scheduled strike instant for a declaration, in its own zone. */
@@ -103,13 +115,23 @@ public final class FixingSchedule {
         return ZonedDateTime.of(date, d.strikeAt(), d.zone()).toInstant();
     }
 
-    /** The next business day on or after {@code date}. */
+    /** The next weekday on or after {@code date} (the approximation). */
     public static LocalDate nextBusinessDay(LocalDate date) {
         LocalDate x = date;
         while (!isBusinessDay(x)) {
             x = x.plusDays(1);
         }
         return x;
+    }
+
+    /** Where a declared strike stands at {@code now}, under the built-in calendars. */
+    public static Status statusOf(Declared d, Instant now, Instant lastStruck) {
+        return statusOf(Holder.DEFAULTS, d, now, lastStruck);
+    }
+
+    /** Lazily loaded so a class that only wants {@link #key} never parses a YAML file. */
+    private static final class Holder {
+        static final StrikeCalendars DEFAULTS = StrikeCalendars.defaults();
     }
 
     /**
@@ -120,13 +142,19 @@ public final class FixingSchedule {
      *                   today's scheduled instant rather than "within 24 hours", because
      *                   a fixing struck at yesterday's 16:00 is emphatically not today's.
      */
-    public static Status statusOf(Declared d, Instant now, Instant lastStruck) {
+    public static Status statusOf(StrikeCalendars calendars, Declared d, Instant now, Instant lastStruck) {
         LocalDate today = now.atZone(d.zone()).toLocalDate();
+        String cal = d.calendar() == null || d.calendar().isBlank() ? StrikeCalendars.WEEKDAYS : d.calendar();
 
-        if (!isBusinessDay(today)) {
-            LocalDate next = nextBusinessDay(today);
+        if (!calendars.strikes(cal, today)) {
+            LocalDate next = calendars.nextStrikeDay(cal, today);
+            StrikeCalendars.Calendar c = calendars.get(cal);
+            String why = c != null && c.holidays().containsKey(today)
+                    ? "closed: " + c.holidays().get(today) + " (" + cal + " calendar)"
+                    : "not a strike day on the " + cal + " calendar";
             return new Status(d, State.NOT_DUE_TODAY, strikeInstantOn(d, next), 0,
-                    "not a business day under the weekday approximation; no holiday calendar is carried");
+                    why + "; next strike " + next
+                            + (StrikeCalendars.WEEKDAYS.equals(cal) ? "; no holiday calendar is carried for this identifier" : ""));
         }
 
         Instant expected = strikeInstantOn(d, today);
@@ -155,9 +183,14 @@ public final class FixingSchedule {
     /** Status for every declared identifier, given the last strike known for each. */
     public static List<Status> statuses(
             List<Declared> declared, Instant now, Map<String, Instant> lastStruckByKey) {
+        return statuses(Holder.DEFAULTS, declared, now, lastStruckByKey);
+    }
+
+    public static List<Status> statuses(StrikeCalendars calendars,
+            List<Declared> declared, Instant now, Map<String, Instant> lastStruckByKey) {
         Map<String, Instant> last = lastStruckByKey == null ? new LinkedHashMap<>() : lastStruckByKey;
         return declared.stream()
-                .map(d -> statusOf(d, now, last.get(key(d.instrumentId(), d.session()))))
+                .map(d -> statusOf(calendars, d, now, last.get(key(d.instrumentId(), d.session()))))
                 .toList();
     }
 

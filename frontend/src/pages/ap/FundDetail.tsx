@@ -5,7 +5,7 @@ import { useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { errorMessage } from '../../api';
 import { desk, type ApFund, type Receipt } from '../../desk';
-import { ConfirmDialog, Countdown, fmtN, fmtQty, fmtTs, LoadState, NumberField, shortCid, Stat, TierTag, useAsync } from '../../components/ui';
+import { ConfirmDialog, Countdown, fmtN, fmtQty, fmtTs, isOfficial, LoadState, NumberField, shortCid, Stat, TierTag, useAsync } from '../../components/ui';
 
 export default function FundDetail() {
   const { id = '' } = useParams();
@@ -50,6 +50,12 @@ export default function FundDetail() {
   };
 
   const cutoffPassed = fund?.cutoff.nextAt ? new Date(fund.cutoff.nextAt).getTime() < Date.now() : false;
+  // Gold only when a committee attested the NAV. A seeded value still prices the order —
+  // the backend settles at it — but it is not official and must not look it.
+  const gold = isOfficial(fund?.official?.tier);
+  const tierWord = fund?.official ? (fund.official.tierLabel ?? (fund.official.tier === 0 ? 'seed' : `tier ${fund.official.tier}`)) : '';
+  const navLabel = gold || !fund?.official ? 'Official NAV' : `NAV (${tierWord} — not attested)`;
+  const navCls = `mono${gold ? ' official' : ''}`;
 
   return (
     <div className="page">
@@ -61,8 +67,8 @@ export default function FundDetail() {
         {fund && (
           <>
             <div className="stat-row">
-              <Stat label="Official NAV" gold value={fund.official ? fmtN(fund.official.nav) : '—'}
-                sub={fund.official ? <><TierTag tier={fund.official.tier} k={fund.official.k} n={fund.official.n} /> <span className="mono muted">{fmtTs(fund.official.asOf)}</span></> : 'no official NAV today'} />
+              <Stat label={navLabel} gold={gold} value={fund.official ? fmtN(fund.official.nav) : '—'}
+                sub={fund.official ? <><TierTag tier={fund.official.tier} k={fund.official.k} n={fund.official.n} label={fund.official.tierLabel} /> <span className="mono muted">{fmtTs(fund.official.asOf)}</span></> : 'no official NAV today'} />
               <Stat label="Indicative (not official)" value={fund.indicative !== undefined && fund.indicative !== null ? fmtN(fund.indicative) : '—'} sub="from live marks; nothing settles at it" />
               <Stat label="Shares outstanding" value={fund.sharesOutstanding !== undefined ? fmtQty(fund.sharesOutstanding) : '—'} />
               <Stat label="Cutoff" value={<>{fund.cutoff.time} <span className="muted small">{fund.cutoff.timezone}</span></>}
@@ -111,7 +117,7 @@ export default function FundDetail() {
                   <div className="preview-title">{side === 'create' ? 'You receive' : 'You deliver'}</div>
                   <div className="mono">{valid ? `${fmtQty(n)} shares of ${fund.id}` : '—'}</div>
                   <dl className="kv">
-                    <dt>At official NAV</dt><dd className="mono official">{preview?.nav !== null && preview?.nav !== undefined ? fmtN(preview.nav) : '—'}</dd>
+                    <dt>{gold ? 'At official NAV' : 'At NAV (not attested)'}</dt><dd className={navCls}>{preview?.nav !== null && preview?.nav !== undefined ? fmtN(preview.nav) : '—'}</dd>
                     <dt>Notional</dt><dd className="mono">{preview?.notional !== null && preview?.notional !== undefined ? `${fmtN(preview.notional)} ${fund.cash}` : '—'}</dd>
                     <dt>Fee ({preview?.bps ?? (side === 'create' ? fund.fee.createBps : fund.fee.redeemBps)} bps)</dt>
                     <dd className="mono">{preview?.fee !== null && preview?.fee !== undefined ? `${fmtN(preview.fee)} ${fund.fee.currency ?? fund.cash}` : '—'}</dd>
@@ -129,7 +135,7 @@ export default function FundDetail() {
               <div className="card receipt-card">
                 <div className="card-head"><h2>Receipt</h2><span className={`tag status ${receipt.status}`}>{receipt.status}</span></div>
                 <p className="mono">
-                  {receipt.kind === 'create' ? 'Created' : 'Redeemed'} {fmtQty(receipt.shares)} {receipt.fundId} at NAV <span className="official">{fmtN(receipt.nav)}</span>
+                  {receipt.kind === 'create' ? 'Created' : 'Redeemed'} {fmtQty(receipt.shares)} {receipt.fundId} at NAV <span className={isOfficial(receipt.navTier) ? 'official' : ''}>{fmtN(receipt.nav)}</span>
                   {' '}— units {receipt.units.map((u) => `${fmtQty(u.amount)} ${u.instrumentId}`).join(', ')} — fee {fmtN(receipt.fee)} {receipt.feeCurrency ?? fund.cash}
                   {' '}· {fmtTs(receipt.ts)}{receipt.cid ? ` · cid ${shortCid(receipt.cid)}` : ''}
                 </p>
@@ -145,7 +151,7 @@ export default function FundDetail() {
                   <dt>Shares</dt><dd className="mono">{fmtQty(n)} {fund.id}</dd>
                   <dt>{side === 'create' ? 'You deliver' : 'You receive'}</dt>
                   <dd className="mono">{preview.units.map((u) => `${fmtQty(u.amount)} ${u.instrumentId}`).join(' + ')}</dd>
-                  <dt>Official NAV</dt><dd className="mono official">{preview.nav !== null ? fmtN(preview.nav) : '—'}</dd>
+                  <dt>{gold ? 'Official NAV' : 'NAV (not attested)'}</dt><dd className={navCls}>{preview.nav !== null ? fmtN(preview.nav) : '—'}</dd>
                   <dt>Fee</dt><dd className="mono">{preview.fee !== null ? `${fmtN(preview.fee)} ${fund.fee.currency ?? fund.cash}` : '—'}</dd>
                 </dl>
               )}

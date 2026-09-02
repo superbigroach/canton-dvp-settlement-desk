@@ -290,7 +290,7 @@ route must be resolved first.
 | §3 Tier 2 committee attestation of a recipe | implemented, tested |
 | §3 Tier 2 basket summation | implemented, tested |
 | §3 Tier 3 carry-forward flagging | implemented — a fixing whose strike is more than one interval old is returned with `carriedForward` and `ageOfStrikeHours`. A stale number that looks freshly struck is worse than a gap, because a gap is visible and staleness is not |
-| §4 Scheduled strike at a fixed time | **detection implemented; striking is still manual.** `FixingSchedule` declares the strike time and zone per identifier and `GET /fixing-schedule` reports PENDING / DUE / OVERDUE / STRUCK / NOT_DUE_TODAY, judged against the ATTESTED strike instant rather than when the ledger saw it. The desk deliberately does **not** auto-strike: a fixing nobody attested is not a cheaper fixing, it is a lie with a timestamp. Business days are approximated as weekdays — no holiday calendar is carried, so a public holiday reads as a missed strike |
+| §4 Scheduled strike at a fixed time | **implemented.** `FixingSchedule` declares the strike time and zone per identifier and `GET /fixing-schedule` reports PENDING / DUE / OVERDUE / STRUCK / NOT_DUE_TODAY, judged against the ATTESTED strike instant rather than when the ledger saw it; the strike runner (`StrikeService`) proposes at the strike and the committee attests — a fixing nobody attested is never invented, the waterfall publishes a flagged fallback or a gap instead. **Business days come from the calendar declared per identifier** (`StrikeCalendars`, 2 Sep 2026): `daily` for a wrapped crypto asset whose reference rate prints every day of the year, `nyse` / `lse` for an asset that keeps exchange holidays (the published 2026–2027 closures ship in `calendars/{nyse,lse}.yml`, overridable by `CALENDARS_DIR`), `weekdays` for the old approximation. A fund strikes only on days all its components strike |
 | §5 Gap-rather-than-estimate | implemented (`navPerShare` returns `None` on a missing mark) |
 | §6 Restatement | implemented, tested — `RestatementProposal`, same K-of-N as a fixing. The two-business-day window is policy, not code (see §6) |
 | §5 Wrapper mark as two signed fields (`referencePrice`, `wrapperFactor`) | implemented, tested — reconciliation enforced on-ledger (`testWrapperMarkAttested`) |
@@ -300,10 +300,10 @@ route must be resolved first.
 | §10 Lookup by identifier and date | implemented — `GET /fixings/{instrumentId}` returns the published series with §6's consumer rule applied (`current` is the print nothing supersedes), an optional `asOf` for "which number was in force when my liquidation fired", and any cessation notice covering the identifier. Every fixing now carries its tier, wrapper mark and restatement lineage |
 
 **Where this now stands.** Every gap in the original §12 list is closed or explicitly reassigned.
-What remains is not a missing feature but two honest limits: **striking is still a human act** (by
-design — the schedule reports a missed strike rather than inventing a number nobody attested), and
-**no holiday calendar is carried**, so both the §6 restatement window and §4's business days are
-approximations that are stated rather than hidden.
+What remains is one honest limit: **a fixing is still a committee's act** — the runner proposes on
+schedule and escalates to silent seats, but the number that is published as tier 1 is the one
+`K` members attested, and when they do not the record says so. §4's business days now follow a
+declared calendar; the §6 restatement window remains policy rather than code.
 
 The two decisions that are deliberately *not* the administrator's: what a fund does when the
 committee cannot reach quorum (its governing documents), and whether an EU- or UK-supervised entity

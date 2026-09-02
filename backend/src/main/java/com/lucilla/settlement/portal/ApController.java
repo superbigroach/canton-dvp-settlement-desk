@@ -234,7 +234,25 @@ public class ApController {
             u.put("unitsPerShare", c.unitsPerShare());
             units.add(u);
         }
-        out.put("nav", complete ? nav : null);
+        // THE NAV OF RECORD, NOT TODAY'S. A receipt settled at the signed NAV of its moment;
+        // re-marking it at current component marks made every receipt drift after each
+        // strike (890 → 1,013 in one afternoon on 2 Sep 2026). The creation/redemption
+        // event written at settlement carries that NAV; the current-marks figure is only
+        // the fallback for a receipt whose event is missing, and it says so.
+        BigDecimal navOfRecord = null;
+        try {
+            String cid = r.contractId();
+            navOfRecord = events.query(r.basketId(), null, null).stream()
+                    .filter(e -> e.price() != null && (cid.equals(e.ledgerCid())
+                            || cid.equals(e.proposalCid()) || cid.equals(e.rootCid())))
+                    .map(com.lucilla.settlement.events.FixingEvent::price)
+                    .findFirst().orElse(null);
+        } catch (RuntimeException e) {
+            /* no event store view — fall back to current marks below */
+        }
+        out.put("nav", navOfRecord != null ? navOfRecord : (complete ? nav : null));
+        out.put("navBasis", navOfRecord != null ? "settled" : "current-marks");
+        out.put("navAtCurrentMarks", complete ? nav : null);
         out.put("units", units);
         out.put("components", units);
         out.put("fee", r.fee() == null ? BigDecimal.ZERO : r.fee());
@@ -246,7 +264,8 @@ public class ApController {
         out.put("party", LedgerService.labelOf(r.ap()));
         out.put("ap", LedgerService.labelOf(r.ap()));
         out.put("administrator", LedgerService.labelOf(r.administrator()));
-        out.put("note", "nav is the delivered basket marked at current component marks");
+        out.put("note", navOfRecord != null ? "nav is the signed NAV the receipt settled at"
+                : "no settlement event found — nav is the delivered basket marked at current component marks");
         return out;
     }
 
@@ -282,15 +301,27 @@ public class ApController {
         return out;
     }
 
-    static Instant nextStrike(com.lucilla.settlement.scheduler.StrikeSchedule s) {
+    /** The next strike instant on the fund's calendar — and every component's (the intersection rule). */
+    Instant nextStrike(com.lucilla.settlement.scheduler.StrikeSchedule s) {
         Instant now = Instant.now();
         java.time.LocalDate d = s.dateOf(now);
         Instant at = s.strikeInstantOn(d);
-        while (at.isBefore(now) || !com.lucilla.settlement.ledger.FixingSchedule.isBusinessDay(d)) {
+        int guard = 0;
+        while ((at.isBefore(now) || !strikesOn(s, d)) && guard++ < 400) {
             d = d.plusDays(1);
             at = s.strikeInstantOn(d);
         }
         return at;
+    }
+
+    private boolean strikesOn(com.lucilla.settlement.scheduler.StrikeSchedule s, java.time.LocalDate d) {
+        com.lucilla.settlement.ledger.StrikeCalendars cals = schedules.calendars();
+        if (!cals.strikes(s.effectiveCalendar(), d)) return false;
+        for (String dep : s.getDependsOn()) {
+            var ds = schedules.byInstrument(dep);
+            if (ds.isPresent() && !cals.strikes(ds.get().effectiveCalendar(), d)) return false;
+        }
+        return true;
     }
 
     private void record(String kind, Principal me, String party, OrderRequest body, String receiptCid,

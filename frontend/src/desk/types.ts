@@ -18,16 +18,22 @@ export interface Me {
   instruments?: string[];
   org: string;
   displayName: string;
-  /** Echoed by the backend when it honoured `X-Act-As` (admin "View as"). */
-  actingAs?: string;
+  /**
+   * Echoed by the backend when it honoured `X-Act-As` (admin "View as"). The live backend
+   * sends `{ by: <admin email> }` — the identity fields above are then the acted-as user's.
+   * Older shapes sent the acted-as email as a string; both are accepted.
+   */
+  actingAs?: string | { by?: string } | null;
 }
 
 // ---- public -----------------------------------------------------------------
 
 export interface BenchmarkLast {
-  price: number;
+  price: number | null;
   asOf: string;
   tier: number;
+  /** The backend's word for the tier ("seed", "committee", "missed"), when it sends one. */
+  tierLabel?: string;
   k: number;
   n: number;
   signers: string[];
@@ -48,10 +54,13 @@ export interface Benchmark {
 export interface SeriesRow {
   date: string;
   asOf: string;
-  price: number;
+  /** Absent on a tier-5 miss: the gap is published as a gap (§4). */
+  price?: number | null;
   referencePrice?: number;
   wrapperFactor?: number;
   tier: number;
+  tierLabel?: string;
+  note?: string;
   k: number;
   n: number;
   signers: string[];
@@ -107,6 +116,11 @@ export interface Proposal {
   /** What THIS caller's seat must verify (names from /api/signer-protocol). */
   conditions: string[];
   requiresObservedRange: boolean;
+  /** The backend's own account of how the price was built (inputs published, §8). */
+  rationale?: string;
+  /** Every refusal so far, from any seat — a signer should see what the others saw. */
+  refusals?: { actor?: string; seat?: string; condition?: string; reason?: string; ts?: string }[] | null;
+  attestations?: { member?: string; seat?: string; checks?: string[]; observedLow?: number; observedHigh?: number; ts?: string }[] | null;
   /** What this caller already did on this proposal, if anything. */
   mine?: {
     action: 'confirmed' | 'refused';
@@ -135,7 +149,9 @@ export interface RefuseBody { condition: string; reason: string }
 
 export interface SignerSettings {
   webhookUrl: string;
-  webhookSecret?: string;
+  webhookSecret?: string | null;
+  /** The backend never returns the secret; it says whether one is stored. */
+  webhookSecretSet?: boolean;
   email: string;
   tolerances: Record<string, number>;
   /** ASSUMED: whether an API key exists, never the key itself. */
@@ -151,7 +167,7 @@ export interface ApFund {
   id: string;
   name: string;
   cash: string;
-  official: { nav: number; asOf: string; tier: number; k: number; n: number; fixingCid?: string } | null;
+  official: { nav: number; asOf: string; tier: number; tierLabel?: string; k: number; n: number; fixingCid?: string | null } | null;
   indicative?: number | null;
   components: FundComponent[];
   sharesOutstanding?: number;
@@ -170,6 +186,8 @@ export interface Receipt {
   units: { instrumentId: string; amount: number }[];
   fee: number;
   feeCurrency?: string;
+  /** Tier of the NAV this settled at, when the backend records it; gold only for tier 1. */
+  navTier?: number;
   ts: string;
   cid?: string;
   status: 'settled' | 'pending' | 'failed';

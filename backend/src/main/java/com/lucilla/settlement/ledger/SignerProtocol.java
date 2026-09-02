@@ -29,10 +29,13 @@ import java.util.Set;
  *       that nothing reads.
  * </ul>
  *
- * <p>THE ASYMMETRY THIS DOES NOT FIX, and it must not be oversold: validating that a
- * lender CLAIMED {@code book-acceptance} is not verifying that the lender will actually
- * mark its book there. Only the venue's range is checked against reality, and that check
- * is on-ledger, not here. See {@code docs/SIGNER_PROTOCOL.md} §7.
+ * <p>EVIDENCE. Since 2 Sep 2026 an issuer or lender condition carries an {@link Evidence}
+ * schema: the numbers the signer must supply, and the rule the server checks them
+ * against before the confirm is submitted ({@link SignerEvidence}). A tick alone is no
+ * longer accepted for those seats. The venue's evidence is its traded range, checked by
+ * the ledger itself, and that path is unchanged. What this still does not do is audit
+ * the signer's systems: the numbers are the signer's own, and a false number is a false
+ * statement made on the record. See {@code docs/SIGNER_PROTOCOL.md} §7.
  */
 public final class SignerProtocol {
 
@@ -54,11 +57,46 @@ public final class SignerProtocol {
             String uniquelyKnows,
             List<Condition> conditions,
             boolean requiresObservedRange) {
+
+        /** Does this seat have to bring per-condition numeric evidence? */
+        public boolean requiresEvidence() {
+            return conditions.stream().anyMatch(c -> c.evidence() != null && c.evidence().required());
+        }
+
+        public Condition condition(String name) {
+            String n = name == null ? "" : name.trim();
+            return conditions.stream().filter(c -> c.name().equals(n)).findFirst().orElse(null);
+        }
     }
 
-    /** One named condition, and the plain statement of when it passes. */
-    public record Condition(String name, String passesWhen) {
+    /** One named condition, the plain statement of when it passes, and the evidence it needs. */
+    public record Condition(String name, String passesWhen, Evidence evidence) {
+        public Condition(String name, String passesWhen) {
+            this(name, passesWhen, Evidence.NONE);
+        }
     }
+
+    /** One field of evidence: {@code type} is {@code integer} | {@code number} | {@code instant}. */
+    public record Field(String name, String type, String description) {
+    }
+
+    /**
+     * The evidence a condition needs. {@code verifiedBy} says who checks it: {@code server}
+     * (this desk, before submitting), {@code ledger} (the Daml choice), or {@code signer}
+     * (nobody but the signer — recorded, not checked).
+     */
+    public record Evidence(boolean required, List<Field> fields, String rule, String verifiedBy) {
+        public static final Evidence NONE = new Evidence(false, List.of(), null, "signer");
+
+        static Evidence server(String rule, Field... fields) {
+            return new Evidence(true, List.of(fields), rule, "server");
+        }
+    }
+
+    /** Where the lender's tolerance comes from: {@code PUT /api/signer/settings} {@code tolerances}. */
+    public static final String TOLERANCE_MARK_KEY = "markBps";
+    public static final String TOLERANCE_LIQUIDATION_KEY = "liquidationBps";
+    public static final int DEFAULT_TOLERANCE_BPS = 25;
 
     private static final Map<String, Role> ROLES = new LinkedHashMap<>();
 
@@ -69,13 +107,24 @@ public final class SignerProtocol {
         put(new Role("issuer", "Issuer", "Whether the wrapper can actually be redeemed right now",
                 List.of(
                         new Condition("attestor-quorum",
-                                "At least the issuer's own threshold of attestors are online and signing"),
+                                "At least the issuer's own threshold of attestors are online and signing",
+                                Evidence.server("quorumSigners >= quorumThreshold",
+                                        new Field("quorumSigners", "integer", "attestors online and signing right now"),
+                                        new Field("quorumThreshold", "integer", "the issuer's own quorum threshold"))),
                         new Condition("reserves-current",
-                                "The most recent proof-of-reserve attestation is less than 24h old"),
+                                "The most recent proof-of-reserve attestation is less than 24h old",
+                                Evidence.server("reservesAsOf within 24 hours of the confirmation",
+                                        new Field("reservesAsOf", "instant", "ISO-8601 time of the latest proof-of-reserve attestation"))),
                         new Condition("reserves-cover-supply",
-                                "Attested reserves are at least the circulating supply of the wrapped token"),
+                                "Attested reserves are at least the circulating supply of the wrapped token",
+                                Evidence.server("reserves >= supply",
+                                        new Field("reserves", "number", "attested reserves, in units of the underlying"),
+                                        new Field("supply", "number", "circulating supply of the wrapped token"))),
                         new Condition("redemption-queue-clear",
-                                "No redemption request is unfilled beyond its stated window")),
+                                "No redemption request is unfilled beyond its stated window",
+                                Evidence.server("queueDepth <= maxQueueDepth",
+                                        new Field("queueDepth", "integer", "redemption requests currently unfilled"),
+                                        new Field("maxQueueDepth", "integer", "the depth the issuer's own window allows")))),
                 false));
 
         // §2b — the strongest signature available, because it is the only one asserted
@@ -83,11 +132,20 @@ public final class SignerProtocol {
         put(new Role("lender", "Lender", "Whether you will carry this number on your own book",
                 List.of(
                         new Condition("independent-mark-within-tolerance",
-                                "The proposed mark is within your declared tolerance of your own valuation"),
+                                "The proposed mark is within your declared tolerance of your own valuation",
+                                Evidence.server("|independentMark - proposal| / proposal <= tolerances." + TOLERANCE_MARK_KEY
+                                        + " (default " + DEFAULT_TOLERANCE_BPS + " bp)",
+                                        new Field("independentMark", "number", "your own valuation of the instrument at the strike"))),
                         new Condition("liquidations-consistent",
-                                "No liquidation you ran in the session cleared materially away from the mark"),
+                                "No liquidation you ran in the session cleared materially away from the mark",
+                                Evidence.server("worstDeviationBps <= tolerances." + TOLERANCE_LIQUIDATION_KEY
+                                        + " (default: the mark tolerance)",
+                                        new Field("liquidationsToday", "integer", "liquidations you ran in the session (0 is fine)"),
+                                        new Field("worstDeviationBps", "number", "the largest deviation of any of them from the proposed mark, in bp"))),
                         new Condition("book-acceptance",
-                                "You will mark your own collateral at this level for the period the fixing governs")),
+                                "You will mark your own collateral at this level for the period the fixing governs",
+                                Evidence.server("acceptedAt is a timestamp not in the future",
+                                        new Field("acceptedAt", "instant", "ISO-8601 time your book accepted the mark")))),
                 false));
 
         // §2c — the only seat with observed prints for the WRAPPED asset, and the only
@@ -95,7 +153,11 @@ public final class SignerProtocol {
         put(new Role("venue", "Venue", "The transaction data — the only observed prints for the wrapped asset",
                 List.of(
                         new Condition("traded-range",
-                                "The proposed mark lies within the high/low your own book traded in the window"),
+                                "The proposed mark lies within the high/low your own book traded in the window",
+                                new Evidence(true, List.of(
+                                        new Field("low", "number", "the low your book traded in the window"),
+                                        new Field("high", "number", "the high your book traded in the window")),
+                                        "low <= proposal <= high, enforced by ConfirmWithChecks on-ledger", "ledger")),
                         new Condition("spread-within-tolerance",
                                 "Best bid/ask spread at the strike is inside the declared tolerance"),
                         new Condition("sufficient-volume",

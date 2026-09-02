@@ -1,7 +1,7 @@
 // Admin "View as": look at (and act on) the desk as any mapped user. The choice rides
 // on every request as X-Act-As; the backend decides whether to honour it.
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { desk, type Role, type UserRow } from '../desk';
 import { useAsync } from '../components/ui';
@@ -12,6 +12,7 @@ export function ViewAsSelect() {
   const auth = useAuth();
   const users = useAsync<UserRow[]>(() => desk.usersAsSelf(), []);
   const [busy, setBusy] = useState(false);
+  const navigate = useNavigate();
   const groups = ROLE_ORDER
     .map((role) => ({ role, rows: (users.data ?? []).filter((u) => u.role === role) }))
     .filter((g) => g.rows.length > 0);
@@ -19,8 +20,10 @@ export function ViewAsSelect() {
   const onChange = async (email: string) => {
     setBusy(true);
     try {
-      if (email) await auth.startActAs(email);
-      else await auth.stopActAs();
+      // Every request now carries X-Act-As, so the admin's own pages would 403: land on
+      // the acted-as role's first section (Home redirects), and back on Admin on exit.
+      if (email) { await auth.startActAs(email); navigate('/'); }
+      else { await auth.stopActAs(); navigate('/admin'); }
     } finally {
       setBusy(false);
     }
@@ -49,7 +52,9 @@ export function ViewAsSelect() {
 
 export function ViewAsBanner() {
   const auth = useAuth();
+  const navigate = useNavigate();
   if (!auth.actAs) return null;
+  const exit = async (to: string) => { await auth.stopActAs(); navigate(to); };
   const me = auth.me;
   const seat = me?.seat ? `${me.seat} seat` : me?.party ? `party ${me.party}` : me?.role ?? '';
   return (
@@ -60,8 +65,8 @@ export function ViewAsBanner() {
           : <>Viewing as <strong>{auth.actAs}</strong>{seat ? ` (${seat})` : ''} — actions run as this user.</>}
       </span>
       <span className="view-as-actions">
-        <Link to="/admin" className="link">Back to admin</Link>
-        <button type="button" className="ghost small" onClick={() => void auth.stopActAs()}>Exit</button>
+        <button type="button" className="link" onClick={() => void exit('/admin')}>Back to admin</button>
+        <button type="button" className="ghost small" onClick={() => void exit('/')}>Exit</button>
       </span>
     </div>
   );

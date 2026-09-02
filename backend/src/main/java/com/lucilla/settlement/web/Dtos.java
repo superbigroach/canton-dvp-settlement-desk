@@ -479,10 +479,17 @@ public final class Dtos {
             boolean requiresObservedRange) { // venue only — the range the ledger checks
     }
 
-    /** One named condition, and the plain statement of when it passes. */
+    /**
+     * One named condition, the plain statement of when it passes, and the evidence it
+     * needs: {@code { required, verifiedBy: server|ledger|signer, rule, fields: [{name, type,
+     * description}] }}. A seat whose evidence is {@code required} and {@code server}-verified
+     * cannot confirm with a bare tick — the portal and the signer service render the fields
+     * from this.
+     */
     public record SignerConditionView(
             String name,
-            String passesWhen) {
+            String passesWhen,
+            java.util.Map<String, Object> evidence) {
     }
 
     /** Another member adds its attestation. */
@@ -510,7 +517,16 @@ public final class Dtos {
             String protocolRef,                      // defaults to "SIGNER_PROTOCOL v1 <role>"
             @NotNull List<@NotBlank String> checksPassed,  // at least one, enforced on-ledger
             BigDecimal observedLow,                  // venue only; both or neither
-            BigDecimal observedHigh) {
+            BigDecimal observedHigh,
+            java.util.Map<String, Object> evidence,  // issuer/lender: condition → {numbers}; verified server-side when present
+            Integer toleranceBps,                    // lender's declared mark tolerance (default 25)
+            Integer liquidationToleranceBps) {       // lender's liquidation tolerance (default: toleranceBps)
+
+        /** The pre-evidence shape, kept so the operator desk's callers compile unchanged. */
+        public ConfirmWithChecksRequest(String member, String role, String protocolRef,
+                List<String> checksPassed, BigDecimal observedLow, BigDecimal observedHigh) {
+            this(member, role, protocolRef, checksPassed, observedLow, observedHigh, null, null, null);
+        }
     }
 
     /** Promote a threshold-attested proposal to an official NavFixing. */
@@ -624,6 +640,8 @@ public final class Dtos {
             String strikeAt,                 // local time, e.g. "16:00"
             String zone,                     // e.g. "Europe/London"
             long graceMinutes,
+            String calendar,                 // daily | weekdays | nyse | lse — the identifier's strike days
+            boolean strikeDay,               // does the calendar strike on the day `asOf` falls on, in the zone
             String state,
             String expectedAt,               // ISO-8601 instant
             long minutesLate,

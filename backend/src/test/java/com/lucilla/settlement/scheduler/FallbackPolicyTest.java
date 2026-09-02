@@ -1,5 +1,6 @@
 package com.lucilla.settlement.scheduler;
 
+import com.lucilla.settlement.ledger.StrikeCalendars;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -9,6 +10,7 @@ import java.time.LocalDate;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -83,8 +85,8 @@ class FallbackPolicyTest {
     }
 
     @Test
-    @DisplayName("tier 2 is a stub: requesting it is recorded as not-configured and the waterfall continues")
-    void tier2NotConfigured() {
+    @DisplayName("tier 2 never produces a price: it is recorded as having run before the fallback")
+    void tier2IsEscalationNotAPrice() {
         StrikeSchedule s = wrapped();
         s.setTiersEnabled(Map.of("tier2", true, "tier3", true, "tier4", true, "tier5", true));
         var d = FallbackPolicy.decide(s, new FallbackPolicy.Inputs(true,
@@ -92,10 +94,17 @@ class FallbackPolicyTest {
         assertEquals(3, d.tier());
         assertTrue(d.tier2Requested());
         assertTrue(d.note().contains(FallbackPolicy.TIER2_STATUS));
+
+        StrikeSchedule off = wrapped();
+        off.setTiersEnabled(Map.of("tier2", false, "tier3", true, "tier4", true, "tier5", true));
+        var d2 = FallbackPolicy.decide(off, new FallbackPolicy.Inputs(true,
+                new BigDecimal("100"), BigDecimal.ONE, null, null));
+        assertFalse(d2.tier2Requested());
+        assertTrue(d2.note().contains(FallbackPolicy.TIER2_DISABLED));
     }
 
     @Test
-    @DisplayName("defaults: 16:00 Europe/London, 30-minute window, LX1 after its components")
+    @DisplayName("defaults: 16:00 Europe/London, 30-minute window, daily calendar, tier 2 on, LX1 after its components")
     void defaults() {
         var all = StrikeSchedule.defaults();
         assertEquals(3, all.size());
@@ -104,12 +113,46 @@ class FallbackPolicyTest {
         assertEquals("16:00", cbtc.getStrikeAt());
         assertEquals("Europe/London", cbtc.getTimezone());
         assertEquals(30, cbtc.getWindowMinutes());
-        assertTrue(cbtc.tierEnabled(3) && cbtc.tierEnabled(4) && cbtc.tierEnabled(5));
-        assertTrue(!cbtc.tierEnabled(2));
+        assertEquals(StrikeCalendars.DAILY, cbtc.getCalendar());
+        assertTrue(cbtc.tierEnabled(2) && cbtc.tierEnabled(3) && cbtc.tierEnabled(4) && cbtc.tierEnabled(5));
         // BST on 1 Sep 2026: 16:00 London = 15:00Z
         assertEquals(Instant.parse("2026-09-01T15:00:00Z"), cbtc.strikeInstantOn(LocalDate.of(2026, 9, 1)));
         var lx1 = all.get(2);
         assertTrue(lx1.isFund());
+        assertEquals(StrikeCalendars.DAILY, lx1.getCalendar());   // all-crypto fund
         assertEquals(java.util.List.of("CBTC", "cETH"), lx1.getDependsOn());
+    }
+
+    @Test
+    @DisplayName("a blank calendar reads as daily; alternates are looked up by seat, case-insensitively")
+    void calendarAndAlternates() {
+        StrikeSchedule s = wrapped();
+        s.setCalendar(" ");
+        assertEquals(StrikeCalendars.DAILY, s.getCalendar());
+        s.setCalendar("NYSE");
+        assertEquals("nyse", s.getCalendar());
+        s.setAlternates(Map.of("Lender", java.util.List.of("alt@lender.example", " ", "second@lender.example")));
+        assertEquals(java.util.List.of("alt@lender.example", "second@lender.example"), s.alternatesFor("lender"));
+        assertTrue(s.alternatesFor("venue").isEmpty());
+        assertEquals(s.alternatesFor("lender"), s.copy().alternatesFor("lender"));
+    }
+
+    @Test
+    @DisplayName("the store refuses an unknown calendar or an unknown alternates seat")
+    void storeValidation() {
+        ScheduleStore store = ScheduleStore.inMemory();
+        StrikeSchedule bad = wrapped();
+        bad.setCalendar("tse");
+        var ex = org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> store.replace(java.util.List.of(bad)));
+        assertTrue(ex.getMessage().contains("tse"));
+        StrikeSchedule badSeat = wrapped();
+        badSeat.setAlternates(Map.of("auditor", java.util.List.of("x@y")));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> store.replace(java.util.List.of(badSeat)));
+        StrikeSchedule ok = wrapped();
+        ok.setCalendar("lse");
+        ok.setAlternates(Map.of("lender", java.util.List.of("x@y")));
+        assertEquals("lse", store.replace(java.util.List.of(ok)).get(0).getCalendar());
     }
 }

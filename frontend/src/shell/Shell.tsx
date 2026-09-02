@@ -63,10 +63,10 @@ export default function Shell() {
   const realAdmin = auth.adminMe?.role === 'admin' || (!auth.actAs && me.role === 'admin');
   const sections = sectionsFor(me.role, auth.degraded);
   const current = SECTIONS.find((s) => loc.pathname === s.path || loc.pathname.startsWith(s.path + '/'));
-  // While viewing as someone else the nav shows THEIR sections, but the admin's own
-  // stay reachable (the banner's "Back to admin" link) — the acted-as user cannot open them.
-  const allowed = !current || sections.some((s) => s.path === current.path)
-    || (realAdmin && current.roles.includes('admin'));
+  // While viewing as someone else the nav shows THEIR sections only: every request carries
+  // X-Act-As, so the admin's own routes would be refused. The banner's "Back to admin"
+  // exits the view first.
+  const allowed = !current || sections.some((s) => s.path === current.path);
   const isOps = current?.path === '/ops';
 
   return (
@@ -131,7 +131,10 @@ export default function Shell() {
           {allowed ? <Outlet /> : (
             <div className="card">
               <h2>Not your section</h2>
-              <p className="hint">Your role <code>{me.role}</code> does not include <code>{current?.label}</code>.
+              <p className="hint">
+                {auth.actAs
+                  ? <>You are viewing as <strong>{auth.actAs}</strong> (<code>{me.role}</code>), who has no <code>{current?.label}</code> section. Use <em>Back to admin</em> above to return.</>
+                  : <>Your role <code>{me.role}</code> does not include <code>{current?.label}</code>.</>}
                 {sections.length > 0 && <> Go to <NavLink to={sections[0].path}>{sections[0].label}</NavLink>.</>}
               </p>
             </div>
@@ -153,13 +156,24 @@ export function Home() {
   if (auth.status === 'signedOut' || !auth.me) return <Navigate to="/login" replace />;
   const sections = sectionsFor(auth.me.role, auth.degraded);
   if (sections.length > 0) return <Navigate to={sections[0].path} replace />;
+  // A 5xx (or a fault in this app) is not "you have no role": the identity route failed
+  // before it could say. Say that, and do not send the user to ask for a mapping.
+  const failed = auth.meStatus !== null && (auth.meStatus >= 500 || auth.meStatus < 0);
   return (
     <div className="card">
-      <h2>No role yet</h2>
-      <p className="hint">
-        You are signed in as <strong>{auth.me.email}</strong>, but CrossDesk has not mapped that address to a role,
-        party and seat. Ask CrossDesk to add you (Admin → Users &amp; roles), then sign in again.
-      </p>
+      <h2>{failed ? 'CrossDesk could not resolve who you are' : 'No role yet'}</h2>
+      {failed ? (
+        <p className="hint">
+          You are signed in as <strong>{auth.me.email}</strong>, but the identity route failed before it could say
+          which role, party and seat that address maps to. This is a CrossDesk fault, not a missing mapping — try again
+          in a moment, and tell CrossDesk if it persists.
+        </p>
+      ) : (
+        <p className="hint">
+          You are signed in as <strong>{auth.me.email}</strong>, but CrossDesk has not mapped that address to a role,
+          party and seat. Ask CrossDesk to add you (Admin → Users &amp; roles), then sign in again.
+        </p>
+      )}
       {auth.meError && <p className="error">{auth.meError}</p>}
       <button type="button" className="ghost" onClick={() => void auth.refreshMe()}>Check again</button>
     </div>

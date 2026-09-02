@@ -103,7 +103,7 @@ export default function Schedule() {
         <div className="banner ok" role="status">
           <span>
             Proposed {struck.id}{struck.r.price !== undefined ? ` at ${fmtN(struck.r.price)}` : ''}
-            {struck.r.proposalCid ? ` · proposal ${shortCid(struck.r.proposalCid)}` : ''}{struck.r.note ? ` — ${struck.r.note}` : ''}. Seats have been notified.
+            {struck.r.proposalCid ? ` · proposal ${shortCid(struck.r.proposalCid)}` : ''}{struck.r.note ? ` — ${struck.r.note}` : '. Seats have been notified.'}
           </span>
         </div>
       )}

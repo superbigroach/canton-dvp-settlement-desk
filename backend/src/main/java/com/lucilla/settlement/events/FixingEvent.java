@@ -42,6 +42,7 @@ public record FixingEvent(
         public static final String PROPOSAL_RESTRUCK = "proposal.restruck";
         public static final String PROPOSAL_CONFIRMED = "proposal.confirmed";
         public static final String PROPOSAL_REFUSED = "proposal.refused";
+        public static final String PROPOSAL_REMINDER = "proposal.reminder";   // tier 2 escalation, {escalation: 1|2}
         public static final String PROPOSAL_WITHDRAWN = "proposal.withdrawn";
         public static final String FIXING_FINALIZED = "fixing.finalized";
         public static final String FIXING_FALLBACK = "fixing.fallback";   // tier 3 / 4, a series row

@@ -19,6 +19,8 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,6 +37,10 @@ import java.util.concurrent.Executors;
  * {@link WebhookSigner}. Asynchronous, three attempts with backoff, and every outcome is
  * an event ({@code webhook.sent} / {@code webhook.failed}) so the audit log says who was
  * told and whether it got through.
+ *
+ * <p>{@code proposal.reminder} (tier 2 escalation) goes to NAMED users rather than to
+ * everyone covering the instrument — the seats that have not confirmed, and at the second
+ * escalation their alternates — and carries {@code escalation: 1 | 2}.
  */
 @Component
 public class WebhookDispatcher {
@@ -45,6 +51,7 @@ public class WebhookDispatcher {
 
     public static final String PROPOSAL_CREATED = "proposal.created";
     public static final String PROPOSAL_RESTRUCK = "proposal.restruck";
+    public static final String PROPOSAL_REMINDER = "proposal.reminder";
     public static final String FIXING_FINALIZED = "fixing.finalized";
     public static final String FIXING_MISSED = "fixing.missed";
 
@@ -67,6 +74,13 @@ public class WebhookDispatcher {
     public static Map<String, Object> payload(String type, String instrument, String proposalCid,
             BigDecimal price, BigDecimal referencePrice, BigDecimal wrapperFactor,
             List<String> conditions, Instant deadline) {
+        return payload(type, instrument, proposalCid, price, referencePrice, wrapperFactor, conditions, deadline, null);
+    }
+
+    /** The payload plus type-specific fields ({@code escalation} on a reminder). */
+    public static Map<String, Object> payload(String type, String instrument, String proposalCid,
+            BigDecimal price, BigDecimal referencePrice, BigDecimal wrapperFactor,
+            List<String> conditions, Instant deadline, Map<String, Object> extra) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("type", type);
         body.put("instrument", instrument);
@@ -76,21 +90,36 @@ public class WebhookDispatcher {
         if (wrapperFactor != null) body.put("wrapperFactor", wrapperFactor);
         body.put("conditions", conditions);
         body.put("deadline", deadline == null ? null : deadline.toString());
+        if (extra != null) extra.forEach((k, v) -> { if (v != null) body.put(k, v); });
         return body;
     }
 
     /** Fan out to every subscribed seat for the instrument. Returns how many were queued. */
     public int dispatch(String type, String instrument, String proposalCid, BigDecimal price,
             BigDecimal referencePrice, BigDecimal wrapperFactor, Instant deadline) {
-        int queued = 0;
+        List<UserRecord> targets = new ArrayList<>();
         for (UserRecord u : users.all()) {
             if (u.roleEnum() != Role.SIGNER) continue;
             if (!covers(u, instrument)) continue;
+            targets.add(u);
+        }
+        return dispatchTo(targets, type, instrument, proposalCid, price, referencePrice, wrapperFactor, deadline, null);
+    }
+
+    /**
+     * Send to NAMED users (those with a webhook URL; the rest are skipped silently — the
+     * event log written by the caller says who was meant to hear). Returns how many were queued.
+     */
+    public int dispatchTo(Collection<UserRecord> targets, String type, String instrument, String proposalCid,
+            BigDecimal price, BigDecimal referencePrice, BigDecimal wrapperFactor, Instant deadline,
+            Map<String, Object> extra) {
+        int queued = 0;
+        for (UserRecord u : targets) {
             String url = u.getSettings() == null ? null : u.getSettings().getWebhookUrl();
             if (url == null || url.isBlank()) continue;
             List<String> conditions = conditionsFor(u.getSeat());
             Map<String, Object> body = payload(type, instrument, proposalCid, price, referencePrice,
-                    wrapperFactor, conditions, deadline);
+                    wrapperFactor, conditions, deadline, extra);
             String secret = u.getSettings().getWebhookSecret();
             final String target = url.trim();
             final String who = u.getEmail() == null ? u.getUid() : u.getEmail();

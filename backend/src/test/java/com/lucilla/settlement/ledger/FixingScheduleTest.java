@@ -103,6 +103,42 @@ class FixingScheduleTest {
     }
 
     @Test
+    void aDailyIdentifierIsDueOnSunday() {
+        // The CME CF BRR prints every day of the year; a cBTC fixing that skipped the
+        // weekend would publish a gap where the benchmark it references has a value.
+        var daily = new FixingSchedule.Declared("CBTC", "Close", LocalTime.of(16, 0), LONDON, 60,
+                StrikeCalendars.DAILY);
+        var st = FixingSchedule.statusOf(daily, sun("18:00"), null);
+        assertThat(st.state()).isEqualTo(FixingSchedule.State.OVERDUE);
+        assertThat(st.expectedAt()).isEqualTo(sun("16:00"));
+        assertThat(FixingSchedule.statusOf(daily, sun("09:00"), null).state())
+                .isEqualTo(FixingSchedule.State.PENDING);
+    }
+
+    @Test
+    void anNyseIdentifierIsNotDueOnAnExchangeHoliday() {
+        // Friday 3 July 2026 — Independence Day observed. Under the weekday rule this read
+        // as a missed strike; under the exchange calendar there is no close to strike.
+        var nyse = new FixingSchedule.Declared("SPY", "Close", LocalTime.of(16, 0),
+                ZoneId.of("America/New_York"), 60, StrikeCalendars.NYSE);
+        Instant fri = LocalDate.of(2026, 7, 3).atTime(LocalTime.of(18, 0))
+                .atZone(ZoneId.of("America/New_York")).toInstant();
+        var st = FixingSchedule.statusOf(nyse, fri, null);
+        assertThat(st.state()).isEqualTo(FixingSchedule.State.NOT_DUE_TODAY);
+        assertThat(st.note()).contains("Independence Day").contains("nyse");
+        // Monday 6 July, not Saturday.
+        assertThat(st.expectedAt()).isEqualTo(LocalDate.of(2026, 7, 6).atTime(LocalTime.of(16, 0))
+                .atZone(ZoneId.of("America/New_York")).toInstant());
+    }
+
+    @Test
+    void theDefaultsAreDaily() {
+        for (FixingSchedule.Declared d : FixingSchedule.defaults()) {
+            assertThat(d.calendar()).as("%s calendar", d.instrumentId()).isEqualTo(StrikeCalendars.DAILY);
+        }
+    }
+
+    @Test
     void theDeclaredRosterIsWellFormed() {
         // §9 makes a strike time a material term, so these live in a reviewed artefact.
         assertThat(FixingSchedule.defaults()).isNotEmpty();

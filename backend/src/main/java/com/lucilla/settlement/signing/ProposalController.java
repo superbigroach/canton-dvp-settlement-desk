@@ -12,7 +12,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
@@ -43,9 +42,12 @@ public class ProposalController {
                         + " is visible to " + me.party()));
     }
 
-    public record ConfirmRequest(@NotEmpty List<String> checks, Evidence evidence) {
-        public record Evidence(BigDecimal low, BigDecimal high) {
-        }
+    /**
+     * {@code evidence} is {@code {low, high}} for the venue seat, and per condition —
+     * {@code { "<condition>": { <field>: <value> } }} — for the issuer and lender seats,
+     * where it is required. {@code GET /api/signer-protocol} publishes the fields.
+     */
+    public record ConfirmRequest(@NotEmpty List<String> checks, Map<String, Object> evidence) {
     }
 
     @PostMapping("/api/proposals/{cid}/confirm")
@@ -55,9 +57,7 @@ public class ProposalController {
         if (body == null || body.checks() == null || body.checks().isEmpty()) {
             throw new IllegalArgumentException("checks must name at least one condition you verified");
         }
-        BigDecimal low = body.evidence() == null ? null : body.evidence().low();
-        BigDecimal high = body.evidence() == null ? null : body.evidence().high();
-        return proposals.confirm(me, cid, body.checks(), low, high);
+        return proposals.confirm(me, cid, body.checks(), body.evidence());
     }
 
     public record RefuseRequest(String condition, String reason) {

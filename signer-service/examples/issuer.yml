@@ -1,0 +1,47 @@
+# CrossDesk signer - ISSUER seat (docs/SIGNER_PROTOCOL.md §2a).
+# Asserts: the wrapper can be redeemed right now. If all four pass the issuer attests par;
+# if any fails it refuses, naming the condition, and the operator restrikes below par.
+#
+#   CROSSDESK_SANDBOX_USER=issuer@sandbox.crossdesk node dist/index.js --config examples/issuer.yml
+
+crossdesk:
+  baseUrl: https://crossdesk-devnet-app.web.app
+  apiKey: ${CROSSDESK_API_KEY}
+  sandboxUser: ${CROSSDESK_SANDBOX_USER}       # issuer@sandbox.crossdesk
+  webhookSecret: ${CROSSDESK_WEBHOOK_SECRET}
+  poll:
+    enabled: true
+    intervalSeconds: 20
+
+server:
+  port: ${PORT:-8789}
+
+state:
+  file: ${SIGNER_STATE:-./signer-state.issuer.json}
+
+seat: issuer
+instruments: [CBTC, cETH]
+
+tolerances:
+  reservesMaxAgeHours: 24   # reserves-current
+  maxQueueDepth: 0          # redemption-queue-clear: unfilled-beyond-window requests allowed
+
+conditions:
+  attestor-quorum:
+    # One http source, two pointers: the service fetches the URL once per evaluation.
+    #   quorumSigners:   { kind: http, url: https://attest.example.com/status, bearer: ${ATTEST_TOKEN}, pointer: /online }
+    #   quorumThreshold: { kind: http, url: https://attest.example.com/status, bearer: ${ATTEST_TOKEN}, pointer: /threshold }
+    quorumSigners: 8
+    quorumThreshold: 7
+  reserves-current:
+    # The timestamp of the latest proof-of-reserve attestation (ISO 8601 or epoch seconds).
+    reservesAsOf:
+      kind: command
+      command: node -e "console.log(new Date().toISOString())"
+      parse: text
+  reserves-cover-supply:
+    reserves: 1250.75      # attested reserves, in units of the underlying
+    supply: 1200.00        # circulating supply of the wrapped token
+  redemption-queue-clear:
+    queueDepth: 0          # requests unfilled beyond their stated window
+    maxQueueDepth: 0

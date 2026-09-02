@@ -8,6 +8,7 @@ import com.lucilla.settlement.auth.UserStore;
 import com.lucilla.settlement.events.EventStore;
 import com.lucilla.settlement.events.FixingEvent;
 import com.lucilla.settlement.ledger.LedgerService;
+import com.lucilla.settlement.ledger.SignerEvidence;
 import com.lucilla.settlement.ledger.SignerProtocol;
 import com.lucilla.settlement.scheduler.ScheduleStore;
 import com.lucilla.settlement.scheduler.StrikeSchedule;
@@ -103,21 +104,68 @@ public class ProposalService {
 
     // ---- actions ----------------------------------------------------------------
 
-    /** Confirm with checks as the caller's seat. Body: {@code { checks: [...], evidence?: {low, high} }}. */
-    public Map<String, Object> confirm(Principal me, String cid, List<String> checks,
-            BigDecimal low, BigDecimal high) {
+    /**
+     * Confirm with checks as the caller's seat.
+     *
+     * <p>Body: {@code { checks: [...], evidence: ... }}. For the VENUE, {@code evidence} is
+     * {@code {low, high}} — the traded range the ledger enforces, unchanged. For the ISSUER
+     * and the LENDER it is REQUIRED and per condition: {@code { "<condition>": { <field>:
+     * <value> } }} in the shape {@code GET /api/signer-protocol} publishes. The desk applies
+     * each condition's rule (the lender's mark against its own declared tolerance from
+     * {@code /api/signer/settings}, default 25 bp) BEFORE submitting, refuses with the
+     * specific failure as a 422 carrying the schema, and records {@code verified: true}
+     * with the numbers on the event. A bare tick is never accepted for those two seats.
+     */
+    public Map<String, Object> confirm(Principal me, String cid, List<String> checks, Map<String, Object> evidence) {
         requireSigner(me);
         String party = partyOf(me);
         String target = currentCidFor(party, cid);
-        var req = new Dtos.ConfirmWithChecksRequest(party, me.seat(), null, checks, low, high);
+        String seat = me.seat().trim().toLowerCase();
+        SignerProtocol.Role role = SignerProtocol.role(seat);
+        BigDecimal low = null, high = null;
+        Map<String, Object> toVerify = null;
+        SignerEvidence.Tolerances tol = null;
+        SignerEvidence.Result result = null;
+        if (role != null && role.requiresObservedRange()) {
+            // The venue path, exactly as before: the range is the evidence, and the ledger checks it.
+            low = evidence == null ? null : SignerEvidence.number(evidence.get("low"));
+            high = evidence == null ? null : SignerEvidence.number(evidence.get("high"));
+        } else if (SignerEvidence.required(seat)) {
+            Map<String, Object> schema = SignerEvidence.schemaFor(seat, checks);
+            if (evidence == null || evidence.isEmpty()) {
+                throw new SignerEvidence.Rejected("the " + seat + " seat confirms with evidence, not a tick: "
+                        + "supply the numbers for each checked condition (see `evidence`)", seat,
+                        List.of("evidence missing for " + checks), schema);
+            }
+            tol = SignerEvidence.Tolerances.from(users.byUid(me.uid())
+                    .map(u -> u.getSettings() == null ? null : u.getSettings().getTolerances()).orElse(null));
+            BigDecimal price = ledger.fixingProposalsVisibleTo(party).stream()
+                    .filter(p -> p.contractId().equals(target))
+                    .map(LedgerService.FixingProposalView::price).findFirst().orElse(null);
+            result = SignerEvidence.verify(seat, checks, evidence, price, tol, Instant.now());
+            if (!result.ok()) {
+                throw new SignerEvidence.Rejected("evidence refused for the " + seat + " seat: "
+                        + String.join("; ", result.problems()), seat, result.problems(), schema);
+            }
+            toVerify = evidence;
+        }
+        var req = new Dtos.ConfirmWithChecksRequest(party, seat, null, checks, low, high, toVerify,
+                tol == null ? null : tol.markBps(), tol == null ? null : tol.liquidationBps());
         var resp = desk.confirmFixingWithChecks(target, req);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("confirmed", true);
         out.put("proposalCid", target);
         out.put("nextCid", resp.getBody() == null ? null : resp.getBody().contractId());
         out.put("member", LedgerService.labelOf(party));
-        out.put("seat", me.seat());
+        out.put("seat", seat);
         out.put("checks", checks);
+        if (result != null) {
+            out.put("verified", true);
+            out.put("evidence", result.verified());
+            out.put("tolerances", Map.of("markBps", tol.markBps(), "liquidationBps", tol.liquidationBps()));
+        } else if (low != null && high != null) {
+            out.put("evidence", Map.of("low", low, "high", high));
+        }
         return out;
     }
 
@@ -402,8 +450,15 @@ public class ProposalService {
         my.put("party", LedgerService.labelOf(party));
         my.put("seat", me.seat());
         my.put("conditions", role == null ? List.of()
-                : role.conditions().stream().map(c -> Map.of("name", c.name(), "passesWhen", c.passesWhen())).toList());
+                : role.conditions().stream().map(c -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("name", c.name());
+                    m.put("passesWhen", c.passesWhen());
+                    m.put("evidence", SignerEvidence.schemaOf(c.evidence()));
+                    return m;
+                }).toList());
         my.put("requiresObservedRange", role != null && role.requiresObservedRange());
+        my.put("requiresEvidence", role != null && role.requiresEvidence());
         my.put("action", action);
         my.put("canConfirm", canConfirm);
         return my;
