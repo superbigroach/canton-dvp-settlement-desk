@@ -1468,7 +1468,7 @@ public class SettlementController {
                 cid, fixCid, proposer, null, fix.price(), fix.referencePrice(), fix.wrapperFactor(),
                 fix.rationale(), null, Map.of("attestors", fix.attestors().stream()
                         .map(LedgerService::labelOf).toList(), "threshold", fix.threshold(),
-                        "markUpdated", updated, "session", fix.session())));
+                        "markUpdated", updated, "markNote", note, "session", fix.session())));
         return created(new Dtos.FinalizeFixingResponse(
                 fixCid, fix.instrumentId(), newMark, updated, note));
     }

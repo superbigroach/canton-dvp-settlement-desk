@@ -6,6 +6,7 @@ import com.lucilla.settlement.benchmarks.SeriesService;
 import com.lucilla.settlement.events.EventStore;
 import com.lucilla.settlement.events.FixingEvent;
 import com.lucilla.settlement.ledger.FixingSchedule;
+import com.lucilla.settlement.ledger.LedgerCommands;
 import com.lucilla.settlement.ledger.LedgerService;
 import com.lucilla.settlement.ledger.MarketData;
 import com.lucilla.settlement.web.Dtos;
@@ -80,7 +81,44 @@ public class StrikeService {
             } catch (RuntimeException e) {
                 log.warn("strike runner: {} not evaluated: {}", s.getInstrumentId(), e.toString());
             }
+            try {
+                reconcileMark(s);
+            } catch (RuntimeException e) {
+                log.warn("strike runner: {} mark not reconciled: {}", s.getInstrumentId(), e.toString());
+            }
         }
+    }
+
+    /**
+     * THE FIX IS FINAL EVEN WHEN THE CLIENT CALL WAS NOT. A finalize can land on the ledger
+     * while the desk's own call times out (it did on 2 Sep 2026 at 16:08 UTC: the NavFixing
+     * existed, the Instrument still said the seed price, and no event was written). The
+     * ledger is the source of truth, so every tick compares the latest attested fixing with
+     * the instrument's published mark and republishes the mark when they differ — the same
+     * two writes the finalize path performs, done idempotently, and recorded.
+     */
+    void reconcileMark(StrikeSchedule s) {
+        String id = s.getInstrumentId();
+        Optional<SeriesRow> last = series.lastPriced(id);
+        if (last.isEmpty() || last.get().tier() != 1 || last.get().price() == null) return;
+        BigDecimal attested = last.get().price();
+        String issuer = ledger.resolveParty("Issuer");
+        Optional<BigDecimal> published = ledger.referencePriceOf(issuer, id);
+        if (published.isPresent() && published.get().compareTo(attested) == 0) return;
+        var ref = ledger.instrumentRefOf(issuer, id);
+        if (ref.isEmpty()) return;
+        ledger.submit(ref.get().issuer(), LedgerCommands.setReferencePrice(ref.get().contractId(), attested));
+        List<String> funds = ledger.remarkFundsHolding(id);
+        Map<String, Object> d = new LinkedHashMap<>();
+        d.put("previousMark", published.orElse(null));
+        d.put("fixingCid", last.get().fixingCid());
+        d.put("fundsRemarked", funds);
+        events.append(FixingEvent.of(FixingEvent.Kinds.FIXING_FINALIZED, id, null, last.get().fixingCid(),
+                "scheduler", "operator", null,
+                "mark reconciled to the attested fixing (finalize had landed without the mark update)",
+                attested, 1, last.get().fixingCid(), d));
+        log.info("RECONCILE {} mark {} -> {} (fixing {}); funds re-marked: {}", id,
+                published.orElse(null), attested, last.get().fixingCid(), funds);
     }
 
     void evaluate(StrikeSchedule s, Instant now) {
