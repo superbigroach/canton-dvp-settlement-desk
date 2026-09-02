@@ -129,11 +129,25 @@ export default function App() {
   // A money-market instrument is valued by ACCRUAL, not by an auction: it has a NAV
   // and a rate, not a close. Detected from the instrument kind, so a new yielding
   // instrument gets the right treatment without another special case here.
-  const selectedIsYielding = useMemo(() => {
-    const k = instruments.find((i) => i.id === asset)?.kind ?? '';
-    return /money|mmf|fund|treasury/i.test(k);
-  }, [instruments, asset]);
+  //
+  // A basket (kind `Fund`) is NOT yielding: it has an official NAV per share that the
+  // committee strikes, and its shares trade through the same sealed cross as any
+  // other asset with that NAV as the anchor. So `Fund` is excluded from the accrual
+  // test even though the word "fund" is in it.
+  const selectedKind = useMemo(
+    () => instruments.find((i) => i.id === asset)?.kind ?? '',
+    [instruments, asset],
+  );
+  const selectedIsFund = selectedKind === 'Fund';
+  const selectedIsYielding = useMemo(
+    () => !selectedIsFund && /money|mmf|fund|treasury/i.test(selectedKind),
+    [selectedKind, selectedIsFund],
+  );
   const yielding = selectedIsYielding;
+  // WHAT THE ANCHOR IS CALLED. For a traded asset it is the official open/close the
+  // auction discovered; for a fund it is the official NAV per share the committee
+  // signed. Same number in the same field, different name.
+  const anchorLabel = selectedIsFund ? 'Official NAV' : sessionLabel(session);
   // The newest ACCRUING fix for it — the rate and day count the committee signed.
   const yieldFix = useMemo(
     () =>
@@ -232,20 +246,30 @@ export default function App() {
     setTerms(t);
   }, []);
 
+  // THE INSTRUMENT LIST, RELOADABLE. Loaded once at startup, and again whenever the
+  // desk does something that lists a new symbol — defining a basket publishes it as a
+  // tradeable `Fund` instrument, and a picker that does not show it until the page is
+  // refreshed reads as "the define did nothing". Returns the de-duplicated list so
+  // the startup path can pick an initial asset from it.
+  const loadInstruments = useCallback(async () => {
+    const rawIns = await api.instruments();
+    // ONE ROW PER SYMBOL. An Instrument is a contract, and republishing a mark by
+    // creating a fresh one leaves both on the ledger — so a symbol can legitimately
+    // appear more than once in the query. A picker that lists LX1 twice reads as a
+    // bug whatever the cause, so the desk keeps the LAST contract for each id: the
+    // most recently published mark is the one that should be quoted.
+    const byId = new Map<string, Instrument>();
+    rawIns.forEach((i) => byId.set(i.id, i));
+    const ins = [...byId.values()];
+    setInstruments(ins);
+    return ins;
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
-        const [ps, rawIns] = await Promise.all([api.parties(), api.instruments()]);
+        const [ps, ins] = await Promise.all([api.parties(), loadInstruments()]);
         setParties(ps);
-        // ONE ROW PER SYMBOL. An Instrument is a contract, and republishing a mark by
-        // creating a fresh one leaves both on the ledger — so a symbol can legitimately
-        // appear more than once in the query. A picker that lists LX1 twice reads as a
-        // bug whatever the cause, so the desk keeps the LAST contract for each id: the
-        // most recently published mark is the one that should be quoted.
-        const byId = new Map<string, (typeof rawIns)[number]>();
-        rawIns.forEach((i) => byId.set(i.id, i));
-        const ins = [...byId.values()];
-        setInstruments(ins);
         // Not fatal if it fails: an empty roster just means no fix has been struck.
         api.fixings().then(setAccruingFixes).catch(() => setAccruingFixes([]));
         const first = ps.find((p) => p.label === 'Alice') ?? ps[0];
@@ -275,7 +299,7 @@ export default function App() {
         setError(errorMessage(e));
       }
     })();
-  }, []);
+  }, [loadInstruments]);
 
   useEffect(() => {
     void loadHoldings(acting);
@@ -664,7 +688,7 @@ export default function App() {
               reader actually needs is the rate it accrues at and the convention that
               rate is quoted on. */}
           <span className="quote-label">
-            {yielding ? 'NAV · accruing' : sessionLabel(session)}
+            {yielding ? 'NAV · accruing' : anchorLabel}
           </span>
           <span className="quote-price">
             {closePrice != null ? (
@@ -689,6 +713,8 @@ export default function App() {
               ) : (
                 <>no accruing fix struck yet — the committee attests base, rate and day count</>
               )
+            ) : selectedIsFund ? (
+              <>Committee-signed NAV per share · the cross is discovered from the book</>
             ) : (
               <>Published anchor · the cross is discovered from the book</>
             )}
@@ -915,7 +941,7 @@ export default function App() {
                 </label>
               )}
               <div className="summary">
-                <span>{sessionLabel(session)} anchor</span>
+                <span>{anchorLabel} anchor</span>
                 <strong className="mono nav-inline">
                   {closePrice != null ? `${fmt2(closePrice)} ${CASH}` : '—'}
                 </strong>
@@ -1315,6 +1341,14 @@ export default function App() {
           onChanged={() => {
             void loadHoldings(acting);
             void loadReceipts(acting);
+          }}
+          // A defined basket is published as a `Fund` instrument — reload the list so
+          // it appears in the Asset picker without a page refresh. Not fatal if the
+          // reload fails: the old list stays and the next action tries again.
+          onInstrumentsChanged={() => {
+            loadInstruments().catch(() => {
+              /* keep the last good list */
+            });
           }}
           flash={flash}
         />

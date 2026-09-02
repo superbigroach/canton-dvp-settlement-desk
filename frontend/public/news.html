@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>News — CrossDesk</title>
+<meta name="description" content="CrossDesk news: the Canton Builders Office Hours showcase on 2 September 2026, the signer protocol and fixing methodology publications, and Best Financial Application at the HackCanton Season 2 Grand Final on 5 August 2026.">
+<link rel="canonical" href="https://crossdesk-devnet-app.web.app/news">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="CrossDesk">
+<meta property="og:title" content="CrossDesk news">
+<meta property="og:description" content="Showcase, publications, and the HackCanton Season 2 award.">
+<meta property="og:url" content="https://crossdesk-devnet-app.web.app/news">
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" content="#0A0B0F">
+<link rel="stylesheet" href="/site/site.css?v=5">
+<script defer src="/site/site.js?v=5"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="/" aria-label="CrossDesk home">Cross<span>Desk</span></a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <a href="/benchmarks/">Benchmarks</a>
+      <a href="/methodology">Methodology</a>
+      <a href="/governance">Governance</a>
+      <a href="/licensing">Licensing</a>
+      <a href="/regulatory">Regulatory</a>
+      <a href="/news">News</a>
+      <a href="/about">About</a>
+      <a href="/desk/login">Sign in</a>
+      <a href="/desk/" class="btn">Open the desk</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="section hero" aria-labelledby="h">
+  <div class="wrap">
+    <div class="kicker"><span>News</span> <span class="rule"></span></div>
+    <h1 id="h">What has happened.</h1>
+    <p class="lede">Dated, in reverse order. Nothing here is a product announcement; each item says what was
+      shown, published or awarded.</p>
+  </div>
+</section>
+
+<section class="section plain" aria-label="News items">
+  <div class="wrap">
+
+    <article class="news-item">
+      <time datetime="2026-09-02">2 Sep 2026</time>
+      <div>
+        <h3>Canton Builders Office Hours: HackCanton showcase</h3>
+        <p>CrossDesk presented on <em>Canton Builders Office Hours: HackCanton</em>, a builders' panel hosted
+          on the Canton Network Discord Builder Stage alongside two other Season 2 teams. The slot showed the
+          wrapper-mark fixing — a benchmark print and a committee-attested par factor as two signed fields,
+          and a venue attestation refused by the ledger when its observed range does not contain the price —
+          running on the hosted sandbox.</p>
+        <p>The hosted desk is a sandbox, not a Canton Network participant. A participant remains the
+          standing blocker to a DevNet deployment.</p>
+        <p class="src"><a href="/showcase/">The showcase deck</a> · <a href="/desk/">the desk</a></p>
+      </div>
+    </article>
+
+    <article class="news-item">
+      <time datetime="2026-08-30">30 Aug 2026</time>
+      <div>
+        <h3>Signer protocol, version 1</h3>
+        <p>The rulebook for the people who sign a fixing: per seat, the named conditions a member verifies
+          before confirming — redemption integrity for the issuer, book acceptance for the lender, the
+          observed traded range for the venue — with the venue's range enforced on the ledger. The protocol is
+          served as data by the API and the desk renders its checkboxes from it.</p>
+        <p class="src"><a href="/methodology#signer-protocol">Read it</a></p>
+      </div>
+    </article>
+
+    <article class="news-item">
+      <time datetime="2026-08-12">12 Aug 2026</time>
+      <div>
+        <h3>Fixing methodology, version 0.1 (draft)</h3>
+        <p>Identification, what a fixing measures, the calculation waterfall with minimum quality conditions,
+          strike time, inputs, restatement, oversight, cessation, changes and publication — and a per-section
+          table of what is implemented on the ledger and what is policy.</p>
+        <p class="src"><a href="/methodology">Read it</a></p>
+      </div>
+    </article>
+
+    <article class="news-item">
+      <time datetime="2026-08-05">5 Aug 2026</time>
+      <div>
+        <h3>Best Financial Application — HackCanton Season 2 Grand Final</h3>
+        <p>CrossDesk was awarded Best Financial Application at the HackCanton Season 2 Grand Final. The
+          entry was the sealed closing auction, the K-of-N committee fixing, and in-kind creation and
+          redemption settling against it, running as a Daml package on the shared hackathon participant.
+          During the season 4.16 real cBTC was claimed through a CIP-56 registry flow onto the desk's
+          parties, on the issuer's own templates.</p>
+        <p class="src"><a href="/pitch/">The pitch deck and demo recording</a></p>
+      </div>
+    </article>
+
+  </div>
+</section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="cols">
+      <div><h3>Benchmarks</h3><ul>
+        <li><a href="/benchmarks/CBTC">CBTC Close</a></li>
+        <li><a href="/benchmarks/cETH">cETH Close</a></li>
+        <li><a href="/benchmarks/LX1">LX1 NAV</a></li>
+        <li><a href="/benchmarks/">All benchmarks</a></li>
+      </ul></div>
+      <div><h3>Documents</h3><ul>
+        <li><a href="/methodology">Methodology</a></li>
+        <li><a href="/governance">Governance</a></li>
+        <li><a href="/licensing">Licensing</a></li>
+        <li><a href="/regulatory">Regulatory</a></li>
+      </ul></div>
+      <div><h3>CrossDesk</h3><ul>
+        <li><a href="/about">About</a></li>
+        <li><a href="/news">News</a></li>
+        <li><a href="/showcase/">Showcase</a></li>
+        <li><a href="/pitch/">Pitch</a></li>
+        <li><a href="https://github.com/superbigroach/canton-dvp-settlement-desk" rel="noopener">Source</a></li>
+      </ul></div>
+      <div><h3>Desk</h3><ul>
+        <li><a href="/desk/">Open the desk</a></li>
+        <li><a href="/desk/login">Sign in</a></li>
+      </ul></div>
+    </div>
+    <div class="disclosure">
+      <p><strong>Sandbox disclosure.</strong> The values on this site come from a hosted sandbox: an
+        in-process Canton ledger running the CrossDesk Daml packages, seeded with a demonstration book.
+        It is not a Canton Network participant and it is not connected to DevNet, TestNet or MainNet.
+        No fixing has been published for commercial use, and no committee has been convened.
+        Instruments in the demonstration basket are issued for demonstration.</p>
+      <p>CrossDesk is not an authorised or registered benchmark administrator in any jurisdiction.
+        Nothing on this site is a price, a valuation, a benchmark for regulatory purposes, investment
+        advice, or an offer of any financial product or service. See <a href="/regulatory">Regulatory</a>.</p>
+    </div>
+    <p><strong>CrossDesk</strong> — attested fixings and atomic creation and redemption for tokenised
+      funds. Built on the <a href="https://www.canton.network" rel="noopener">Canton Network</a>.</p>
+    <p style="margin-top:16px">
+      <a href="mailto:s.borjas@lucilla.ca">s.borjas@lucilla.ca</a>
+      &nbsp;·&nbsp;
+      <a href="https://t.me/sb_lucilla" rel="noopener">@sb_lucilla</a>
+      &nbsp;·&nbsp;
+      <a href="https://www.linkedin.com/in/sborjasto/" rel="noopener">LinkedIn</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

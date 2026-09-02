@@ -763,6 +763,103 @@ public class LedgerService {
     }
 
     /**
+     * The in-flight {@code FixingProposal}s visible to {@code party} — every proposal a
+     * committee member may still confirm, with the signatures gathered so far and the
+     * protocol evidence each signer attached.
+     *
+     * <p>Read as that party: a proposal is observed by the whole committee and the
+     * auditor and by nobody else, so a signer sees exactly the proposals its seat is on.
+     */
+    public List<FixingProposalView> fixingProposalsVisibleTo(String party) {
+        return withRetry("fixing proposals for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<com.lucilla.settlement.model.governance.FixingProposal.Contract> filter =
+                    ContractFilter.of(com.lucilla.settlement.model.governance.FixingProposal.COMPANION);
+            List<FixingProposalView> out = new ArrayList<>();
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false,
+                            client.getStateClient().getLedgerEnd().blockingGet())
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (com.lucilla.settlement.model.governance.FixingProposal.Contract c
+                                : active.activeContracts) {
+                            var f = c.data;
+                            List<SignerCheckView> checks = new ArrayList<>();
+                            f.attestations.ifPresent(list -> {
+                                for (var a : list) {
+                                    checks.add(new SignerCheckView(a.member, a.role, a.protocolRef,
+                                            a.checksPassed, a.observedLow.orElse(null),
+                                            a.observedHigh.orElse(null)));
+                                }
+                            });
+                            out.add(new FixingProposalView(c.id.contractId, f.admin, f.members,
+                                    f.threshold, f.auditor, f.proposer, f.instrumentId,
+                                    f.cashInstrument, f.session, f.price, f.rationale,
+                                    f.ratePerAnnum, f.dayCount, f.accrualFrom, f.approvers,
+                                    f.referencePrice.orElse(null), f.wrapperFactor.orElse(null),
+                                    checks, f.tier.orElse(null)));
+                        }
+                    });
+            return out;
+        });
+    }
+
+    /** The standing {@code OperatorCommittee}s visible to {@code party}. */
+    public List<CommitteeView> committeesVisibleTo(String party) {
+        return withRetry("committees for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<com.lucilla.settlement.model.governance.OperatorCommittee.Contract> filter =
+                    ContractFilter.of(com.lucilla.settlement.model.governance.OperatorCommittee.COMPANION);
+            List<CommitteeView> out = new ArrayList<>();
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false,
+                            client.getStateClient().getLedgerEnd().blockingGet())
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (com.lucilla.settlement.model.governance.OperatorCommittee.Contract c
+                                : active.activeContracts) {
+                            var k = c.data;
+                            out.add(new CommitteeView(c.id.contractId, k.admin, k.members,
+                                    k.threshold, k.auditor, k.label));
+                        }
+                    });
+            return out;
+        });
+    }
+
+    /**
+     * Basket creation/redemption receipts visible to {@code party}, with the economics
+     * on them — what {@code receiptsVisibleTo} flattens into a headline, kept whole here
+     * for the AP portal and the fund dashboard.
+     */
+    public List<BasketReceiptView> basketReceiptsVisibleTo(String party) {
+        return withRetry("basket receipts (detailed) for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<BasketReceipt.Contract> filter = ContractFilter.of(BasketReceipt.COMPANION);
+            List<BasketReceiptView> out = new ArrayList<>();
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false,
+                            client.getStateClient().getLedgerEnd().blockingGet())
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (BasketReceipt.Contract c : active.activeContracts) {
+                            BasketReceipt b = c.data;
+                            List<ComponentView> comps = new ArrayList<>();
+                            for (Component comp : b.components) {
+                                comps.add(new ComponentView(comp.instrumentId, comp.unitsPerShare,
+                                        comp.expectedIssuer));
+                            }
+                            out.add(new BasketReceiptView(c.id.contractId, b.basketId, b.ap,
+                                    b.administrator, b.auditor, b.action, b.shares, comps,
+                                    b.cashInstrument, b.settledAt, b.fee.orElse(null)));
+                        }
+                    });
+            out.sort(Comparator.comparing(BasketReceiptView::settledAt).reversed());
+            return out;
+        });
+    }
+
+    /**
      * The live {@link Instrument} contract for {@code instrumentId}, with the party that
      * may republish its mark.
      *
@@ -794,13 +891,182 @@ public class LedgerService {
     public record InstrumentRef(String contractId, String issuer, String instrumentId) {
     }
 
-    /** The published reference (close) price for an instrument id, or empty. */
+    /**
+     * The published reference (close) price for an instrument id, or empty.
+     *
+     * <p><b>A FUND IS PRICED FROM ITS COMPONENTS, NOT FROM ITS OWN RECORD.</b> For an
+     * instrument of kind {@link LedgerCommands#FUND_KIND} this returns the basket's
+     * official NAV per share — Σ(unitsPerShare × the component's published mark) — so the
+     * number the close anchors on, the buying-power collar is centred on, and the picker
+     * quotes is the committee-attested value of what a share actually holds, as of NOW.
+     * The mark stored on the fund's own {@code Instrument} is only a seed: it is what the
+     * NAV was when the basket was defined (or last re-marked), and a fund quoted off it
+     * would drift from its components the moment a committee re-struck one of them.
+     * Falls back to that stored mark only when the basket cannot be read or valued.
+     */
     public Optional<BigDecimal> referencePriceOf(String issuerRef, String instrumentId) {
-        return instrumentsVisibleTo(resolveParty(issuerRef)).stream()
+        return priceFrom(instrumentsVisibleTo(resolveParty(issuerRef)), instrumentId, 0);
+    }
+
+    /**
+     * Price {@code instrumentId} off an already-fetched mark list. {@code depth} bounds
+     * basket-of-basket recursion: a fund that holds a fund is valued through it, a cycle
+     * bottoms out at the stored mark rather than looping.
+     */
+    private Optional<BigDecimal> priceFrom(List<InstrumentView> marks, String instrumentId, int depth) {
+        List<InstrumentView> rows = marks.stream()
                 .filter(i -> i.id().equals(instrumentId))
+                .toList();
+        Optional<BigDecimal> stored = rows.stream()
                 .map(InstrumentView::referencePrice)
                 .filter(java.util.Objects::nonNull)
                 .findFirst();
+        boolean isFund = rows.stream().anyMatch(i -> LedgerCommands.FUND_KIND.equals(i.kind()));
+        if (!isFund || depth >= LedgerCommands.MAX_FUND_NESTING) {
+            return stored;
+        }
+        Optional<BasketView> basket = basketById(instrumentId);
+        if (basket.isEmpty()) {
+            return stored;
+        }
+        return LedgerCommands.navPerShare(basket.get().components(),
+                        id -> priceFrom(marks, id, depth + 1))
+                .or(() -> stored);
+    }
+
+    /**
+     * The basket named {@code basketId}, read from the auditor's vantage point.
+     *
+     * <p>The auditor observes every {@code BasketDefinition} the desk defines (the API
+     * defaults it and the seed names it), which makes it the one party from which "is
+     * there a fund called X" can be answered for the whole desk rather than for one AP.
+     */
+    public Optional<BasketView> basketById(String basketId) {
+        return basketsVisibleTo(resolveParty("Auditor")).stream()
+                .filter(b -> b.basketId().equals(basketId))
+                .findFirst();
+    }
+
+    /**
+     * The desk's reference-data party — the one every mark query runs as. Falls back to
+     * {@code orElse} on a ledger that has no such party, so a basket can still be listed.
+     */
+    private String referenceDataParty(String orElse) {
+        try {
+            return resolveParty("Issuer");
+        } catch (LedgerException e) {
+            return orElse;
+        }
+    }
+
+    /**
+     * DEFINE A BASKET AND LIST IT, in one transaction.
+     *
+     * <p>Creates the {@code BasketDefinition} (the recipe) AND its {@code Instrument} of
+     * kind {@code Fund} (the tradeable share) together, as the administrator. The two are
+     * one command submission so there is never a basket the desk cannot list, anchor a
+     * close on, or show in a picker — the state the define endpoint used to leave every
+     * fund in. Returns the basket's contract id.
+     *
+     * <p>Refuses a {@code basketId} that is already a listed instrument or an existing
+     * basket: a share symbol that collides with cETH would make every holding of either
+     * indistinguishable from the other by name, which is the only key holdings carry.
+     */
+    public String defineBasket(String administrator, String auditor, String basketId,
+            String description, String cashInstrument, List<Component> components,
+            List<String> participants, String feeReceiver, BigDecimal creationFee,
+            BigDecimal redemptionFee) {
+        String depository = referenceDataParty(administrator);
+        List<InstrumentView> marks = instrumentsVisibleTo(depository);
+        if (marks.stream().anyMatch(i -> i.id().equals(basketId))) {
+            throw new IllegalArgumentException("'" + basketId + "' is already a listed instrument"
+                    + " — a basket needs a symbol of its own");
+        }
+        if (basketById(basketId).isPresent()) {
+            throw new IllegalArgumentException("a basket named '" + basketId + "' already exists");
+        }
+        List<ComponentView> legs = components.stream()
+                .map(c -> new ComponentView(c.instrumentId, c.unitsPerShare, c.expectedIssuer))
+                .toList();
+        // The seed mark: today's official NAV. Empty (an unpriced leg) still lists the
+        // fund; it simply cannot anchor a close until the leg is marked.
+        Optional<BigDecimal> nav = LedgerCommands.navPerShare(legs, id -> priceFrom(marks, id, 1));
+        Transaction tree = submit(administrator, LedgerCommands.atomically(
+                LedgerCommands.createBasket(administrator, auditor, basketId, description,
+                        cashInstrument, components, participants,
+                        feeReceiver, creationFee, redemptionFee),
+                LedgerCommands.createFundInstrument(administrator, depository, basketId,
+                        description, nav)));
+        log.info("BASKET DEFINED {} by {} and listed as a {} instrument at NAV {}",
+                basketId, labelOf(administrator), LedgerCommands.FUND_KIND,
+                nav.map(BigDecimal::toPlainString).orElse("(unpriced)"));
+        return firstCreatedOf(tree, LedgerCommands.basketDefinitionTemplateId()).orElseThrow(() ->
+                new LedgerException("no BasketDefinition contract was created by the transaction"));
+    }
+
+    /**
+     * LIST EVERY BASKET THAT HAS NO FUND INSTRUMENT YET. Returns how many were published.
+     *
+     * <p>A basket defined before the desk listed funds — or by a script that wrote the
+     * {@code BasketDefinition} directly — exists on the ledger but not in any picker.
+     * This publishes the missing share record as each basket's own administrator, with
+     * today's official NAV as its seed mark. Idempotent: a basket that is already listed
+     * is left alone, so it is safe to run at every start.
+     */
+    public int publishMissingFundInstruments() {
+        String depository = referenceDataParty(null);
+        if (depository == null) {
+            return 0;
+        }
+        List<InstrumentView> marks = instrumentsVisibleTo(depository);
+        int published = 0;
+        for (BasketView b : basketsVisibleTo(resolveParty("Auditor"))) {
+            if (marks.stream().anyMatch(i -> i.id().equals(b.basketId()))) {
+                continue;
+            }
+            Optional<BigDecimal> nav = LedgerCommands.navPerShare(b.components(),
+                    id -> priceFrom(marks, id, 1));
+            submit(b.administrator(), LedgerCommands.createFundInstrument(
+                    b.administrator(), depository, b.basketId(), b.description(), nav));
+            log.info("BASKET {} was unlisted — published as a {} instrument at NAV {}",
+                    b.basketId(), LedgerCommands.FUND_KIND,
+                    nav.map(BigDecimal::toPlainString).orElse("(unpriced)"));
+            published++;
+        }
+        return published;
+    }
+
+    /**
+     * RE-MARK EVERY FUND THAT HOLDS {@code instrumentId}, after that instrument's own mark
+     * moved. Returns the basket ids re-marked.
+     *
+     * <p>The desk already values a fund live off its components, so this changes no
+     * number the desk quotes. It keeps the fund's OWN {@code Instrument} record honest for
+     * anyone reading the ledger directly — Navigator, an auditor's query, a counterparty's
+     * participant — so the on-ledger mark and the desk's mark are the same figure.
+     */
+    public List<String> remarkFundsHolding(String instrumentId) {
+        String depository = referenceDataParty(null);
+        if (depository == null) {
+            return List.of();
+        }
+        List<String> remarked = new ArrayList<>();
+        for (BasketView b : basketsVisibleTo(resolveParty("Auditor"))) {
+            boolean holdsIt = b.components().stream()
+                    .anyMatch(c -> c.instrumentId().equals(instrumentId));
+            if (!holdsIt) {
+                continue;
+            }
+            Optional<BigDecimal> nav = referencePriceOf(depository, b.basketId());
+            Optional<InstrumentRef> ref = instrumentRefOf(depository, b.basketId());
+            if (nav.isEmpty() || ref.isEmpty()) {
+                continue;
+            }
+            submit(ref.get().issuer(),
+                    LedgerCommands.setReferencePrice(ref.get().contractId(), nav.get()));
+            remarked.add(b.basketId());
+        }
+        return remarked;
     }
 
     /** Friendly label (hint prefix before "::") for a full party id. */
@@ -1351,6 +1617,40 @@ public class LedgerService {
         public boolean isRestatement() {
             return supersedes != null && !supersedes.isBlank();
         }
+    }
+
+    /** One signer's protocol evidence on a proposal (docs/SIGNER_PROTOCOL.md §3). */
+    public record SignerCheckView(
+            String member, String role, String protocolRef, List<String> checksPassed,
+            java.math.BigDecimal observedLow, java.math.BigDecimal observedHigh) {
+    }
+
+    /** An in-flight {@code FixingProposal}: the recipe under attestation and who has signed. */
+    public record FixingProposalView(
+            String contractId, String admin, List<String> members, long threshold, String auditor,
+            String proposer, String instrumentId, String cashInstrument, String session,
+            java.math.BigDecimal price, String rationale,
+            java.math.BigDecimal ratePerAnnum, String dayCount, java.time.Instant accrualFrom,
+            List<String> approvers,
+            java.math.BigDecimal referencePrice, java.math.BigDecimal wrapperFactor,
+            List<SignerCheckView> attestations, String tier) {
+
+        public boolean quorumReached() {
+            return approvers.size() >= threshold;
+        }
+    }
+
+    /** A standing K-of-N committee. */
+    public record CommitteeView(
+            String contractId, String admin, List<String> members, long threshold,
+            String auditor, String label) {
+    }
+
+    /** A basket creation/redemption receipt with its economics. */
+    public record BasketReceiptView(
+            String contractId, String basketId, String ap, String administrator, String auditor,
+            String action, java.math.BigDecimal shares, List<ComponentView> components,
+            String cashInstrument, java.time.Instant settledAt, java.math.BigDecimal fee) {
     }
 
     /** A published cessation notice as the acting party sees it (§8). */

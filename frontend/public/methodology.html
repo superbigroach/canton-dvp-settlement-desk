@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Methodology — CrossDesk</title>
+<meta name="description" content="The CrossDesk fixing methodology and signer protocol: identification, what a fixing measures, the calculation waterfall, strike time, inputs, restatement, oversight, cessation, changes, publication — and, per section, what is implemented on the ledger and what is policy.">
+<link rel="canonical" href="https://crossdesk-devnet-app.web.app/methodology">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="CrossDesk">
+<meta property="og:title" content="CrossDesk fixing methodology and signer protocol">
+<meta property="og:description" content="A benchmark is a rule, a clock and a record. The rulebook for a CrossDesk fixing and for the people who sign it, with implementation state stated per section.">
+<meta property="og:url" content="https://crossdesk-devnet-app.web.app/methodology">
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" content="#0A0B0F">
+<link rel="stylesheet" href="/site/site.css?v=5">
+<script defer src="/site/site.js?v=5"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="/" aria-label="CrossDesk home">Cross<span>Desk</span></a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <a href="/benchmarks/">Benchmarks</a>
+      <a href="/methodology">Methodology</a>
+      <a href="/governance">Governance</a>
+      <a href="/licensing">Licensing</a>
+      <a href="/regulatory">Regulatory</a>
+      <a href="/news">News</a>
+      <a href="/about">About</a>
+      <a href="/desk/login">Sign in</a>
+      <a href="/desk/" class="btn">Open the desk</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="section hero" aria-labelledby="h">
+  <div class="wrap">
+    <div class="kicker"><span>Methodology</span> <span class="rule"></span></div>
+    <h1 id="h">A benchmark is a rule, a clock and a record.</h1>
+    <p class="lede">This page is the rulebook for a CrossDesk fixing and for the people who sign it. Anyone
+      referencing a CrossDesk fixing in a contract is referencing this document. A number nobody can
+      audit is not a benchmark.</p>
+    <p class="src">Fixing methodology <strong data-methodology-version>version 0.1 — draft, 12 August 2026</strong> ·
+      Signer protocol <strong data-signer-protocol-version>version 1 — 30 August 2026</strong> · Administrator: CrossDesk.
+      Source documents: <code>docs/FIXING_METHODOLOGY.md</code>, <code>docs/SIGNER_PROTOCOL.md</code> in the
+      <a href="https://github.com/superbigroach/canton-dvp-settlement-desk" rel="noopener">repository</a>.</p>
+    <div class="callout warn">
+      <span class="dot"></span>
+      <p><strong>Status.</strong> The calculation waterfall, minimum quality conditions, restatement
+        quorum, cessation notice and signer evidence are implemented and tested in the Daml packages.
+        The scheduled strike is detected, not automated: striking is a human act. Nothing here should
+        be read as a claim that a fixing is currently in production — no fixing has been published for
+        commercial use and no committee has been convened. §12 and §P7 state the per-section state.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section plain" aria-label="Methodology text">
+  <div class="wrap">
+    <div class="doc">
+      <nav class="toc" aria-label="Table of contents">
+        <h3>Fixing methodology</h3>
+        <ol>
+          <li><a href="#s1">1. Identification</a></li>
+          <li><a href="#s2">2. What the fixing measures</a></li>
+          <li><a href="#s3">3. Calculation — the waterfall</a></li>
+          <li><a href="#s4">4. Strike time and schedule</a></li>
+          <li><a href="#s4a">4a. Frequency for 24/7 assets</a></li>
+          <li><a href="#s5">5. Inputs</a></li>
+          <li><a href="#s6">6. Errors and restatement</a></li>
+          <li><a href="#s7">7. Oversight and governance</a></li>
+          <li><a href="#s8">8. Cessation</a></li>
+          <li><a href="#s9">9. Changes to this methodology</a></li>
+          <li><a href="#s10">10. Publication and access</a></li>
+          <li><a href="#s11">11. What this document does not do</a></li>
+          <li><a href="#implementation">12. Implementation state</a></li>
+        </ol>
+        <h3 style="margin-top:18px">Signer protocol</h3>
+        <ol>
+          <li><a href="#signer-protocol">P1. The one rule</a></li>
+          <li><a href="#p2">P2. The seats</a></li>
+          <li><a href="#p3">P3. The mechanism</a></li>
+          <li><a href="#p4">P4. Automating a seat</a></li>
+          <li><a href="#p5">P5. When K is not reached</a></li>
+          <li><a href="#p6">P6. The strongest objection</a></li>
+          <li><a href="#p7">P7. Implementation state</a></li>
+        </ol>
+      </nav>
+
+      <article>
+
+        <h2 id="s1">1. Identification</h2>
+        <div class="tablewrap"><table>
+          <thead><tr><th scope="col">Field</th><th scope="col">Value</th></tr></thead>
+          <tbody>
+            <tr><td>Benchmark family</td><td class="mono">CDX</td></tr>
+            <tr><td>Identifier form</td><td class="mono">CDX-&lt;INSTRUMENT&gt;-&lt;FREQ&gt; — e.g. CDX-CBTC-D (daily), CDX-LX1-D</td></tr>
+            <tr><td>Administrator</td><td>CrossDesk</td></tr>
+            <tr><td>Currency of quotation</td><td>The instrument's cash instrument (e.g. USDC)</td></tr>
+            <tr><td>Ledger</td><td>Canton. Every fixing is a <code>NavFixing</code> contract, signed on-ledger</td></tr>
+          </tbody>
+        </table></div>
+        <p>An instrument has <strong>at most one</strong> fixing per identifier per strike. A second strike for
+          the same identifier and date is a <strong>restatement</strong> (§6), never a second fixing.</p>
+
+        <h2 id="s2">2. What the fixing measures</h2>
+        <p>The price at which the instrument is deemed to transact for settlement purposes at the strike
+          time. It is <strong>not</strong> an estimate of fair value, a prediction, or an indication of where
+          the instrument may trade next. It is the number contracts settle against.</p>
+        <p>Two numbers are published side by side and must never be confused:</p>
+        <div class="tablewrap"><table>
+          <thead><tr><th scope="col"></th><th scope="col">Meaning</th><th scope="col">Binding?</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Official fixing</strong></td><td>Produced by §3. Creation and redemption settle at this number</td><td><strong>Yes</strong></td></tr>
+            <tr><td><strong>Indicative value</strong></td><td>Derived continuously from live market data</td><td><strong>No.</strong> Informational only</td></tr>
+          </tbody>
+        </table></div>
+        <p>The difference between them, in basis points, is published with the fixing. It is the honest
+          measure of how stale the last strike has become.</p>
+
+        <h2 id="s3">3. Calculation — the waterfall</h2>
+        <p>Applied in order. The first tier that produces a value <strong>is</strong> the fixing, and the tier
+          used is published with it.</p>
+        <h3>Tier 1 — Sealed auction uniform price (preferred)</h3>
+        <p>Where an auction session is held for the instrument, the fixing is the <strong>uniform clearing
+          price</strong> at which the auction uncrosses, determined from the sealed orders themselves. All
+          executions at that strike occur at that single price. Unpriced market-on-close orders are
+          allocated first; priced orders through the print fill in full, in price priority; only the
+          marginal at-the-print level is rationed, earliest-submitted first — at most one order is ever
+          partially filled.</p>
+        <p><strong>Minimum quality conditions.</strong> The auction price is used only if, at uncrossing:</p>
+        <ul>
+          <li>at least <strong>two</strong> orders rest on the book, and</li>
+          <li>they originate from at least <strong>two distinct parties</strong>, and</li>
+          <li>the crossed quantity is greater than zero.</li>
+        </ul>
+        <p>If any condition fails, the auction is declared <strong>uncrossed</strong> and the waterfall proceeds
+          to Tier 2. A single participant cannot set a CrossDesk fixing.</p>
+        <h3>Tier 2 — Committee attestation</h3>
+        <p>A K-of-N <code>OperatorCommittee</code> attests the value. Critically, the committee signs a
+          <strong>recipe, not a number</strong>:</p>
+        <pre>value(t) = base × (1 + rate × daysBetween(asOf, t) / dayCountBasis)</pre>
+        <p>so the ledger <em>derives</em> the value continuously after the strike rather than holding a number
+          that goes stale. <code>base</code>, <code>rate</code>, <code>asOf</code> and the day-count basis are all
+          signed. For a non-accruing instrument, <code>rate = 0</code> and the recipe degenerates to a constant.</p>
+        <p>For a <strong>basket</strong>, the fixing is Σ (unitsPerShareᵢ × fixingᵢ) over the components. A basket
+          fixing therefore requires a current fixing for <strong>every</strong> component; if one is missing the
+          basket fixing is not published (§5).</p>
+        <h3>Tier 3 — Carry forward</h3>
+        <p>If neither tier is available, the prior fixing's recipe continues to derive a value and the fixing
+          is published <strong>flagged as carried forward</strong>, with the age of the underlying strike. Three
+          consecutive carried-forward strikes trigger a review under §8.</p>
+        <p class="src">The production operating waterfall on the <a href="/governance#waterfall">Governance</a> page
+          numbers its steps 1–5 (attested · alternate seats · benchmark × last factor · prior fixing
+          flagged · missed). Tier 2 here is that waterfall's tier 1; Tier 3 here is its tier 4.</p>
+
+        <h2 id="s4">4. Strike time and schedule</h2>
+        <ul>
+          <li><strong>Frequency:</strong> every business day, unless the instrument's terms state otherwise.</li>
+          <li><strong>Strike time:</strong> declared per identifier at launch (e.g. 16:00 Europe/London) and
+            <strong>fixed</strong>. It may only change under §9.</li>
+          <li><strong>Business days:</strong> the calendar declared per identifier. Where a component's own
+            market is closed, Tier 2 or Tier 3 applies to that component.</li>
+          <li><strong>Publication:</strong> as soon as the strike completes. There is no embargo.</li>
+          <li><strong>Ledger latency is not a delay in the fixing.</strong> The strike time is the moment the
+            auction closes or the committee's quorum is reached, not the moment the transaction commits.</li>
+        </ul>
+
+        <h2 id="s4a">4a. Strike frequency when the asset trades 24/7 — and when its market is shut</h2>
+        <p>If it trades around the clock, is an hourly NAV needed? <strong>No.</strong></p>
+        <blockquote><p>Strike frequency follows settlement, not trading.</p></blockquote>
+        <p>An ETF trades continuously all day and has exactly <strong>one</strong> official NAV. Its intraday
+          price comes from the market anchored by arbitrage, not from recomputing NAV; what the exchange
+          disseminates every few seconds is the <strong>indicative</strong> value, binding on nobody. Creation
+          and redemption settle once, at one struck price. Bitcoin never stops trading, and CME settles
+          every future and option on one daily fixing. Frequency is a settlement decision.</p>
+        <h3>Why more strikes are worse, not better</h3>
+        <ol>
+          <li><strong>Every strike costs a quorum.</strong> Hourly is 24 K-of-N quorums a day. The N are parties
+            with an existing commercial interest (§7), not staff.</li>
+          <li><strong>More strikes do not make the settling price more accurate.</strong> They multiply the number
+            of published prices someone can dispute.</li>
+          <li><strong>Manipulation surface grows with every fixing.</strong> Benchmarks use few, well-defined
+            strikes deliberately.</li>
+          <li><strong>A contract needs one referenceable moment.</strong> A margin agreement names <em>"the 16:00
+            fixing"</em>, not <em>"whichever of twenty-four."</em></li>
+        </ol>
+        <p>The one genuine case for more frequency is creation and redemption that must settle intraday.
+          A customer with three settlement windows gets three strikes, declared per §4 and fixed.</p>
+        <h3>How the other 23 hours are covered</h3>
+        <div class="tablewrap"><table>
+          <thead><tr><th scope="col">Between strikes</th><th scope="col">Covered by</th><th scope="col">Applies to</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Derivation from the signed recipe</strong></td><td>§3 Tier 2 — base, rate, day-count are attested, so the ledger derives a value at every instant</td><td>Accruing assets: T-bills, money market, anything with a yield</td></tr>
+            <tr><td><strong>Indicative value</strong></td><td>§2 — continuous, from live market data, binding on nobody</td><td>Volatile assets with an open market: cBTC, cETH</td></tr>
+            <tr><td><strong>Committee attestation</strong></td><td>§3 Tier 2 again — as the <em>primary</em> source, not a fallback</td><td><strong>Assets whose market is closed</strong></td></tr>
+          </tbody>
+        </table></div>
+        <h3>The closed-market case</h3>
+        <p>What is the NAV of a tokenised equity fund at 03:00 on a Sunday? If tokenised stocks trade 24/7,
+          their underlying market does not. Overnight, at weekends and on holidays there is <strong>no price
+          for the constituents</strong>. Not a stale price — no price. No oracle can solve this: a price feed
+          relays a number that exists, and when the underlying market is shut there is nothing to relay.
+          Somebody must <strong>attest</strong> a value instead of reporting one — a K-of-N committee signing a
+          defensible mark, with the method published in advance and every signature attributable. That is
+          the case this design was built for.</p>
+
+        <h2 id="s5">5. Inputs and their treatment</h2>
+        <ul>
+          <li><strong>Tier 1 inputs</strong> are sealed orders on the ledger. They are visible to no other
+            participant while they rest — including the auditor — and no participant sees the book before
+            the uncrossing. This is enforced by the ledger's signatory/observer model, not by an API filter.</li>
+          <li><strong>Tier 2 inputs</strong> are the recipe fields signed by the committee.</li>
+          <li><strong>Indicative value inputs</strong> are external market data. External data is
+            <strong>never</strong> an input to an official fixing. It informs the indicative value only.</li>
+          <li><strong>A wrapped asset's mark is two inputs, not one.</strong> Where the instrument is a claim on an
+            asset priced elsewhere (cBTC on BTC, cETH on ETH), the fixing carries the <strong>benchmark
+            print</strong> (<code>referencePrice</code>) and the <strong>par ratio</strong> the committee attested
+            (<code>wrapperFactor</code>) as separate signed fields, and the struck price is their product. The
+            benchmark is an input nobody argues about; the ratio is the judgement, and it is the one number
+            no external administrator produces. A pair that does not reconcile cannot exist on-ledger.</li>
+          <li><strong>Incomplete inputs:</strong> if a required component has no current fixing, the dependent
+            fixing is <strong>not published</strong>. A gap is published as a gap. A fixing is never estimated
+            to fill one.</li>
+        </ul>
+
+        <h2 id="s6">6. Errors, corrections and restatement</h2>
+        <ul>
+          <li>A fixing found to be <strong>materially wrong</strong> is restated. Materiality threshold:
+            <strong>1 basis point</strong> of the published value, or any error that changes a settlement
+            obligation.</li>
+          <li>A restatement is published as a <strong>new record referencing the original</strong>, with the
+            reason. The original is never deleted or overwritten — the ledger record is immutable by
+            construction.</li>
+          <li><strong>Restatement window: two business days</strong> from publication. After that the fixing
+            stands, and a dispute is a matter for the contract that referenced it. This window is policy, not
+            code: business-day arithmetic needs a holiday calendar the package does not carry, and enforcing
+            two <em>calendar</em> days would silently shorten the window across a weekend. Both the original
+            and the restatement carry their own <code>finalizedAt</code>, so a correction made outside the
+            window is auditable after the fact.</li>
+          <li>Anyone may report a suspected error to the administrator. <strong>Corrections require the same
+            K-of-N quorum as a fixing</strong> — enforced by <code>RestatementProposal</code>. One signer cannot
+            correct the record alone.</li>
+          <li><strong>The corrected fixing must differ from the published one</strong>, and must carry a
+            non-empty reason. A restatement with no stated reason is indistinguishable from tampering, and
+            both are refused on-ledger.</li>
+          <li><strong>The superseded fixing is not archived.</strong> It stays on the record, provably published,
+            with the correction pointing back at it. Archiving it would require the original attestors'
+            authority, which would let the members who published a wrong number veto its correction.</li>
+          <li><strong>Consumer rule:</strong> the current fixing for an (instrument, session) is the one that no
+            other fixing supersedes — equivalently, the newest <code>finalizedAt</code>.</li>
+          <li>Disclosure survives a correction: every party disclosed the original is disclosed the
+            replacement.</li>
+        </ul>
+
+        <h2 id="s7">7. Oversight and governance</h2>
+        <ul>
+          <li>The <code>OperatorCommittee</code> is the oversight function. N signers are named on-ledger; K
+            signatures are required. Both are public per identifier.</li>
+          <li><strong>The N are parties with an existing commercial interest in the instrument</strong> — the
+            collateral taker, the issuer, the administrator, the market maker who quotes it. They are not paid
+            to attest. Attestation is a by-product of a position they already hold. A panel of disinterested
+            referees would never be assembled or funded.</li>
+          <li><strong>Every signature is attributable and permanent.</strong> Who signed which fixing is on the
+            ledger forever.</li>
+          <li><strong>What each signer asserts is defined, not left to judgement.</strong> The signer protocol
+            below sets out, per role, the named conditions a member verifies before confirming. No member is
+            asked for an opinion about the price. A signer declines by naming a condition that failed, not by
+            disagreeing.</li>
+          <li><strong>The composition must be opposed.</strong> The issuer favours par, the lender favours
+            prudence, the venue favours the observed print. No single interest holds K.</li>
+          <li><strong>The administrator does not trade the instruments it prices.</strong> This is a hard
+            constraint on CrossDesk's own business model, not a preference.</li>
+        </ul>
+
+        <h2 id="s8">8. Cessation</h2>
+        <p>If a fixing is to be discontinued, the administrator publishes a cessation notice <strong>no less than
+          60 calendar days</strong> before the final strike, naming the final strike date and, where one exists,
+          a recommended successor. Contracts referencing the fixing need that window to amend. Three
+          consecutive carried-forward strikes trigger a review of whether the fixing should cease. The
+          sixty days are enforced on-ledger (<code>CessationNotice</code>); an extension may only move the date
+          later.</p>
+
+        <h2 id="s9">9. Changes to this methodology</h2>
+        <ul>
+          <li><strong>Material changes</strong> — the waterfall, the strike time, the minimum quality conditions,
+            the materiality threshold, K or N — require <strong>30 days' notice</strong> before taking effect.</li>
+          <li>Non-material changes (clarifications, typographical corrections) take effect on publication.</li>
+          <li>Every version of this document is retained. A fixing is always interpreted under the version in
+            force at its strike.</li>
+        </ul>
+
+        <h2 id="s10">10. Publication and access</h2>
+        <p>Each published fixing carries: identifier · strike date and time · value · <strong>tier used</strong> ·
+          signers · drift versus indicative value in basis points · and, if carried forward, the age of the
+          underlying strike.</p>
+        <p>Read access is via the CrossDesk API (<code>/api/benchmarks</code>, <code>/api/series/{id}</code>).
+          Referencing a CrossDesk fixing in a contract requires a <a href="/licensing">licence</a> from the
+          administrator; reading a published fixing does not.</p>
+
+        <h2 id="s11">11. What this document does not do</h2>
+        <p>It does not make CrossDesk a regulated benchmark administrator. Benchmark administration is a
+          licensed activity in the EU and UK; CrossDesk is not authorised or registered in those
+          jurisdictions and this methodology is not a claim otherwise. Where an EU- or UK-supervised entity
+          wishes to reference a CrossDesk fixing in a regulated product, the recognition or endorsement route
+          must be resolved first. See <a href="/regulatory">Regulatory</a>.</p>
+
+        <h2 id="implementation">12. Implementation state, stated plainly</h2>
+        <div class="tablewrap"><table>
+          <thead><tr><th scope="col">Section</th><th scope="col">Status</th><th scope="col">Note</th></tr></thead>
+          <tbody>
+            <tr><td>§3 Tier 1 auction, uniform price, rationing</td><td><span class="status built">implemented, tested</span></td><td></td></tr>
+            <tr><td>§3 Tier 1 minimum quality conditions</td><td><span class="status built">implemented, tested</span></td><td>Enforced in the uncrossing as module constants an operator cannot lower</td></tr>
+            <tr><td>§3 Tier 2 committee attestation of a recipe</td><td><span class="status built">implemented, tested</span></td><td></td></tr>
+            <tr><td>§3 Tier 2 basket summation</td><td><span class="status built">implemented, tested</span></td><td></td></tr>
+            <tr><td>§3 Tier 3 carry-forward flagging</td><td><span class="status built">implemented</span></td><td>A fixing older than one interval is returned with <code>carriedForward</code> and the age of the strike</td></tr>
+            <tr><td>§4 Scheduled strike at a fixed time</td><td><span class="status partial">detection only</span></td><td><code>FixingSchedule</code> declares the time and zone and reports PENDING / DUE / OVERDUE / STRUCK. The desk does not auto-strike: a fixing nobody attested is not a cheaper fixing. Business days are approximated as weekdays</td></tr>
+            <tr><td>§5 Gap rather than estimate</td><td><span class="status built">implemented</span></td><td><code>navPerShare</code> returns nothing on a missing mark</td></tr>
+            <tr><td>§5 Wrapper mark as two signed fields</td><td><span class="status built">implemented, tested</span></td><td>Reconciliation enforced on-ledger</td></tr>
+            <tr><td>§6 Restatement</td><td><span class="status built">implemented, tested</span></td><td>Same K-of-N as a fixing. The two-business-day window is policy, not code</td></tr>
+            <tr><td>§7 Per-signer evidence on the published fixing</td><td><span class="status built">implemented, tested</span></td><td>The venue's range is enforced; the issuer's and lender's claims are recorded, not machine-checked</td></tr>
+            <tr><td>§7 Fund behaviour when K is not reached</td><td><span class="status not">not specified</span></td><td>Belongs to the fund's governing documents, not the administrator's</td></tr>
+            <tr><td>§8 Cessation notice</td><td><span class="status built">implemented, tested</span></td><td>Sixty calendar days enforced on-ledger</td></tr>
+            <tr><td>§10 Lookup by identifier and date</td><td><span class="status built">implemented</span></td><td>Published series with the §6 consumer rule applied, an optional as-of, and any cessation notice</td></tr>
+          </tbody>
+        </table></div>
+        <p>Two honest limits remain: <strong>striking is a human act</strong> (by design — the schedule reports
+          a missed strike rather than inventing a number nobody attested), and <strong>no holiday calendar is
+          carried</strong>, so the §6 window and §4's business days are approximations that are stated rather
+          than hidden. Two decisions are deliberately not the administrator's: what a fund does when the
+          committee cannot reach quorum, and whether an EU- or UK-supervised entity may reference these
+          fixings at all.</p>
+
+        <hr>
+
+        <h2 id="signer-protocol">Signer protocol — P1. The one rule</h2>
+        <blockquote><p>No signer is ever asked for an opinion about the price. Each signer asserts a fact only
+          it can see.</p></blockquote>
+        <p>A committee whose members are each asked <em>"do you agree this is the right price?"</em> is a
+          committee that rubber-stamps — not from bad faith, from economics. Signers are not paid; an unpaid
+          member asked for a daily act of judgement will, within a fortnight, click yes. A signature that
+          means nothing is worse than no signature, because it looks like governance. So the question put to
+          each member is narrowed until it is nearly free to answer:</p>
+        <div class="tablewrap"><table>
+          <thead><tr><th scope="col"></th><th scope="col">Asking for judgement</th><th scope="col">Asking for a fact</th></tr></thead>
+          <tbody>
+            <tr><td>Cost to the signer</td><td>High — requires forming a view</td><td>Near zero — a query against their own systems</td></tr>
+            <tr><td>Can it be automated?</td><td>No</td><td><strong>Yes</strong>, and it should be (P4)</td></tr>
+            <tr><td>What refusal means</td><td>"I disagree" — unactionable</td><td><strong>"Attestor quorum was 5 of 10"</strong> — actionable</td></tr>
+            <tr><td>Failure mode</td><td>Rubber-stamping</td><td>The check fails and the fixing stops</td></tr>
+          </tbody>
+        </table></div>
+        <p>Two properties follow: <strong>signing is cheap</strong>, which is what makes an unpaid committee
+          operable at all; and <strong>refusal is specific</strong>, which tells the administrator, the fund and
+          every other signer exactly what broke.</p>
+        <p>This is <strong>not</strong> a claim that the committee resembles a regulated oversight function.
+          Under the IOSCO principles and the UK/EU Benchmarks Regulation, an administrator's oversight
+          committee is composed to be independent of parties with positions. This design does the opposite
+          deliberately: it seats parties <em>because</em> they have exposure. P6 states that challenge at full
+          strength.</p>
+
+        <h2 id="p2">P2. The seats, and what each one asserts</h2>
+        <p>The three roles want different answers: the <strong>issuer</strong> wants the wrapper marked at par;
+          the <strong>lender</strong> wants it marked conservatively, because it is the one under-collateralised
+          if the mark is too high; the <strong>venue</strong> wants it marked where the asset actually traded. A
+          committee of three issuers is not a committee.</p>
+        <h3>Issuer — redemption integrity</h3>
+        <p>The party that issues the wrapped asset. It uniquely knows whether the wrapper can actually be
+          redeemed right now.</p>
+        <div class="tablewrap"><table>
+          <thead><tr><th scope="col">Condition</th><th scope="col">Name</th><th scope="col">Pass when</th></tr></thead>
+          <tbody>
+            <tr><td>Attestor quorum</td><td class="mono">attestor-quorum</td><td>At least the issuer's own threshold of attestors are online and signing</td></tr>
+            <tr><td>Reserves current</td><td class="mono">reserves-current</td><td>The most recent proof-of-reserve attestation is less than 24h old</td></tr>
+            <tr><td>Reserves sufficient</td><td class="mono">reserves-cover-supply</td><td>Attested reserves ≥ circulating supply of the wrapped token</td></tr>
+            <tr><td>Redemption queue clear</td><td class="mono">redemption-queue-clear</td><td>No redemption request is unfilled beyond its stated window</td></tr>
+          </tbody>
+        </table></div>
+        <p>If all four pass, the issuer may attest <code>wrapperFactor = 1.0</code>. If any fails, the issuer does
+          not sign at par: it declines, or the proposer restrikes with a factor below par and a rationale
+          naming the failed condition. The par factor is the only field in the system no benchmark
+          administrator anywhere produces, and the issuer is the only party with the facts to justify it.</p>
+        <h3>Lender — the mark is safe to lend against</h3>
+        <p>A platform holding the asset as collateral. It uniquely knows whether it will actually carry this
+          number on its own book. This is the strongest signature in the protocol: the only one where the
+          signer asserts something against its own money.</p>
+        <div class="tablewrap"><table>
+          <thead><tr><th scope="col">Condition</th><th scope="col">Name</th><th scope="col">Pass when</th></tr></thead>
+          <tbody>
+            <tr><td>Independent mark agrees</td><td class="mono">independent-mark-within-tolerance</td><td>The proposed mark is within the lender's declared tolerance (recommended 25 bp) of its own valuation</td></tr>
+            <tr><td>Liquidations consistent</td><td class="mono">liquidations-consistent</td><td>No liquidation the lender ran in the session cleared materially away from the proposed mark</td></tr>
+            <tr><td>Book acceptance</td><td class="mono">book-acceptance</td><td>The lender will mark its own collateral at this level for the period the fixing governs</td></tr>
+          </tbody>
+        </table></div>
+        <p>A lender that signs <code>book-acceptance</code> and then marks its own book somewhere else has made
+          a false statement, on-ledger, with its own signature on it.</p>
+        <h3>Venue — the mark sits where the asset traded</h3>
+        <p>A venue where the wrapped asset actually trades. It uniquely holds the transaction data — the only
+          seat with observed prints for the wrapper, since the underlying benchmark does not price it.</p>
+        <div class="tablewrap"><table>
+          <thead><tr><th scope="col">Condition</th><th scope="col">Name</th><th scope="col">Pass when</th></tr></thead>
+          <tbody>
+            <tr><td>Traded range</td><td class="mono">traded-range</td><td>The proposed mark lies within the high/low the venue's own book traded in the window</td></tr>
+            <tr><td>Spread</td><td class="mono">spread-within-tolerance</td><td>Best bid/ask spread at the strike is inside the declared tolerance</td></tr>
+            <tr><td>Sufficient volume</td><td class="mono">sufficient-volume</td><td>Traded volume in the window meets the declared minimum, else the venue has no basis to attest</td></tr>
+          </tbody>
+        </table></div>
+        <p>A venue supplying <code>observedLow</code> and <code>observedHigh</code> is <strong>enforced
+          on-ledger</strong>: the confirmation refuses an attestation whose range does not contain the price,
+          an inverted range, or a half-specified one. A venue cannot sign a price its own book never
+          printed. This is the sharpest guard in the system and the most informative refusal available.</p>
+        <h3>Operator (CrossDesk) — proposes, and should not sign</h3>
+        <p>CrossDesk computes the proposal — the benchmark print, the units per share off the ledger, the
+          accrual inputs, the resulting NAV — and publishes all inputs with it. The administrator does not
+          trade the instruments it prices; signing is the adjacent conflict. Where a pilot has only three
+          available seats, CrossDesk signing is tolerable at the very start and must be exited as soon as a
+          fourth party exists — recorded with <code>role = "operator"</code> so the exception is visible on
+          every fixing it touched.</p>
+
+        <h2 id="p3">P3. The mechanism</h2>
+        <pre>benchmark print                  ← public input; CrossDesk does not build it
+        ↓  (transported on-ledger — a technical claim, not a seat)
+ProposeWrappedFixing             ← benchmarkPrice × parFactor = the struck price
+        ↓
+ConfirmWithChecks × K            ← each member names the conditions it verified
+        ↓
+FinalizeFixing → NavFixing       ← signatory set IS the attestor set
+        ↓
+Create / redeem settles atomically against it</pre>
+        <p><strong>Why the oracle is not a seat.</strong> An oracle asserts "this is faithfully the benchmark
+          print" — a transport claim. It has no money riding on the answer, so its vote carries no
+          information, and it dilutes the opposed-interests property. It also cannot answer the question
+          the committee exists for: when nobody quotes the wrapper, an oracle has nothing to relay. An
+          oracle's commercial relationship to CrossDesk is redistribution, not attestation.</p>
+        <p><strong>What lands on the ledger.</strong> Each <code>SignerCheck</code> carries the member, its
+          role, the protocol version it applied, the named conditions it verified, and (venue only) the
+          observed range. The finished <code>NavFixing</code> carries the list. The fixing answers <em>why</em>,
+          not only <em>who</em>.</p>
+
+        <h2 id="p4">P4. Automating a seat</h2>
+        <p>Every check in P2 is a query against the signer's own systems. None requires a human to form a
+          view. A signer should run a checker that confirms automatically when all its conditions pass and
+          <strong>halts and escalates when one does not</strong>. An unpaid committee that requires daily human
+          attention will decay into rubber-stamping within weeks; a seat that is automated is a seat that is
+          still honest in month six.</p>
+        <p><strong>A checker must never auto-confirm on a failed condition, and must never widen its own
+          tolerances to make a check pass.</strong> Both are silent conversions of this protocol back into a
+          rubber stamp. A checker that halts notifies the administrator with the failed condition named; the
+          administrator either restrikes with a corrected input, or the fixing does not happen.</p>
+
+        <h2 id="p5">P5. When K is not reached</h2>
+        <p>No <code>NavFixing</code> exists. No auction prints, and the fund's NAV per share returns nothing
+          rather than a guess — a gap is published as a gap. What the fund does then — suspend creations and
+          redemptions for the session, or invoke a declared fair-value procedure — belongs to the fund's own
+          governing documents, not to the administrator, and it must be specified before any fund relies on
+          this.</p>
+
+        <h2 id="p6">P6. The strongest objection, stated fairly</h2>
+        <blockquote><p>"You have seated people with positions and called it oversight. That is LIBOR."</p></blockquote>
+        <p>It is the best argument against this design. LIBOR's panel banks submitted rates on instruments
+          they held positions in, and some moved submissions to suit those positions. Three differences,
+          structural rather than rhetorical:</p>
+        <ol>
+          <li><strong>The panel is composed to disagree.</strong> LIBOR's submitters shared a direction of
+            interest. Here the issuer wants par, the lender wants conservative, the venue wants observed —
+            and no single interest holds K.</li>
+          <li><strong>Submissions are verifiable rather than asserted.</strong> A LIBOR submission was an
+            unfalsifiable estimate of where a bank <em>could</em> borrow. Every check in P2 is a fact with a
+            record behind it, and the venue's is checked by the ledger itself.</li>
+          <li><strong>Every signature is permanent and attributable.</strong> LIBOR ran on phone calls and
+            unlogged discretion. Here who signed which fixing, under which protocol version, having verified
+            which conditions, is on the ledger forever.</li>
+        </ol>
+        <p><strong>What honesty requires conceding:</strong> this is a <em>mitigated</em> conflict, not an absent
+          one. A regulated administrator would seat independent members and manage conflicts by exclusion.
+          This design cannot — a panel of disinterested referees would never be assembled or funded for an
+          asset this size — so it manages conflict by <strong>opposition and evidence</strong> instead. An EU- or
+          UK-supervised entity referencing a CrossDesk fixing must resolve §11 first; this section does not
+          substitute for that.</p>
+
+        <h2 id="p7">P7. Implementation state, stated plainly</h2>
+        <div class="tablewrap"><table>
+          <thead><tr><th scope="col">Section</th><th scope="col">Status</th><th scope="col">Note</th></tr></thead>
+          <tbody>
+            <tr><td>P2 role definitions and named conditions</td><td><span class="status built">implemented, tested at the edge</span></td><td>The API refuses a condition that does not belong to the declared seat, an unknown role, an empty or repeated checklist, a venue without a range, and a non-venue with one</td></tr>
+            <tr><td>P2 the conditions a signer is shown</td><td><span class="status built">implemented</span></td><td><code>GET /api/signer-protocol</code> serves the same list the validator uses; the desk renders its checkboxes from it</td></tr>
+            <tr><td>P2 venue range enforcement</td><td><span class="status built">implemented, tested</span></td><td>Refuses a price outside the range, an inverted range, or a half-specified one</td></tr>
+            <tr><td>P2 one attestation per member, signed by that member</td><td><span class="status built">implemented, tested</span></td><td></td></tr>
+            <tr><td>P3 wrapper mark as an explicit field</td><td><span class="status built">implemented, tested</span></td><td></td></tr>
+            <tr><td>P3 evidence survives finalisation onto the fixing</td><td><span class="status built">implemented, tested</span></td><td></td></tr>
+            <tr><td>P4 reference checker implementations</td><td><span class="status not">not built</span></td><td>Each signer writes its own against its own systems</td></tr>
+            <tr><td>P5 fund behaviour when K is not reached</td><td><span class="status not">not specified</span></td><td>Belongs to the fund's governing documents</td></tr>
+            <tr><td>P2 operator-exit rule</td><td><span class="status policy">policy only</span></td><td><code>role = "operator"</code> makes it visible; nothing enforces the exit</td></tr>
+          </tbody>
+        </table></div>
+        <p>In three layers: <strong>the ledger enforces</strong> the venue's traded range and the arithmetic of
+          the wrapper mark. <strong>The API enforces</strong> that a claimed condition belongs to the seat
+          claiming it. <strong>Nothing enforces</strong> that the issuer's attestor quorum really was met, or
+          that the lender will really mark its book at that level — those rest on the signer's own systems
+          and on the fact that a false attestation is permanent, attributable, and made against their own
+          money. That residual trust is deliberate, and it is disclosed to anyone taking a seat rather than
+          glossed.</p>
+
+      </article>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="cols">
+      <div><h3>Benchmarks</h3><ul>
+        <li><a href="/benchmarks/CBTC">CBTC Close</a></li>
+        <li><a href="/benchmarks/cETH">cETH Close</a></li>
+        <li><a href="/benchmarks/LX1">LX1 NAV</a></li>
+        <li><a href="/benchmarks/">All benchmarks</a></li>
+      </ul></div>
+      <div><h3>Documents</h3><ul>
+        <li><a href="/methodology">Methodology</a></li>
+        <li><a href="/governance">Governance</a></li>
+        <li><a href="/licensing">Licensing</a></li>
+        <li><a href="/regulatory">Regulatory</a></li>
+      </ul></div>
+      <div><h3>CrossDesk</h3><ul>
+        <li><a href="/about">About</a></li>
+        <li><a href="/news">News</a></li>
+        <li><a href="/showcase/">Showcase</a></li>
+        <li><a href="/pitch/">Pitch</a></li>
+        <li><a href="https://github.com/superbigroach/canton-dvp-settlement-desk" rel="noopener">Source</a></li>
+      </ul></div>
+      <div><h3>Desk</h3><ul>
+        <li><a href="/desk/">Open the desk</a></li>
+        <li><a href="/desk/login">Sign in</a></li>
+      </ul></div>
+    </div>
+    <div class="disclosure">
+      <p><strong>Sandbox disclosure.</strong> The values on this site come from a hosted sandbox: an
+        in-process Canton ledger running the CrossDesk Daml packages, seeded with a demonstration book.
+        It is not a Canton Network participant and it is not connected to DevNet, TestNet or MainNet.
+        No fixing has been published for commercial use, and no committee has been convened.
+        Instruments in the demonstration basket are issued for demonstration.</p>
+      <p>CrossDesk is not an authorised or registered benchmark administrator in any jurisdiction.
+        Nothing on this site is a price, a valuation, a benchmark for regulatory purposes, investment
+        advice, or an offer of any financial product or service. See <a href="/regulatory">Regulatory</a>.</p>
+    </div>
+    <p><strong>CrossDesk</strong> — attested fixings and atomic creation and redemption for tokenised
+      funds. Built on the <a href="https://www.canton.network" rel="noopener">Canton Network</a>.</p>
+    <p style="margin-top:16px">
+      <a href="mailto:s.borjas@lucilla.ca">s.borjas@lucilla.ca</a>
+      &nbsp;·&nbsp;
+      <a href="https://t.me/sb_lucilla" rel="noopener">@sb_lucilla</a>
+      &nbsp;·&nbsp;
+      <a href="https://www.linkedin.com/in/sborjasto/" rel="noopener">LinkedIn</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

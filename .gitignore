@@ -70,3 +70,4 @@ bin/
 deploy/demo/app.jar
 deploy/demo/crossdesk.dar
 deploy/demo/sandbox.log
+frontend/SANDBOX-LOGINS.local.txt

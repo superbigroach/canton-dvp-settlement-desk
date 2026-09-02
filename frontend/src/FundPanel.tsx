@@ -9,7 +9,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   api,
   errorMessage,
-  type PerpPosition,
   type Basket,
   type Instrument,
   type IndicativeNav,
@@ -22,6 +21,10 @@ interface Props {
   instruments: Instrument[];
   acting: string;
   onChanged: () => void; // refresh the desk's holdings after a create/redeem
+  // Every basket is also published as a `Fund` instrument so its shares can trade
+  // through the cross. Called after anything that can add or re-mark one, so the
+  // desk reloads its instrument list and the fund shows up in the Asset picker.
+  onInstrumentsChanged?: () => void;
   flash: (m: string) => void;
 }
 
@@ -34,7 +37,14 @@ interface Row {
   unitsPerShare: string;
 }
 
-export default function FundPanel({ parties, instruments, acting, onChanged, flash }: Props) {
+export default function FundPanel({
+  parties,
+  instruments,
+  acting,
+  onChanged,
+  onInstrumentsChanged,
+  flash,
+}: Props) {
   const people = parties.filter((p) => p.label.toLowerCase() !== 'sandbox');
   const assets = instruments.filter((i) => i.kind !== 'Cash');
 
@@ -53,16 +63,12 @@ export default function FundPanel({ parties, instruments, acting, onChanged, fla
   ]);
   const [participants, setParticipants] = useState<string[]>(['Alice', 'Bob']);
 
-  // Same reasoning as App.runAction: the arb is three ledger writes, so a double
-  // click could start a second create before the first finished and leave two hedges
-  // against one basket leg.
+  // Same reasoning as App.runAction: the arb is two ledger writes, so a double click
+  // could start a second basket leg before the first finished and leave two
+  // market-on-close orders resting against one create or redeem.
   const inFlight = useRef(false);
   const [busy, setBusy] = useState(false);
   const [step, setStep] = useState<string>('');
-  const [hedge, setHedge] = useState<PerpPosition | null>(null);
-  // Set when THIS session lodged a market-on-close order, so the auto-unwind only
-  // ever fires for a trade we placed — never for a hedge somebody else is running.
-  const [armed, setArmed] = useState(false);
   const [err, setErr] = useState<string>('');
 
   async function run<T>(fn: () => Promise<T>): Promise<T | undefined> {
@@ -194,50 +200,60 @@ export default function FundPanel({ parties, instruments, acting, onChanged, fla
     };
   }, [selected, navs]);
 
-  // AN OPEN HEDGE IS NOT ALLOWED TO GO QUIET. The auction settles the SHARE leg and
-  // leaves the perp exactly where it was, so between the cross printing and somebody
-  // remembering to close it, the desk is short a basket it no longer owns — a naked
-  // directional bet wearing the costume of an arbitrage. Poll for it, and while one is
-  // open the arb button becomes the unwind.
-  useEffect(() => {
-    if (!selected || !acting) {
-      setHedge(null);
-      return;
-    }
-    let alive = true;
-    const load = async () => {
-      try {
-        const ps = await api.perpPositions(acting);
-        if (!alive) return;
-        const open = ps.find((x) => x.instrumentId === selected) ?? null;
-        setHedge(open);
-
-        // THE HEDGE COMES OFF WHEN THE CROSS PRINTS, not when somebody remembers.
-        // A closing auction is a scheduled event — in a real venue it is the same
-        // instant every day — so an arbitrageur's hedge is meant to expire WITH it.
-        // We only act on an auction WE lodged into (`armed`), and only once our own
-        // order is no longer resting, which is precisely the moment it crossed.
-        if (open && armed) {
-          const moc = await api.mocState(selected, 'Close', acting, CASH).catch(() => null);
-          const stillResting = (moc?.orders ?? []).length > 0;
-          if (!stillResting && alive) {
-            setArmed(false);
-            await unwind();
-          }
-        }
-      } catch {
-        /* no perp market on this basket is a normal state */
-      }
-    };
-    void load();
-    const t = setInterval(load, 6000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, [selected, acting, busy, armed]);
-
   const sharesNum = Number((Number(shares) || 0).toFixed(10));
+
+  // WHAT THE ACTING PARTY ACTUALLY HOLDS gates every button below. A button that lets
+  // you press Redeem with no shares only teaches you the backend's error text.
+  const [held, setHeld] = useState<Record<string, number>>({});
+  const reloadHeld = useCallback(async () => {
+    try {
+      const hs = await api.holdings(acting);
+      const m: Record<string, number> = {};
+      for (const h of hs) m[h.instrumentId] = (m[h.instrumentId] ?? 0) + Number(h.amount);
+      setHeld(m);
+    } catch {
+      /* keep the last known holdings */
+    }
+  }, [acting]);
+  useEffect(() => {
+    void reloadHeld();
+  }, [reloadHeld]);
+
+  const sharesHeld = basket ? (held[basket.basketId] ?? 0) : 0;
+  const cashHeld = held[CASH] ?? 0;
+  const shortUnits = basket
+    ? basket.components
+        .map((c) => ({
+          id: c.instrumentId,
+          need: Number(c.unitsPerShare) * sharesNum,
+          have: held[c.instrumentId] ?? 0,
+        }))
+        .filter((c) => c.have + 1e-9 < c.need)
+    : [];
+  const canCreate = sharesNum > 0 && !!basket && shortUnits.length === 0;
+  const canRedeem = sharesNum > 0 && !!basket && sharesHeld + 1e-9 >= sharesNum;
+  // An unpriced buy reserves the collar ceiling (anchor + 10%) per share until the print.
+  const buyReserve = officialNav != null ? officialNav * 1.1 * sharesNum : 0;
+  const canRedeemBuy = canRedeem && cashHeld + 1e-9 >= buyReserve;
+  const createWhy = shortUnits.length
+    ? `needs ${shortUnits.map((c) => `${fmt(c.need)} ${c.id} (you hold ${fmt(c.have)})`).join(', ')}`
+    : '';
+  const redeemWhy =
+    basket && sharesHeld + 1e-9 < sharesNum
+      ? `needs ${fmt(sharesNum)} ${basket.basketId} (you hold ${fmt(sharesHeld)})`
+      : '';
+  const buyWhy =
+    canRedeem && cashHeld + 1e-9 < buyReserve
+      ? `buy MOC reserves ${fmt2(buyReserve)} ${CASH} (you hold ${fmt2(cashHeld)})`
+      : '';
+
+  // A create or redeem changes holdings AND may re-mark the fund instrument, so
+  // both the desk's holdings and its instrument list are refreshed.
+  function changed() {
+    onChanged();
+    onInstrumentsChanged?.();
+    void reloadHeld();
+  }
 
   async function create() {
     if (!basket) return;
@@ -248,7 +264,7 @@ export default function FundPanel({ parties, instruments, acting, onChanged, fla
         res.navPerShare != null ? ` · NAV ${fmt2(res.navPerShare)} ${CASH}/share` : ''
       }.`,
     );
-    onChanged();
+    changed();
     await loadBaskets();
   }
 
@@ -257,68 +273,47 @@ export default function FundPanel({ parties, instruments, acting, onChanged, fla
     const res = await run(() => api.basketRedeem({ basketId: basket.basketId, ap: acting, shares: sharesNum }));
     if (!res) return;
     flash(`Redeemed ${fmt(res.shares)} ${basket.basketId} in-kind — underlyings returned.`);
-    onChanged();
+    changed();
     await loadBaskets();
   }
 
   /**
    * THE WHOLE ARB, IN ORDER, OR NOT AT ALL.
    *
-   * Three ledger writes: the basket leg, the hedge, and the market leg. They are
+   * Two ledger writes: the basket leg at the signed NAV, then the opposite side in
+   * SHARES as an unpriced market-on-close order on the fund itself. They are
    * SEQUENTIAL on purpose — each one is a separate Daml transaction against a shared
-   * node, so firing them together would race, and a hedge that lands before the shares
-   * exist is a naked position rather than an arbitrage. If any leg fails the sequence
-   * STOPS and says which one, because the honest failure is "you are half in" and the
-   * dishonest one is a green toast over a broken book.
-   */
-  /**
-   * ALWAYS CREATE, THEN HEDGE. `goLong` picks the perp side and the market leg.
+   * node, so firing them together would race, and a sell that lands before the shares
+   * exist has nothing to deliver. If either leg fails the sequence STOPS and says which
+   * one, because the honest failure is "you are half in" and the dishonest one is a
+   * green toast over a broken book.
    *
-   * Shares go UP by `sharesNum` every time, which is the thing an operator can see and
-   * check against the balance. Creating leaves you long the basket, so SHORT is the leg
-   * that makes you flat and is the true arbitrage; LONG doubles the exposure and is a
-   * levered directional bet, offered because a desk should not refuse a trade it can
-   * price. The label says which is which.
+   * `redeem` picks the direction. Basket rich (units worth more than the signed NAV):
+   * redeem at the mark, buy the shares back at the close. Basket cheap: create at the
+   * mark, sell the shares at the close. Either way the position is flat once the Venue
+   * runs the cross — no synthetic leg, nothing left open to unwind.
    */
-  async function runArb(goLong: boolean) {
-    if (inFlight.current) return;
+  async function runArb(redeem: boolean) {
+    if (inFlight.current || !basket || sharesNum <= 0) return;
     inFlight.current = true;
-    if (!basket || sharesNum <= 0) return;
     setBusy(true);
     setErr('');
     try {
-      // 1 — the basket leg, settled at the SIGNED mark.
-      setStep('creating…');
-      await api.basketCreate({ basketId: basket.basketId, ap: acting, shares: sharesNum });
+      // 1 — the basket leg, settled at the SIGNED mark. Redeem hands shares back for the
+      //     basket; create delivers the basket for shares. Both are in kind, atomic.
+      setStep(redeem ? 'redeeming…' : 'creating…');
+      if (redeem) await api.basketRedeem({ basketId: basket.basketId, ap: acting, shares: sharesNum });
+      else await api.basketCreate({ basketId: basket.basketId, ap: acting, shares: sharesNum });
 
-      // 2 — the hedge. Sized to the shares just created/redeemed and collateralised at
-      //     roughly 5x, so the position is levered the way an arb desk would run it
-      //     rather than tying up the full notional. Failing here is not fatal: the
-      //     basket leg already settled, so we report it and keep going.
-      const px = nav?.navPerShare ?? 0;
-      let hedged = true;
-      try {
-        setStep('hedging…');
-        await api.openPerpPosition({
-          trader: acting,
-          side: goLong ? 'Long' : 'Short',
-          size: Number(sharesNum.toFixed(10)),
-          instrumentId: basket.basketId,
-          collateral: Number(((sharesNum * px) / 5).toFixed(2)),
-          cashInstrument: CASH,
-        });
-      } catch (e) {
-        hedged = false;
-        setErr(`basket leg settled, hedge did not: ${errorMessage(e)}`);
-      }
-
-      // 3 — the market leg. Unpriced market-on-close: it takes the print the auction
-      //     discovers and is allocated ahead of every limit order, which is exactly
-      //     what an AP wants when the whole trade is "be flat by the close".
+      // 2 — the market leg, the opposite side, in SHARES, at the close. Unpriced
+      //     market-on-close on the fund instrument itself: it takes the print the
+      //     venue's cross discovers, which is anchored to the official NAV. Redeemed?
+      //     buy the shares back at the close. Created? sell them at the close. Flat
+      //     by the close — nothing synthetic, nothing left open.
       setStep('sending MOC…');
       await api.mocOrder({
         trader: acting,
-        side: goLong ? 'Buy' : 'Sell',
+        side: redeem ? 'Buy' : 'Sell',
         quantity: Number(sharesNum.toFixed(10)),
         instrumentId: basket.basketId,
         cashInstrument: CASH,
@@ -326,54 +321,12 @@ export default function FundPanel({ parties, instruments, acting, onChanged, fla
         orderType: 'Market',
       });
 
-      setArmed(true);
       flash(
-        `Created ${fmt(sharesNum)} ${basket.basketId}` +
-          `${hedged ? `, went ${goLong ? 'long' : 'short'} the perp` : ''}` +
-          `, ${goLong ? 'buy' : 'sell'} MOC resting for the close.`,
+        `${redeem ? 'Redeemed' : 'Created'} ${fmt(sharesNum)} ${basket.basketId} at the signed NAV, ` +
+          `${redeem ? 'buy' : 'sell'} MOC resting — it prints when the Venue runs the close.`,
       );
-      onChanged();
+      changed();
       await loadBaskets();
-    } catch (e) {
-      setErr(errorMessage(e));
-    } finally {
-      inFlight.current = false;
-      setStep('');
-      setBusy(false);
-    }
-  }
-
-  /**
-   * CLOSE THE WHOLE ARB — BOTH LEGS.
-   *
-   * Closing only the perp leaves the market-on-close order resting, so the position
-   * that was hedged a second ago executes NAKED at the cross. That is strictly worse
-   * than never hedging: the operator believes they are flat and the ledger disagrees.
-   * So the resting MOC is withdrawn FIRST — if that fails we stop and keep the hedge,
-   * because an unhedged live order is the one state this function exists to prevent.
-   */
-  async function unwind() {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    if (!hedge) return;
-    setBusy(true);
-    setErr('');
-    try {
-      setStep('pulling MOC…');
-      const moc = await api.mocState(selected, 'Close', acting, CASH).catch(() => null);
-      for (const ord of moc?.orders ?? []) {
-        await api.withdrawOrder(ord.contractId, acting);
-      }
-      setArmed(false);
-
-      setStep('closing hedge…');
-      const r = await api.closePerpPosition(hedge.contractId, acting);
-      flash(
-        `Arb closed — resting MOC pulled and ${hedge.side} ${fmt(hedge.size)} ${hedge.instrumentId} unwound` +
-          (r?.payout != null ? `, ${fmt2(Number(r.payout))} ${CASH} returned.` : '.'),
-      );
-      setHedge(null);
-      onChanged();
     } catch (e) {
       setErr(errorMessage(e));
     } finally {
@@ -433,6 +386,9 @@ export default function FundPanel({ parties, instruments, acting, onChanged, fla
     flash(`Basket ${res.basketId} defined — ${components.length} components, ${participants.length} APs.`);
     setSelected(res.basketId);
     setShowDefine(false);
+    // The new basket is now a listed `Fund` instrument — tell the desk so it shows
+    // up in the Asset picker without a page refresh.
+    onInstrumentsChanged?.();
     await loadBaskets();
   }
 
@@ -549,10 +505,11 @@ export default function FundPanel({ parties, instruments, acting, onChanged, fla
           {/* THE ARB, AS ONE ACTION.
               The gap that matters to an authorised participant is between what the
               basket is WORTH RIGHT NOW (indicative) and the signed number create and
-              redeem settle at (official). Capturing it is three legs — the basket, a
-              hedge, and a market order — and doing them by hand across three cards is
-              how a leg gets left on. One button per direction runs the sequence in
-              order and stops at the first failure rather than half-arbing. */}
+              redeem settle at (official). Capturing it is two legs — the basket leg
+              at the signed NAV, and a market-on-close order on the shares the other
+              way — and doing them by hand across two cards is how a leg gets left
+              off. One button per direction runs the sequence in order and stops at
+              the first failure rather than half-arbing. */}
           {arb && (
             <div className={`arb-strip ${!arbLive ? 'flat' : arb.above ? 'premium' : 'discount'}`}>
               <div className="arb-head">
@@ -569,61 +526,47 @@ export default function FundPanel({ parties, instruments, acting, onChanged, fla
                 <p className="arb-play muted">
                   Inside the {ARB_DEADBAND_BPS} bp noise band — the basket is worth what the signed
                   mark says, which is what a working create/redeem mechanism looks like from the
-                  outside. The trade below still runs if you want it.
+                  outside. Either side below still runs if you want it; the close prints when the Venue runs the cross.
                 </p>
               ) : (
                 <p className="arb-play">
                   {arb.above ? (
-                    <>The underlyings are worth <strong>more</strong> than the signed NAV. Hand back
-                    a share carried at the lower official mark and take the richer units:{' '}
-                    <strong>redeem</strong>, <strong>long</strong> the perp to go flat, and buy back{' '}
-                    <strong>market-on-close</strong>.</>
+                    <>The underlyings are worth <strong>more</strong> than the signed NAV. Hand shares back
+                    at the lower official mark, take the richer units, and buy the shares back at the
+                    close: <strong>redeem</strong>, then <strong>buy market-on-close</strong>.</>
                   ) : (
-                    <>The underlyings are worth <strong>less</strong> than the signed NAV. Deliver
-                    the cheap units and receive a share carried at the higher official mark:{' '}
-                    <strong>create</strong>, <strong>short</strong> the perp to go flat, and sell{' '}
-                    <strong>market-on-close</strong>.</>
+                    <>The underlyings are worth <strong>less</strong> than the signed NAV. Deliver the cheap
+                    units, receive shares at the higher official mark, and sell them at the close:{' '}
+                    <strong>create</strong>, then <strong>sell market-on-close</strong>.</>
                   )}{' '}
                   <strong className="mono">{fmt2(arb.edgePerShare * sharesNum)}</strong> {CASH} on{' '}
                   {fmt(sharesNum)} shares.
                 </p>
               )}
-              {/* BOTH SIDES, ALWAYS. A desk does not tell a trader which way to go —
-                  it shows the gap and offers either side. The strip RECOMMENDS one
-                  (highlighted) because the arithmetic points somewhere, but a trader
-                  who reads the market differently, or who is closing out an earlier
-                  leg, must be able to take the other side without arguing with the UI. */}
+              {/* BOTH SIDES, ALWAYS, IN FIXED COLOURS. Green creates and sells at the close;
+                  red redeems and buys at the close. Nothing is "recommended" — the strip
+                  above says which way the gap points, and the trader decides. A side you
+                  cannot fund is disabled, and the reason is printed under it. */}
               <div className="arb-actions">
                 <button
-                  className={!arb.above ? 'primary' : 'ghost'}
-                  disabled={busy || sharesNum <= 0}
+                  className="primary venue"
+                  disabled={busy || !canCreate}
                   onClick={() => void runArb(false)}
-                  title="Create the shares and short the perp so you are flat on price — the true arbitrage. Sell into the close."
+                  title="Deliver the basket, receive shares at the signed NAV, sell them market-on-close. Prints when the Venue runs the close."
                 >
-                  {busy ? step || 'Working…' : `Create ${fmt(sharesNum)} · SHORT hedge · sell MOC`}
-                  {!arb.above && arbLive && <span className="rec">recommended</span>}
+                  {busy ? step || 'Working…' : `Create ${fmt(sharesNum)} · sell MOC`}
+                  {!busy && createWhy && <span className="rec">{createWhy}</span>}
                 </button>
                 <button
-                  className={arb.above ? 'primary venue' : 'ghost'}
-                  disabled={busy || sharesNum <= 0}
+                  className="primary sell"
+                  disabled={busy || !canRedeemBuy}
                   onClick={() => void runArb(true)}
-                  title="Create the shares and go long as well — a levered directional bet, not a hedge. Buys into the close."
+                  title="Hand shares back at the signed NAV, receive the basket, buy the shares back market-on-close. Prints when the Venue runs the close."
                 >
-                  {busy ? step || 'Working…' : `Create ${fmt(sharesNum)} · LONG · buy MOC`}
-                  {arb.above && arbLive && <span className="rec">recommended</span>}
+                  {busy ? step || 'Working…' : `Redeem ${fmt(sharesNum)} · buy MOC`}
+                  {!busy && (redeemWhy || buyWhy) && <span className="rec">{redeemWhy || buyWhy}</span>}
                 </button>
               </div>
-              {hedge && (
-                <p className="hedge-open">
-                  <strong>Hedge open</strong> — {hedge.side} {fmt(hedge.size)} {hedge.instrumentId} at{' '}
-                  {fmt2(hedge.entryPrice)}. It unwinds <strong>automatically when the cross prints</strong>.
-                  {' '}
-                  <button className="link" disabled={busy} onClick={() => void unwind()}>
-                    close it now instead
-                  </button>{' '}
-                  if you want out before the close.
-                </p>
-              )}
             </div>
           )}
 
@@ -643,10 +586,10 @@ export default function FundPanel({ parties, instruments, acting, onChanged, fla
             <div className="field">
               <span>As {acting} (AP)</span>
               <div className="row tight">
-                <button className="primary" disabled={busy || sharesNum <= 0} onClick={create}>
+                <button className="primary" disabled={busy || !canCreate} onClick={create} title={createWhy || 'Deliver the basket, receive shares — in kind, atomic'}>
                   {busy ? '…' : `Create ${fmt(sharesNum)}`}
                 </button>
-                <button className="ghost" disabled={busy || sharesNum <= 0} onClick={redeem}>
+                <button className="ghost" disabled={busy || !canRedeem} onClick={redeem} title={redeemWhy || 'Hand shares back, receive the basket — in kind, atomic'}>
                   Redeem {fmt(sharesNum)}
                 </button>
               </div>

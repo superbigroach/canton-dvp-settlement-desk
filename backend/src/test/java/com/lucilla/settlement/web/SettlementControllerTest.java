@@ -12,6 +12,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -246,5 +247,50 @@ class SettlementControllerTest {
                         .param("at", "2026-08-06T14:00:00Z").param("anchor", "2400.25"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.anchorConsistent").value(false));
+    }
+
+    // ---- Funds are instruments: listed, and priced at their live NAV ----------
+
+    @Test
+    void instruments_listsAFundAtItsOfficialNav_notItsSeedMark() throws Exception {
+        when(ledger.resolveParty("Issuer")).thenReturn("Issuer");
+        when(ledger.instrumentsVisibleTo("Issuer")).thenReturn(List.of(
+                new LedgerService.InstrumentView("cETH", "CryptoWrapped", "", new BigDecimal("2400")),
+                // The fund's OWN record still carries the NAV it was defined at...
+                new LedgerService.InstrumentView("LX1", "Fund", "Lucilla Crypto Index",
+                        new BigDecimal("890"))));
+        // ...but the desk quotes what its components are worth NOW.
+        when(ledger.referencePriceOf("Issuer", "LX1")).thenReturn(Optional.of(new BigDecimal("912.5")));
+
+        mvc.perform(get("/api/instruments"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value("cETH"))
+                .andExpect(jsonPath("$[0].referencePrice").value(2400))
+                .andExpect(jsonPath("$[1].id").value("LX1"))
+                .andExpect(jsonPath("$[1].kind").value("Fund"))
+                .andExpect(jsonPath("$[1].referencePrice").value(912.5));
+    }
+
+    @Test
+    void defineBasket_definesAndListsThroughTheOneAtomicPath() throws Exception {
+        when(ledger.resolveParty("Bank")).thenReturn("Bank");
+        when(ledger.resolveParty("Auditor")).thenReturn("Auditor");
+        when(ledger.resolveParty("Alice")).thenReturn("Alice");
+        when(ledger.resolveParty("Bob")).thenReturn("Bob");
+        when(ledger.defineBasket(eq("Bank"), eq("Auditor"), eq("LX1"), any(), eq("USDC"),
+                any(), eq(List.of("Alice", "Bob")), any(), any(), any()))
+                .thenReturn("basket#1");
+
+        mvc.perform(post("/api/basket")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"administrator":"Bank","basketId":"LX1",
+                                 "components":[{"instrumentId":"cETH","unitsPerShare":0.1},
+                                               {"instrumentId":"CBTC","unitsPerShare":0.01}],
+                                 "participants":["Alice","Bob"]}
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.basketCid").value("basket#1"))
+                .andExpect(jsonPath("$.basketId").value("LX1"));
     }
 }

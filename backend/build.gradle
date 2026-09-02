@@ -59,6 +59,15 @@ dependencies {
     implementation 'com.daml:bindings-java:3.4.0-snapshot.20250714.14008.0.vfe77a32d'
     implementation 'com.daml:bindings-rxjava:3.4.0-snapshot.20250714.14008.0.vfe77a32d'
 
+    // Firebase Authentication — verifies the ID token the app sends on every
+    // /api/** call (docs/PRODUCT-PLAN.md §3). Only token verification is used, so
+    // the Firestore and Storage clients (and the newer gRPC line they drag in, which
+    // would collide with the Daml bindings' grpc-netty) are excluded.
+    implementation('com.google.firebase:firebase-admin:9.4.3') {
+        exclude group: 'com.google.cloud', module: 'google-cloud-firestore'
+        exclude group: 'com.google.cloud', module: 'google-cloud-storage'
+    }
+
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }

@@ -60,6 +60,59 @@ Defaults already point at `localhost:6865`, plaintext, no auth. Override via env
 LEDGER_HOST=localhost LEDGER_PORT=6865 LEDGER_TLS=false ./gradlew bootRun
 ```
 
+### Identity: `AUTH_MODE` (docs/PRODUCT-PLAN.md §3)
+
+Every `/api/**` route except the public set (`/api/benchmarks*`, `/api/series/*`,
+`/api/methodology`, `/api/diag`, `/api/health`, `/api/signer-protocol`,
+`/api/fixing-schedule`) sits behind a servlet filter. The jar's **default is
+`AUTH_MODE=firebase`**, which verifies `Authorization: Bearer <Firebase ID token>`
+against project `crossdesk-devnet-app` with Application Default Credentials — on a
+laptop with no ADC every non-public call is a 401. For local work run in sandbox mode:
+
+```bash
+AUTH_MODE=sandbox ./gradlew bootRun
+```
+
+In sandbox mode:
+
+- the pre-existing operator-desk routes (`/api/instruments`, `/api/committee/…`,
+  `/api/fixing/…`, `/api/basket/…`, …) work with **no headers at all**, exactly as
+  before — the anonymous caller is treated as `admin` with no party of its own;
+- the new product routes take `X-Sandbox-User: <email>`; the value may also be the
+  e-mail's local part or the party label, so `X-Sandbox-User: Issuer` is the issuer
+  seat and `X-Sandbox-User: s.borjas@lucilla.ca` is the admin. The roster is
+  `src/main/resources/users.yml` (override the whole file with `USERS_FILE=/path`).
+
+In firebase mode the operator-desk routes require role `admin`; the new routes
+require their role (§5). An API key minted at `POST /api/signer/apikey` works in both
+modes as `Authorization: Bearer ck_…`.
+
+An **admin** may add `X-Act-As: <email>` to any call to take that user's role, party,
+seat and instruments for that one request (the app's user switcher). `/api/me` then
+carries `actingAs: { by: <admin email> }`; every mutating call made this way writes an
+`admin.act_as` event naming both. A non-admin sending the header gets 403. The roster
+for the switcher is `GET /api/admin/users`.
+
+State the desk keeps itself — users edited through the API, signer settings and API
+key hashes, the append-only `fixing_events.jsonl`, the strike schedule — lives under
+`DATA_DIR` (default `./data`). The scheduler (`SCHEDULER_ENABLED`, default on) strikes
+CBTC and cETH at 16:00 Europe/London and LX1 once both components have a row; the
+proposing party is `OPERATOR_PARTY` (default `Issuer`).
+
+```bash
+# who am I
+curl -s -H 'X-Sandbox-User: issuer' localhost:8080/api/me | jq
+# what is there to sign
+curl -s -H 'X-Sandbox-User: issuer' localhost:8080/api/proposals | jq
+# strike CBTC now (admin), then sign as the issuer seat
+curl -s -X POST -H 'X-Sandbox-User: s.borjas@lucilla.ca' localhost:8080/api/admin/strike/CBTC | jq
+curl -s -X POST -H 'X-Sandbox-User: issuer' -H 'Content-Type: application/json' \
+  -d '{"checks":["attestor-quorum","reserves-current","reserves-cover-supply","redemption-queue-clear"]}' \
+  localhost:8080/api/proposals/<cid>/confirm | jq
+# the public series
+curl -s localhost:8080/api/series/CBTC | jq
+```
+
 ### Option B — the container (from repo root)
 
 ```bash

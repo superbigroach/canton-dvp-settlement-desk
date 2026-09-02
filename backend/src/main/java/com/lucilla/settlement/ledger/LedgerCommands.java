@@ -1,5 +1,6 @@
 package com.lucilla.settlement.ledger;
 
+import com.daml.ledger.javaapi.data.codegen.HasCommands;
 import com.daml.ledger.javaapi.data.codegen.Update;
 import com.lucilla.settlement.model.holding.Holding;
 import com.lucilla.settlement.model.marketonclose.ordercommitment.ReserveHolding;
@@ -711,6 +712,75 @@ public final class LedgerCommands {
                 Optional.ofNullable(feeReceiver),
                 Optional.ofNullable(creationFee),
                 Optional.ofNullable(redemptionFee)).create();
+    }
+
+    // ---- The fund instrument: a basket's tradeable face -----------------------
+
+    /** The {@code Instrument.kind} of a basket's share. What the desk's pickers key on. */
+    public static final String FUND_KIND = "Fund";
+
+    /**
+     * How deep a basket-of-baskets is valued before the desk stops. A fund that holds a
+     * fund is legal; a fund that (through however many hops) holds itself is a NAV that
+     * references its own NAV, and the only honest value for that is "none".
+     */
+    public static final int MAX_FUND_NESTING = 4;
+
+    /**
+     * Publish a basket as an {@code Instrument} of kind {@link #FUND_KIND}, so its shares
+     * trade through the same sealed cross as any other asset.
+     *
+     * <p>A {@code BasketDefinition} alone is a recipe: it says what a share is MADE OF,
+     * not that a share is a thing the desk lists, anchors a close on, or shows in a
+     * picker — all of which read {@code Instrument} contracts. Without this record a
+     * fund can be created and redeemed but never traded, which is exactly the half-built
+     * state the desk used to ship in.
+     *
+     * <p>Signed by the {@code administrator}, who issues the share, and observed by
+     * {@code depository} — the desk's reference-data party ("Issuer"), so the one query
+     * that feeds every picker and every anchor sees it. {@code navPerShare} is the
+     * official NAV at definition; it is the anchor's SEED, not its source of truth — the
+     * desk re-derives a fund's mark from its components' attested marks on every read.
+     */
+    public static Update<?> createFundInstrument(
+            String administrator, String depository, String basketId, String description,
+            Optional<BigDecimal> navPerShare) {
+        return createInstrument(administrator, depository, basketId, "1", FUND_KIND,
+                description, navPerShare);
+    }
+
+    /**
+     * Several commands in ONE submission — one transaction, one atomic outcome.
+     *
+     * <p>Used to define a basket and list its fund instrument together: two separate
+     * submissions can leave a basket that exists but cannot trade, which is the exact
+     * failure this pairing exists to remove.
+     */
+    public static HasCommands atomically(HasCommands... parts) {
+        List<HasCommands> all = List.of(parts);
+        return () -> HasCommands.toCommands(all);
+    }
+
+    /**
+     * NAV per share = Σ (unitsPerShare × mark), or EMPTY if any component has no mark.
+     *
+     * <p>Empty rather than a partial sum on purpose: a fund with an unpriced leg has no
+     * NAV, and reporting the priced legs' total as if it were one would understate every
+     * share by exactly the missing leg. {@code markOf} is injected so the same arithmetic
+     * values a basket from the ledger's marks, a test's table, or a nested fund's own NAV.
+     */
+    public static Optional<BigDecimal> navPerShare(
+            List<LedgerService.ComponentView> components,
+            java.util.function.Function<String, Optional<BigDecimal>> markOf) {
+        BigDecimal total = BigDecimal.ZERO;
+        for (LedgerService.ComponentView c : components) {
+            Optional<BigDecimal> mark = markOf.apply(c.instrumentId());
+            if (mark.isEmpty()) {
+                return Optional.empty();
+            }
+            total = total.add(c.unitsPerShare().multiply(mark.get()));
+        }
+        return Optional.of(total);
     }
 
     /** AP requests to create {@code shares} units, delivering the underlyings. No fee. */

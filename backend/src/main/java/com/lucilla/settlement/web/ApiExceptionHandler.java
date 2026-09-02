@@ -78,6 +78,13 @@ public class ApiExceptionHandler {
         return body(status, message, f, null);
     }
 
+    /** 401 / 403 raised inside a controller (a role the filter admitted, a party it lacks). */
+    @ExceptionHandler(com.lucilla.settlement.auth.AuthException.class)
+    public ResponseEntity<Map<String, Object>> handleAuth(com.lucilla.settlement.auth.AuthException e) {
+        log.info("API {} auth: {}", e.status().value(), e.getMessage());
+        return body(e.status(), e.getMessage(), null, null);
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, Object>> handleBadArg(IllegalArgumentException e) {
         log.info("API 400 bad request: {}", e.getMessage());
@@ -102,6 +109,21 @@ public class ApiExceptionHandler {
      * usable sentence, because {@code NoSuchElementException}'s own message ("No value
      * present") explains nothing to anybody.
      */
+    /** A named resource that does not exist — a benchmark id, a fund id, a user — is a 404. */
+    @ExceptionHandler(NotFound.class)
+    public ResponseEntity<Map<String, Object>> handleNotFound(NotFound e) {
+        log.info("API 404: {}", e.getMessage());
+        return body(HttpStatus.NOT_FOUND, e.getMessage(), null, null);
+    }
+
+    /** Thrown by the product routes for an unknown id. Extends NoSuchElementException so an
+     *  {@code orElseThrow} site can raise it directly; the more specific handler above wins. */
+    public static class NotFound extends NoSuchElementException {
+        public NotFound(String message) {
+            super(message);
+        }
+    }
+
     @ExceptionHandler(NoSuchElementException.class)
     public ResponseEntity<Map<String, Object>> handleMissing(NoSuchElementException e) {
         log.warn("API 409 expected contract/value not present", e);

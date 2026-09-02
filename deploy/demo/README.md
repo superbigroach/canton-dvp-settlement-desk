@@ -55,8 +55,46 @@ gcloud run deploy crossdesk-demo \
   --memory 4Gi --cpu 2 \
   --timeout 900 \
   --min-instances 0 --max-instances 1 \
-  --port 8080
+  --port 8080 \
+  --set-env-vars AUTH_MODE=sandbox
 ```
+
+### `AUTH_MODE` — the identity switch (docs/PRODUCT-PLAN.md §3)
+
+The jar's built-in default is `AUTH_MODE=firebase`: every non-public `/api/**` call
+must carry `Authorization: Bearer <Firebase ID token>` (project
+`crossdesk-devnet-app`, verified with firebase-admin under the revision's own service
+account — nothing to configure), and the operator desk's routes become **admin-only**.
+
+The service is deployed with **`AUTH_MODE=sandbox` for now**, because the operator
+desk at `/desk` does not send a token yet. In sandbox mode the desk's existing routes
+work with no headers (as today) and the new portal routes take
+`X-Sandbox-User: <email | local part | party label>` — `Issuer`, `bank`,
+`alice@sandbox.crossdesk`, `s.borjas@lucilla.ca` all resolve against the roster in
+`backend/src/main/resources/users.yml`.
+
+An admin may act as any other mapped user for one request with `X-Act-As: <email>`
+(logged as an `admin.act_as` event on every write; 403 for non-admins).
+
+**Flip it when the app ships its login page:**
+
+```bash
+gcloud run services update crossdesk-demo \
+  --project crossdesk-devnet-app --region us-central1 \
+  --update-env-vars AUTH_MODE=firebase
+```
+
+Public routes never need a token in either mode: `/api/benchmarks`,
+`/api/benchmarks/{id}`, `/api/series/{id}[.csv]`, `/api/methodology`, `/api/diag`,
+`/api/health`, `/api/signer-protocol`, `/api/fixing-schedule`.
+
+Two more knobs worth knowing: `SCHEDULER_ENABLED=false` stops the 16:00 strike runner
+(it is on by default and proposes into the seeded committee as `Issuer`), and
+`DEMO_SEED_COMMITTEE=false` stops the boot-time seeding of the 2-of-3
+Issuer/Bank/Venue committee the signer portal signs against. Both belong OFF on a
+real participant. The desk's own state (events, users, schedule) is under
+`/app/data` inside the container and is as ephemeral as the sandbox — consistent, and
+honest.
 
 `app.jar` and `crossdesk.dar` are gitignored. They are build output, and a 42 MB
 jar in git history is not worth the convenience of skipping two `cp` commands.

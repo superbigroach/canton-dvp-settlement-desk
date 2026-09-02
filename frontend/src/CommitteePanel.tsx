@@ -73,7 +73,27 @@ export default function CommitteePanel({ parties, instruments, asset, flash }: P
 
   // Committee config
   // Default members exist on BOTH the local sandbox and the devnet roster.
-  const [members, setMembers] = useState<string[]>(['Issuer', 'Bank', 'Auditor']);
+  // THE SEATS PERSIST WITH THE COMMITTEE. A refresh used to reset the chips to the
+  // default trio while the cid still pointed at a committee with different members,
+  // so the buttons offered "Auditor confirms" against a committee Auditor is not on.
+  const MEMBERS_KEY = 'crossdesk.committeeMembers';
+  const [members, setMembers] = useState<string[]>(() => {
+    try {
+      const raw = window.localStorage.getItem(MEMBERS_KEY);
+      const arr = raw ? (JSON.parse(raw) as unknown) : null;
+      if (Array.isArray(arr) && arr.every((x) => typeof x === 'string') && arr.length) return arr;
+    } catch {
+      /* fall through to the default */
+    }
+    return ['Issuer', 'Bank', 'Auditor'];
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(MEMBERS_KEY, JSON.stringify(members));
+    } catch {
+      /* private browsing */
+    }
+  }, [members]);
   const [threshold, setThreshold] = useState<number>(2);
   const [admin] = useState<string>('Issuer');
   // THE COMMITTEE IS A CONTRACT ON THE LEDGER; ONLY THE POINTER WAS IN MEMORY.
@@ -240,12 +260,55 @@ export default function CommitteePanel({ parties, instruments, asset, flash }: P
       return await fn();
     } catch (e) {
       // ONE formatter for every failure path — see errorMessage() in api.ts.
-      setErr(errorMessage(e));
+      const msg = errorMessage(e);
+      // THE SANDBOX RESEEDS ON EVERY RESTART. A committee cid remembered from before
+      // a restart points at a contract that no longer exists, and every action on it
+      // fails with CONTRACT_NOT_FOUND. Forget it and say so, instead of showing the
+      // same opaque error on every click.
+      if (/CONTRACT_NOT_FOUND/i.test(msg) && committeeCid) {
+        forgetCommittee();
+        setErr('The ledger was reset since this committee was stood up, so it no longer exists. Stand up a new one.');
+        return undefined;
+      }
+      setErr(msg);
       return undefined;
     } finally {
       setBusy(false);
     }
   }
+
+  function forgetCommittee() {
+    setCommitteeCid('');
+    setProposalCid('');
+    setAttestors([]);
+    setFixCid('');
+  }
+
+  // ON LOAD, CHECK THE REMEMBERED COMMITTEE IS STILL ON THE LEDGER. The ledger end
+  // only moves forward within one sandbox life; if it is now BEHIND where it was when
+  // the committee was stood up, the sandbox restarted and the committee is gone.
+  const END_KEY = 'crossdesk.committeeLedgerEnd';
+  useEffect(() => {
+    if (!committeeCid) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const d = await api.diag();
+        const now = Number(d?.ledger?.ledgerEnd ?? NaN);
+        const then = Number(window.localStorage.getItem(END_KEY) ?? NaN);
+        if (!cancelled && Number.isFinite(now) && Number.isFinite(then) && now < then) {
+          forgetCommittee();
+          setErr('The ledger was reset since this committee was stood up, so it no longer exists. Stand up a new one.');
+        }
+      } catch {
+        /* diag unavailable — leave the committee and let the next action decide */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function toggleMember(label: string) {
     setMembers((m) => (m.includes(label) ? m.filter((x) => x !== label) : [...m, label]));
@@ -260,6 +323,12 @@ export default function CommitteePanel({ parties, instruments, asset, flash }: P
     setProposalCid('');
     setAttestors([]);
     setFixCid('');
+    try {
+      const d = await api.diag();
+      window.localStorage.setItem(END_KEY, String(d?.ledger?.ledgerEnd ?? ''));
+    } catch {
+      /* best effort */
+    }
     flash(`Committee stood up — ${threshold}-of-${members.length} members must attest each fix.`);
   }
 
@@ -500,6 +569,11 @@ export default function CommitteePanel({ parties, instruments, asset, flash }: P
           <button className="primary" disabled={busy || members.length < 1 || !!committeeCid} onClick={createCommittee}>
             {committeeCid ? '✓ Committee live' : `Stand up ${threshold}-of-${members.length}`}
           </button>
+          {committeeCid && (
+            <button className="ghost small" disabled={busy} onClick={forgetCommittee} title="Forget this committee and stand up a new one">
+              new committee
+            </button>
+          )}
         </div>
       </div>
 

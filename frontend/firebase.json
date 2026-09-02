@@ -39,6 +39,38 @@
         "destination": "/participate/index.html"
       },
       {
+        "source": "/benchmarks",
+        "destination": "/benchmarks/index.html"
+      },
+      {
+        "source": "/benchmarks/**",
+        "destination": "/benchmarks/benchmark.html"
+      },
+      {
+        "source": "/methodology",
+        "destination": "/methodology.html"
+      },
+      {
+        "source": "/governance",
+        "destination": "/governance.html"
+      },
+      {
+        "source": "/licensing",
+        "destination": "/licensing.html"
+      },
+      {
+        "source": "/regulatory",
+        "destination": "/regulatory.html"
+      },
+      {
+        "source": "/news",
+        "destination": "/news.html"
+      },
+      {
+        "source": "/about",
+        "destination": "/about.html"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }
@@ -118,6 +150,33 @@
       },
       {
         "source": "/showcase/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, max-age=0, must-revalidate"
+          }
+        ]
+      },
+      {
+        "source": "/@(methodology|governance|licensing|regulatory|news|about)",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, max-age=0, must-revalidate"
+          }
+        ]
+      },
+      {
+        "source": "/benchmarks",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, max-age=0, must-revalidate"
+          }
+        ]
+      },
+      {
+        "source": "/benchmarks/**",
         "headers": [
           {
             "key": "Cache-Control",

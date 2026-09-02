@@ -15,6 +15,66 @@
 > cBTC (4.16 real cBTC was claimed through the CIP-56 registry flow and is held **separately**; the
 > fund's own cBTC and cETH legs are self-issued test assets).
 
+## The product, as of 2 September 2026 — start here if you want to use it
+
+CrossDesk is now two things, and neither is an exchange:
+
+1. **A benchmark administrator** for tokenised assets on Canton that no administrator covers. It
+   proposes a price at a scheduled time, has a K-of-N committee of parties with money on the mark
+   attest it on-ledger, and publishes it with its tier, age and signers.
+2. **A transfer agent** for funds that reference those fixings: creation and redemption of fund
+   shares in kind, at the attested NAV, atomically, by authorised participants.
+
+Everything below runs today against a **hosted Canton sandbox**, not a network participant. The
+sandbox reseeds on every restart. Nothing here is a regulated benchmark, and the site says so.
+
+| Surface | URL | Who |
+|---|---|---|
+| Site: benchmarks, methodology, governance, licensing, regulatory | https://crossdesk-devnet-app.web.app | public |
+| Public API: `GET /api/benchmarks`, `/api/benchmarks/{id}`, `/api/series/{id}` (+`.csv`), `/api/methodology`, `/api/signer-protocol`, `/api/fixing-schedule` | same host | licensees, anyone |
+| App: sign in, role portals | https://crossdesk-devnet-app.web.app/desk/login | signers, APs, fund admins, auditors, admin |
+| Operator desk (the original one-page desk) | `/desk/ops` | admin |
+
+**Roles and what each sees after sign-in** (Firebase Authentication; the backend maps email → role,
+party, seat in `backend/src/main/resources/users.yml`):
+
+- **signer** (seat `issuer`, `lender` or `venue`, per instrument) — `/desk/sign`: open proposals for
+  its instruments with its own seat's named conditions, Confirm / Refuse-with-reason (the venue
+  attaches its traded range; the ledger refuses a range that excludes the price), history, and
+  Settings: webhook URL + secret, notification email, tolerances, an API key so a machine signs
+  instead of a person.
+- **ap** (authorised participant) — `/desk/ap`: funds, last official NAV and indicative, the units
+  delivered or received for N shares, fee, cutoff, Create / Redeem, receipts.
+- **fund_admin** — `/desk/fund`: NAV series, shares outstanding, create/redeem log, fees.
+- **admin** — `/desk/admin`: strike schedule per benchmark and Strike now, committee roster, users
+  and roles, events with CSV export, fallback status; plus a **View as** switcher that runs the app
+  as any other user (`X-Act-As`, logged as an event).
+- **auditor** — `/desk/audit`: everything, read-only.
+
+**The fixing lifecycle in production.** Scheduler proposes at the strike time (16:00 London by
+default; benchmark print × last attested factor for a wrapped asset, Σ units × marks for a fund) →
+every seat is notified (signed webhook, email, in-app) → each seat's service or user confirms a
+checklist of facts only it can see, or refuses naming the condition → re-strike inside the window →
+finalize at K → funds re-mark → series row published with tier 1. If K is not reached: tier 3
+carries benchmark × last factor automatically, tier 4 carries the prior fixing flagged, tier 5
+publishes a gap. Tier 2 (alternate seats) is a stub. Every step is an event; the audit export is
+those events.
+
+**Sandbox identities** (also Firebase users; passwords are local, not in the repo): admin
+`s.borjas@lucilla.ca`; signers `issuer@`, `lender@`, `venue@sandbox.crossdesk` (parties Issuer,
+Bank, Venue); APs `alice@`, `bob@sandbox.crossdesk`; `fund@sandbox.crossdesk` (fund admin, party
+Bank); `auditor@sandbox.crossdesk`. With `AUTH_MODE=sandbox` on the backend the header
+`X-Sandbox-User: <email>` stands in for a token, which is how the hosted demo currently runs.
+
+**What is not done**, in the order it matters: a Canton Network participant (the standing blocker);
+a real committee (no institution has signed a fixing); issuer and lender claims are recorded, not
+verified — only the venue's range is ledger-enforced; alternate-seat fallback (tier 2); a private
+`Contribution` template; the reference signer service as a shippable container; legal pages;
+benchmark-administrator recognition. See [`docs/PRODUCT-PLAN.md`](docs/PRODUCT-PLAN.md) for the
+build plan and the API contract, and [`docs/PRODUCTION_CHECKLIST.md`](docs/PRODUCTION_CHECKLIST.md).
+
+---
+
 **Traders lodge sealed orders nobody else can see. At the close the venue uncrosses
 the whole book in one atomic transaction: it *discovers* a single clearing price
 from the orders themselves, allocates by price priority, moves every leg, and

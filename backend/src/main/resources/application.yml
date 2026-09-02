@@ -49,6 +49,57 @@ registry:
   # resolve that exact package (REGISTRY_PIN_INTERFACE_PACKAGE=false).
   pin-interface-package: ${REGISTRY_PIN_INTERFACE_PACKAGE:true}
 
+# ---------------------------------------------------------------------------
+# The demo fund. `Test:initialize` seeds instruments and holdings but no basket, so
+# at start-up the desk defines LX1 (0.10 cETH + 0.01 CBTC, administered by Bank, APs
+# Alice and Bob) through the same path as POST /api/basket — and lists it as a `Fund`
+# instrument so it trades. Idempotent; never fails the boot. Turn it OFF on a real
+# participant: DEMO_SEED_FUND=false.
+# ---------------------------------------------------------------------------
+demo:
+  seed-fund: ${DEMO_SEED_FUND:true}
+  # Also seed a K-of-N committee (Issuer, Bank, Venue; K=2) at start-up, so the signer
+  # portal has something to sign against on a fresh sandbox. Off on a participant.
+  seed-committee: ${DEMO_SEED_COMMITTEE:true}
+
+# ---------------------------------------------------------------------------
+# Identity — docs/PRODUCT-PLAN.md §3. Every /api/** route except the public set is
+# behind a Firebase ID token verified by firebase-admin.
+#
+#   AUTH_MODE=firebase   (default in the image) verify `Authorization: Bearer <id token>`
+#                        against Firebase project `auth.firebase-project-id`, using
+#                        Application Default Credentials (the Cloud Run service account).
+#                        The pre-existing operator-desk routes then require role `admin`.
+#   AUTH_MODE=sandbox    accept `X-Sandbox-User: <email>` instead of a token, and let the
+#                        pre-existing operator-desk routes through with NO headers at all
+#                        (that is what the live desk on the hosted sandbox does today).
+#
+# An API key (`Authorization: Bearer ck_…`, minted at POST /api/signer/apikey) is
+# accepted in BOTH modes as the user it was issued to.
+# ---------------------------------------------------------------------------
+auth:
+  mode: ${AUTH_MODE:firebase}
+  firebase-project-id: ${FIREBASE_PROJECT_ID:crossdesk-devnet-app}
+  # The user → role/party mapping seed. Defaults to the classpath users.yml; point
+  # USERS_FILE at a file on disk to override the whole roster without a rebuild.
+  users-file: ${USERS_FILE:classpath:users.yml}
+  # Where the desk keeps its own state: users edited through the API, signer
+  # settings, the append-only fixing_events log, the strike schedule. In-memory
+  # plus a file so a restart does not lose the audit trail. On the in-memory
+  # sandbox image this directory is as ephemeral as the ledger, which is honest.
+  data-dir: ${DATA_DIR:./data}
+  # The party the desk PROPOSES as when the scheduler strikes (must be a committee
+  # member). "Issuer" in the sandbox; on a participant, the administrator's own party.
+  operator-party: ${OPERATOR_PARTY:Issuer}
+
+# The strike runner (docs/PRODUCT-PLAN.md §4/§5 "Scheduler"). Safe on the sandbox:
+# everything it does is a ledger command any operator could send by hand, plus an
+# event. Off with SCHEDULER_ENABLED=false.
+scheduler:
+  enabled: ${SCHEDULER_ENABLED:true}
+  # How often the runner looks at the clock, in milliseconds.
+  tick-ms: ${SCHEDULER_TICK_MS:60000}
+
 spring:
   application:
     name: canton-dvp-desk

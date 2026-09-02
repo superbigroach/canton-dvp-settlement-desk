@@ -334,4 +334,51 @@ class LedgerCommandsTest {
                 .isEqualTo("SettlementBatch");
         assertThat(LedgerCommands.sealedOrderTemplateId().getEntityName()).isEqualTo("SealedOrder");
     }
+
+    // ---- The fund instrument: a basket's tradeable face ----------------------
+
+    @Test
+    void createFundInstrument_isAnInstrumentOfKindFundNamedAfterTheBasket() {
+        CreateCommand c = asCreate(LedgerCommands.createFundInstrument(
+                "Bank", "Issuer", "LX1", "Lucilla Crypto Index",
+                Optional.of(new BigDecimal("890.0"))));
+        assertThat(c.getTemplateId().getEntityName()).isEqualTo("Instrument");
+        String args = c.getCreateArguments().toString();
+        assertThat(args).contains("LX1").contains(LedgerCommands.FUND_KIND).contains("890.0")
+                .contains("Bank").contains("Issuer");
+    }
+
+    @Test
+    void atomically_putsTheBasketAndItsFundInstrumentInOneSubmission() {
+        var basket = LedgerCommands.createBasket("Bank", "Auditor", "LX1", "LX1", "USDC",
+                List.of(LedgerCommands.basketComponent("cETH", new BigDecimal("0.10")),
+                        LedgerCommands.basketComponent("CBTC", new BigDecimal("0.01"))),
+                List.of("Alice", "Bob"));
+        var fund = LedgerCommands.createFundInstrument("Bank", "Issuer", "LX1", "LX1",
+                Optional.empty());
+        List<Command> cmds = LedgerCommands.atomically(basket, fund).commands();
+        assertThat(cmds).hasSize(2);
+        assertThat(cmds.get(0).asCreateCommand().orElseThrow().getTemplateId().getEntityName())
+                .isEqualTo("BasketDefinition");
+        assertThat(cmds.get(1).asCreateCommand().orElseThrow().getTemplateId().getEntityName())
+                .isEqualTo("Instrument");
+    }
+
+    @Test
+    void navPerShare_sumsUnitsTimesMarks_andIsEmptyWhenALegIsUnmarked() {
+        var legs = List.of(
+                new LedgerService.ComponentView("cETH", new BigDecimal("0.10")),
+                new LedgerService.ComponentView("CBTC", new BigDecimal("0.01")));
+        java.util.Map<String, BigDecimal> marks = java.util.Map.of(
+                "cETH", new BigDecimal("2400"), "CBTC", new BigDecimal("65000"));
+
+        // 0.10 * 2400 + 0.01 * 65000 = 240 + 650 = 890
+        assertThat(LedgerCommands.navPerShare(legs, id -> Optional.ofNullable(marks.get(id))))
+                .contains(new BigDecimal("890.00"));
+
+        // A fund with an unpriced leg has NO NAV — never a partial one.
+        assertThat(LedgerCommands.navPerShare(legs,
+                id -> id.equals("cETH") ? Optional.of(new BigDecimal("2400")) : Optional.empty()))
+                .isEmpty();
+    }
 }

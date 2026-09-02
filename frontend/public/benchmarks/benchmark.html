@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Benchmark — CrossDesk</title>
+<meta name="description" content="A CrossDesk fixing: current value with tier, attestation and age; publish time; the committee seats that attest it; the last thirty published rows with CSV download; referencing products; usage and licensing.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="CrossDesk">
+<meta property="og:title" content="CrossDesk benchmark">
+<meta property="og:description" content="An attested daily fixing on Canton — value, tier, signers and the published series.">
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" content="#0A0B0F">
+<link rel="stylesheet" href="/site/site.css?v=5">
+<script defer src="/site/site.js?v=5"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="/" aria-label="CrossDesk home">Cross<span>Desk</span></a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <a href="/benchmarks/">Benchmarks</a>
+      <a href="/methodology">Methodology</a>
+      <a href="/governance">Governance</a>
+      <a href="/licensing">Licensing</a>
+      <a href="/regulatory">Regulatory</a>
+      <a href="/news">News</a>
+      <a href="/about">About</a>
+      <a href="/desk/login">Sign in</a>
+      <a href="/desk/" class="btn">Open the desk</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="section hero" data-notfound hidden aria-labelledby="nf-h">
+  <div class="wrap">
+    <div class="kicker"><span>Benchmarks</span> <span class="rule"></span></div>
+    <h1 id="nf-h">No such benchmark.</h1>
+    <p class="lede">The identifier in the address does not match a CrossDesk fixing.</p>
+    <div class="cta-row"><a class="btn ghost" href="/benchmarks/">All benchmarks →</a></div>
+  </div>
+</section>
+
+<div data-benchmark-page>
+
+<section class="section hero" aria-labelledby="bm-h">
+  <div class="wrap">
+    <div class="kicker"><span><a href="/benchmarks/" style="color:inherit;text-decoration:none">Benchmarks</a> · <span data-id>—</span></span> <span class="rule"></span></div>
+    <h1 id="bm-h" data-name>Benchmark</h1>
+    <p class="lede" data-description></p>
+
+    <div class="hero-value skeleton" aria-live="polite">
+      <div>
+        <div class="src" style="margin-bottom:8px">Official fixing</div>
+        <div class="value" data-value>—</div>
+      </div>
+      <dl>
+        <div><dt>As of</dt><dd data-asof>—</dd></div>
+        <div><dt>Attestation</dt><dd data-attested class="pending">—</dd></div>
+        <div><dt>Tier</dt><dd data-tier>—</dd></div>
+        <div><dt>Age</dt><dd data-age>—</dd></div>
+        <div><dt>Publish time</dt><dd data-publish>—</dd></div>
+        <div><dt>Quoted in</dt><dd data-quoted>—</dd></div>
+        <div><dt>Signers on this fixing</dt><dd data-signers>—</dd></div>
+      </dl>
+    </div>
+    <p class="api-state" data-api-state>Loading live value…</p>
+    <p class="src">Publication is immediate on completion of the strike; there is no embargo. The
+      strike time is the moment quorum is reached, not the moment the transaction commits.</p>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="about-h">
+  <div class="wrap">
+    <div class="kicker"><span>About</span> <span class="rule"></span></div>
+    <h2 id="about-h">What this fixing measures.</h2>
+    <p>The price at which the instrument is deemed to transact for settlement purposes at the strike
+      time. It is not an estimate of fair value, a prediction, or an indication of where the
+      instrument may trade next. It is the number contracts settle against.</p>
+    <div data-about></div>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="seats-h">
+  <div class="wrap">
+    <div class="kicker"><span>Attested by</span> <span class="rule"></span></div>
+    <h2 id="seats-h">Seats, and what each one asserts.</h2>
+    <p>A fixing needs K of N. No seat is asked for an opinion about the price; each asserts a fact
+      only it can see, by naming the conditions it verified. The composition is opposed by design —
+      the issuer favours par, the lender favours prudence, the venue favours the observed print — and
+      no single interest may hold K. Conditions are served by <code>/api/signer-protocol</code>
+      (<span data-protocol-version>SIGNER_PROTOCOL v1</span>), the same list the ledger-facing API accepts.</p>
+    <div class="grid g3" data-seats></div>
+    <p class="src" style="margin-top:20px">Recommended N = 5, K = 3; pilot minimum N = 3, K = 2. No committee has yet been
+      convened for this identifier; the seats above describe the protocol, not occupants. See
+      <a href="/governance">Governance</a>.</p>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="series-h">
+  <div class="wrap">
+    <div class="kicker"><span>Published series</span> <span class="rule"></span></div>
+    <h2 id="series-h">The last thirty rows.</h2>
+    <div class="cta-row" style="margin-top:0">
+      <a class="btn ghost" data-csv href="#" download>Download CSV</a>
+      <a class="btn ghost" data-json href="#">JSON</a>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <caption>Fixings, newest first</caption>
+        <thead><tr>
+          <th scope="col">Date</th>
+          <th scope="col" class="num">Price</th>
+          <th scope="col" class="num">Reference price</th>
+          <th scope="col" class="num">Factor</th>
+          <th scope="col">Tier</th>
+          <th scope="col">K of N</th>
+          <th scope="col">Note</th>
+        </tr></thead>
+        <tbody data-series>
+          <tr><td colspan="7">Loading series…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="src" data-series-state></p>
+    <p class="src">Reference price and factor are populated for wrapped assets, where the struck
+      price is the benchmark print multiplied by the committee-attested par factor. A restatement is a
+      new record referencing the original; the original is never deleted.</p>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="ref-h">
+  <div class="wrap">
+    <div class="kicker"><span>Referencing products</span> <span class="rule"></span></div>
+    <h2 id="ref-h">Products that settle against this fixing.</h2>
+    <ul data-referencing></ul>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="lic-h">
+  <div class="wrap">
+    <div class="kicker"><span>Usage &amp; licensing</span> <span class="rule"></span></div>
+    <h2 id="lic-h">Reading is free. Settling against it is licensed.</h2>
+    <p>Referencing a CrossDesk fixing in a contract requires a licence from the administrator; reading a
+      published fixing does not. Three licence types — use, redistribution, display — cover the
+      different rights, and only the first is meaningful money.</p>
+    <div class="cta-row">
+      <a class="btn" href="/licensing">Licensing →</a>
+      <a class="btn ghost" href="mailto:s.borjas@lucilla.ca?subject=CrossDesk%20licensing">Contact</a>
+    </div>
+  </div>
+</section>
+
+<section class="section plain" aria-labelledby="docs-h">
+  <div class="wrap">
+    <div class="kicker"><span>Documentation</span> <span class="rule"></span></div>
+    <h2 id="docs-h">Rulebooks.</h2>
+    <ul>
+      <li><a href="/methodology">Fixing methodology</a> — the waterfall, strike time, inputs, restatement, cessation, and what is and is not implemented.</li>
+      <li><a href="/methodology#signer-protocol">Signer protocol</a> — the seats, the named conditions, the mechanism, and the LIBOR objection answered.</li>
+      <li><a href="/governance">Governance</a> — committee model, fallback waterfall, restatement.</li>
+      <li><a href="/regulatory">Regulatory</a> — what CrossDesk is not, and the mapping to the IOSCO Principles.</li>
+    </ul>
+  </div>
+</section>
+
+</div>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="cols">
+      <div><h3>Benchmarks</h3><ul>
+        <li><a href="/benchmarks/CBTC">CBTC Close</a></li>
+        <li><a href="/benchmarks/cETH">cETH Close</a></li>
+        <li><a href="/benchmarks/LX1">LX1 NAV</a></li>
+        <li><a href="/benchmarks/">All benchmarks</a></li>
+      </ul></div>
+      <div><h3>Documents</h3><ul>
+        <li><a href="/methodology">Methodology</a></li>
+        <li><a href="/governance">Governance</a></li>
+        <li><a href="/licensing">Licensing</a></li>
+        <li><a href="/regulatory">Regulatory</a></li>
+      </ul></div>
+      <div><h3>CrossDesk</h3><ul>
+        <li><a href="/about">About</a></li>
+        <li><a href="/news">News</a></li>
+        <li><a href="/showcase/">Showcase</a></li>
+        <li><a href="/pitch/">Pitch</a></li>
+        <li><a href="https://github.com/superbigroach/canton-dvp-settlement-desk" rel="noopener">Source</a></li>
+      </ul></div>
+      <div><h3>Desk</h3><ul>
+        <li><a href="/desk/">Open the desk</a></li>
+        <li><a href="/desk/login">Sign in</a></li>
+      </ul></div>
+    </div>
+    <div class="disclosure">
+      <p><strong>Sandbox disclosure.</strong> The values on this site come from a hosted sandbox: an
+        in-process Canton ledger running the CrossDesk Daml packages, seeded with a demonstration book.
+        It is not a Canton Network participant and it is not connected to DevNet, TestNet or MainNet.
+        No fixing has been published for commercial use, and no committee has been convened.
+        Instruments in the demonstration basket are issued for demonstration.</p>
+      <p>CrossDesk is not an authorised or registered benchmark administrator in any jurisdiction.
+        Nothing on this site is a price, a valuation, a benchmark for regulatory purposes, investment
+        advice, or an offer of any financial product or service. See <a href="/regulatory">Regulatory</a>.</p>
+    </div>
+    <p><strong>CrossDesk</strong> — attested fixings and atomic creation and redemption for tokenised
+      funds. Built on the <a href="https://www.canton.network" rel="noopener">Canton Network</a>.</p>
+    <p style="margin-top:16px">
+      <a href="mailto:s.borjas@lucilla.ca">s.borjas@lucilla.ca</a>
+      &nbsp;·&nbsp;
+      <a href="https://t.me/sb_lucilla" rel="noopener">@sb_lucilla</a>
+      &nbsp;·&nbsp;
+      <a href="https://www.linkedin.com/in/sborjasto/" rel="noopener">LinkedIn</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

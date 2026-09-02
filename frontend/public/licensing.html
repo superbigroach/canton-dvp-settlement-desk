@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Licensing — CrossDesk</title>
+<meta name="description" content="How a CrossDesk fixing is licensed: use, redistribution and display licences; who pays what — the fund issuer licenses the fixing, the authorised participant pays a flat fee per order, committee signers never pay and are never paid, asset issuers never pay.">
+<link rel="canonical" href="https://crossdesk-devnet-app.web.app/licensing">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="CrossDesk">
+<meta property="og:title" content="CrossDesk licensing">
+<meta property="og:description" content="Three licence types, who pays what, and why an official price is priced like a benchmark rather than like fund accounting.">
+<meta property="og:url" content="https://crossdesk-devnet-app.web.app/licensing">
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" content="#0A0B0F">
+<link rel="stylesheet" href="/site/site.css?v=5">
+<script defer src="/site/site.js?v=5"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="/" aria-label="CrossDesk home">Cross<span>Desk</span></a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <a href="/benchmarks/">Benchmarks</a>
+      <a href="/methodology">Methodology</a>
+      <a href="/governance">Governance</a>
+      <a href="/licensing">Licensing</a>
+      <a href="/regulatory">Regulatory</a>
+      <a href="/news">News</a>
+      <a href="/about">About</a>
+      <a href="/desk/login">Sign in</a>
+      <a href="/desk/" class="btn">Open the desk</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="section hero" aria-labelledby="h">
+  <div class="wrap">
+    <div class="kicker"><span>Usage &amp; licensing</span> <span class="rule"></span></div>
+    <h1 id="h">Showing a number is not the same as settling a contract against it.</h1>
+    <p class="lede">Reading a published CrossDesk fixing is free. Referencing one in a contract — a fund
+      prospectus, a margin agreement, a liquidation rule — requires a licence from the administrator.
+      The same number is licensed more than once, to different people, for different rights. That is
+      standard benchmark practice, not double-charging.</p>
+    <div class="cta-row">
+      <a class="btn" href="mailto:s.borjas@lucilla.ca?subject=CrossDesk%20licensing">Enquire about a licence</a>
+      <a class="btn ghost" href="/benchmarks/">See the benchmarks →</a>
+    </div>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="types-h">
+  <div class="wrap">
+    <div class="kicker"><span>Three licence types</span> <span class="rule"></span></div>
+    <h2 id="types-h">Use. Redistribute. Display.</h2>
+    <div class="grid g3">
+      <div class="card buy">
+        <h3>1. Use / reference licence</h3>
+        <p><strong>Who:</strong> fund and ETP issuers, lenders — anyone whose contract settles against the fixing.</p>
+        <p><strong>Grants:</strong> the right to reference the fixing in a contract.</p>
+        <p><strong>Structure:</strong> a flat annual fee plus basis points on the assets that reference it — the index-licensing convention, priced against the AUM of the referencing products only, never per lookup.</p>
+      </div>
+      <div class="card">
+        <h3>2. Redistribution / vendor licence</h3>
+        <p><strong>Who:</strong> oracles, data vendors, terminals.</p>
+        <p><strong>Grants:</strong> the right to carry and redisplay the fixing to their own users.</p>
+        <p><strong>Structure:</strong> flat, per vendor, at feed level. Redistribution never substitutes for the use licence: where a fund reads the number is a distribution question; whether its contract settles against it is a licensing question.</p>
+      </div>
+      <div class="card">
+        <h3>3. Display licence</h3>
+        <p><strong>Who:</strong> websites, dashboards.</p>
+        <p><strong>Grants:</strong> the right to show the fixing, attributed.</p>
+        <p><strong>Structure:</strong> free or nominal. Display tiers may receive delayed or end-of-day values; the live feed is the paid tier.</p>
+      </div>
+    </div>
+    <p class="src" style="margin-top:22px">Scope can be a single fixing, a family (one issuer's products), or the full
+      feed. Feed-level is the natural unit for redistribution.</p>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="who-h">
+  <div class="wrap">
+    <div class="kicker"><span>Who pays what</span> <span class="rule"></span></div>
+    <h2 id="who-h">Not every counterparty is a customer.</h2>
+    <p>Some are ingredients, some are signers, some are distribution. The fund licenses the fixing; the
+      authorised participant pays per order; they are different companies buying different things — the
+      same shape as an index fund paying the index licence while its authorised participants pay creation
+      fees to the fund and nothing to the index provider.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th scope="col">Who</th><th scope="col">Licence?</th><th scope="col">Per order?</th><th scope="col">What they actually are</th></tr></thead>
+        <tbody>
+          <tr><td><strong>A fund / ETP issuer</strong></td><td class="mono">Yes</td><td class="mono">No</td><td>The customer. Licenses the fixing its product settles against.</td></tr>
+          <tr><td><strong>An authorised participant / market maker</strong></td><td class="mono">No</td><td class="mono">Yes, per order</td><td>The transaction payer. A flat fee per creation or redemption order.</td></tr>
+          <tr><td><strong>A lender</strong></td><td class="mono">Maybe, small</td><td class="mono">No</td><td>A committee seat, and the reason the number matters. May license separately if its own contracts reference the fixing.</td></tr>
+          <tr><td><strong>An asset issuer</strong> (the issuer of a wrapped token)</td><td class="mono">No</td><td class="mono">No</td><td>Distribution and a committee seat. Never a payer.</td></tr>
+          <tr><td><strong>A venue</strong></td><td class="mono">No</td><td class="mono">No</td><td>Distribution and a committee seat. Benefits from volume, pays nothing.</td></tr>
+          <tr><td><strong>An oracle / data vendor</strong></td><td class="mono">Redistribution, small</td><td class="mono">No</td><td>A channel.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">
+      <span class="dot"></span>
+      <p><strong>Committee signers never pay, and are never paid.</strong> They already have money riding on the
+        mark; attestation is a by-product of a position they hold. Paying an attestor turns them into a hired
+        referee; charging them kills the supply of credibility. One committee serves unlimited licensees. A
+        party may both sign and license, papered separately so neither is leverage over the other.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="fee-h">
+  <div class="wrap">
+    <div class="kicker"><span>Creation and redemption</span> <span class="rule"></span></div>
+    <h2 id="fee-h">A flat fee per order. Not basis points.</h2>
+    <p>An issuer charges the authorised participant a flat fee per creation unit to cover the cost of
+      processing, precisely because it must not scale with the size of the trade — that would tax the
+      arbitrage that keeps the fund glued to its NAV. <strong>The toll is on the turnstile, not on the
+      flow.</strong></p>
+    <div class="grid g3">
+      <div class="card"><h3>Charged atomically</h3><p>The fee settles in the same transaction that mints or burns the shares, from cash the AP disclosed when placing the order. No invoice, no terms, no collections.</p></div>
+      <div class="card"><h3>No credit risk</h3><p>No disclosed cash, no creation. The administrator cannot fail to be paid, and the AP cannot be charged for an order that did not settle.</p></div>
+      <div class="card"><h3>No reconciliation</h3><p>The receipt records the fee immutably, per order. The fee receiver need not be the administrator, so the fund's own administrator can be paid on the same rail.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="why-h">
+  <div class="wrap">
+    <div class="kicker"><span>Why an official price is priced like a benchmark</span> <span class="rule"></span></div>
+    <h2 id="why-h">Same computation. Two price tags.</h2>
+    <div class="vs">
+      <div class="card">
+        <div class="lab">Calculating a NAV</div>
+        <div class="fig">0.325<small> bp</small></div>
+        <p>What a fund accountant charges to strike a daily NAV. Disclosed by Brown Brothers Harriman in an SEC filing — and it fell 19% at the last renewal. Fund accounting is a commodity because the marks are not in doubt.</p>
+      </div>
+      <div class="card">
+        <div class="lab">Publishing an official price</div>
+        <div class="fig">3<small> bp + $600k/yr</small></div>
+        <p>Approximately what the SPY trust pays S&amp;P Dow Jones for the index it settles against: 0.03% of the daily size of the trust plus an annual licence fee of $600,000, stated in the trust's own filing.</p>
+      </div>
+    </div>
+    <p class="punch">One is accounting. One is a benchmark. Ten to fifteen times the money for the same arithmetic.</p>
+    <p>CrossDesk sells the second thing: the official price a contract settles against, aimed at marks
+      people actually argue about — wrapped assets, baskets, funds whose underlying market is closed —
+      where administration already commands a multiple of the commodity rate. If your assets are T-bills
+      during market hours, you do not need CrossDesk, and this page says so.</p>
+    <p class="src">0.325 bp: BBH Trust, Form N-CSR · 3 bp + $600,000: SPDR S&amp;P 500 ETF Trust, Form N-30D.
+      Rates for a CrossDesk licence are agreed per engagement and are deliberately below the incumbent index
+      licensors; no rate card is published. No party has yet licensed a CrossDesk fixing.</p>
+  </div>
+</section>
+
+<section class="section plain" aria-labelledby="contact-h">
+  <div class="wrap">
+    <h2 id="contact-h">Usage &amp; licensing — contact.</h2>
+    <p>For a use licence, a redistribution agreement, or a display attribution, write to the administrator.
+      For a committee seat, see <a href="/governance">Governance</a>.</p>
+    <div class="cta-row">
+      <a class="btn" href="mailto:s.borjas@lucilla.ca?subject=CrossDesk%20licensing">s.borjas@lucilla.ca</a>
+    </div>
+    <p class="src">Software licences for the CrossDesk code itself (the Daml packages, backend and desk) are a
+      separate matter, governed by the repository's proprietary licence; enquiries to the same address.</p>
+  </div>
+</section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="cols">
+      <div><h3>Benchmarks</h3><ul>
+        <li><a href="/benchmarks/CBTC">CBTC Close</a></li>
+        <li><a href="/benchmarks/cETH">cETH Close</a></li>
+        <li><a href="/benchmarks/LX1">LX1 NAV</a></li>
+        <li><a href="/benchmarks/">All benchmarks</a></li>
+      </ul></div>
+      <div><h3>Documents</h3><ul>
+        <li><a href="/methodology">Methodology</a></li>
+        <li><a href="/governance">Governance</a></li>
+        <li><a href="/licensing">Licensing</a></li>
+        <li><a href="/regulatory">Regulatory</a></li>
+      </ul></div>
+      <div><h3>CrossDesk</h3><ul>
+        <li><a href="/about">About</a></li>
+        <li><a href="/news">News</a></li>
+        <li><a href="/showcase/">Showcase</a></li>
+        <li><a href="/pitch/">Pitch</a></li>
+        <li><a href="https://github.com/superbigroach/canton-dvp-settlement-desk" rel="noopener">Source</a></li>
+      </ul></div>
+      <div><h3>Desk</h3><ul>
+        <li><a href="/desk/">Open the desk</a></li>
+        <li><a href="/desk/login">Sign in</a></li>
+      </ul></div>
+    </div>
+    <div class="disclosure">
+      <p><strong>Sandbox disclosure.</strong> The values on this site come from a hosted sandbox: an
+        in-process Canton ledger running the CrossDesk Daml packages, seeded with a demonstration book.
+        It is not a Canton Network participant and it is not connected to DevNet, TestNet or MainNet.
+        No fixing has been published for commercial use, and no committee has been convened.
+        Instruments in the demonstration basket are issued for demonstration.</p>
+      <p>CrossDesk is not an authorised or registered benchmark administrator in any jurisdiction.
+        Nothing on this site is a price, a valuation, a benchmark for regulatory purposes, investment
+        advice, or an offer of any financial product or service. See <a href="/regulatory">Regulatory</a>.</p>
+    </div>
+    <p><strong>CrossDesk</strong> — attested fixings and atomic creation and redemption for tokenised
+      funds. Built on the <a href="https://www.canton.network" rel="noopener">Canton Network</a>.</p>
+    <p style="margin-top:16px">
+      <a href="mailto:s.borjas@lucilla.ca">s.borjas@lucilla.ca</a>
+      &nbsp;·&nbsp;
+      <a href="https://t.me/sb_lucilla" rel="noopener">@sb_lucilla</a>
+      &nbsp;·&nbsp;
+      <a href="https://www.linkedin.com/in/sborjasto/" rel="noopener">LinkedIn</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

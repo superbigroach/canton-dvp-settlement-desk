@@ -59,11 +59,29 @@ public class SettlementController {
 
     private final LedgerService ledger;
     private final com.lucilla.settlement.ledger.MarketData marketData;
+    private final org.springframework.context.ApplicationEventPublisher events;
 
     public SettlementController(LedgerService ledger,
-                                com.lucilla.settlement.ledger.MarketData marketData) {
+                                com.lucilla.settlement.ledger.MarketData marketData,
+                                org.springframework.context.ApplicationEventPublisher events) {
         this.ledger = ledger;
         this.marketData = marketData;
+        this.events = events;
+    }
+
+    /**
+     * Announce a fixing-lifecycle step (docs/PRODUCT-PLAN.md §4: "every step writes an
+     * event"). Published as a Spring event so the audit log and the signer webhooks hear
+     * it without this controller depending on either — and so the existing web-slice
+     * tests, which construct this controller with only the ledger mocked, keep passing.
+     * Never fails the request: the ledger step has already happened.
+     */
+    private void announce(com.lucilla.settlement.events.LifecycleEvent e) {
+        try {
+            events.publishEvent(e);
+        } catch (RuntimeException ex) {
+            log.warn("lifecycle event {} for {} not recorded: {}", e.kind(), e.instrument(), ex.toString());
+        }
     }
 
     /**
@@ -112,12 +130,23 @@ public class SettlementController {
 
     // ---- Instruments ------------------------------------------------------
 
-    /** The published instruments (id, kind, reference/close price) for the pickers. */
+    /**
+     * The published instruments (id, kind, reference/close price) for the pickers.
+     *
+     * <p>A basket appears here as an instrument of kind {@code Fund} — that is what lets
+     * the Asset picker list it and the cross anchor on it. Its quoted price is the
+     * basket's OFFICIAL NAV per share, derived live from its components' attested marks
+     * (see {@link LedgerService#referencePriceOf}), not the seed mark stored on the fund's
+     * own record — so a committee re-strike of cETH moves LX1 on the next read.
+     */
     @GetMapping("/instruments")
     public List<Dtos.InstrumentResponse> instruments() {
         return ledger.instrumentsVisibleTo(ledger.resolveParty("Issuer")).stream()
                 .map(i -> new Dtos.InstrumentResponse(
-                        i.id(), i.kind(), i.description(), i.referencePrice()))
+                        i.id(), i.kind(), i.description(),
+                        LedgerCommands.FUND_KIND.equals(i.kind())
+                                ? ledger.referencePriceOf("Issuer", i.id()).orElse(i.referencePrice())
+                                : i.referencePrice()))
                 .toList();
     }
 
@@ -1204,6 +1233,11 @@ public class SettlementController {
                 blankTo(req.cashInstrument(), "USDC"), LedgerCommands.session(req.session()),
                 req.price(), blankTo(req.rationale(), ""));
         String propCid = ledger.submitForCreated(proposer, cmd, LedgerCommands.fixingProposalTemplateId());
+        announce(new com.lucilla.settlement.events.LifecycleEvent(
+                com.lucilla.settlement.events.FixingEvent.Kinds.PROPOSAL_CREATED, req.instrumentId(),
+                null, propCid, proposer, null, req.price(), null, null,
+                blankTo(req.rationale(), ""), null, Map.of("session", LedgerCommands.session(req.session()),
+                        "committeeCid", cid)));
         return created(new Dtos.CidResponse(propCid));
     }
 
@@ -1239,6 +1273,12 @@ public class SettlementController {
                 req.price(), blankTo(req.rationale(), ""),
                 req.ratePerAnnum(), dayCount, accrualFrom);
         String propCid = ledger.submitForCreated(proposer, cmd, LedgerCommands.fixingProposalTemplateId());
+        announce(new com.lucilla.settlement.events.LifecycleEvent(
+                com.lucilla.settlement.events.FixingEvent.Kinds.PROPOSAL_CREATED, req.instrumentId(),
+                null, propCid, proposer, null, req.price(), null, null,
+                blankTo(req.rationale(), ""), null, Map.of("session", LedgerCommands.session(req.session()),
+                        "committeeCid", cid, "ratePerAnnum", String.valueOf(req.ratePerAnnum()),
+                        "dayCount", dayCount)));
 
         return created(new Dtos.FixingProposalResponse(propCid,
                 req.instrumentId(), blankTo(req.cashInstrument(), "USDC"),
@@ -1259,6 +1299,9 @@ public class SettlementController {
         String member = ledger.resolveParty(req.member());
         String next = ledger.submitForCreated(member,
                 LedgerCommands.confirmFixing(cid, member), LedgerCommands.fixingProposalTemplateId());
+        announce(new com.lucilla.settlement.events.LifecycleEvent(
+                com.lucilla.settlement.events.FixingEvent.Kinds.PROPOSAL_CONFIRMED, null,
+                cid, next, member, null, null, null, null, null, List.of(), Map.of()));
         return created(new Dtos.CidResponse(next));
     }
 
@@ -1283,6 +1326,10 @@ public class SettlementController {
         String propCid = ledger.submitForCreated(proposer, cmd, LedgerCommands.fixingProposalTemplateId());
 
         BigDecimal strike = req.benchmarkPrice().multiply(req.parFactor());
+        announce(new com.lucilla.settlement.events.LifecycleEvent(
+                com.lucilla.settlement.events.FixingEvent.Kinds.PROPOSAL_CREATED, req.instrumentId(),
+                null, propCid, proposer, null, strike, req.benchmarkPrice(), req.parFactor(),
+                req.rationale(), null, Map.of("session", sess, "committeeCid", cid)));
         // Publish the discount in basis points as well as the raw factor. A factor of
         // 0.998 is easy to read past; "20 bp below par" is the number a risk committee
         // actually argues about, and it is the whole reason this endpoint exists.
@@ -1345,6 +1392,14 @@ public class SettlementController {
                         Optional.ofNullable(req.observedLow()),
                         Optional.ofNullable(req.observedHigh())),
                 LedgerCommands.fixingProposalTemplateId());
+        java.util.Map<String, Object> evidence = new java.util.LinkedHashMap<>();
+        evidence.put("protocolRef", ref);
+        if (req.observedLow() != null) evidence.put("observedLow", String.valueOf(req.observedLow()));
+        if (req.observedHigh() != null) evidence.put("observedHigh", String.valueOf(req.observedHigh()));
+        announce(new com.lucilla.settlement.events.LifecycleEvent(
+                com.lucilla.settlement.events.FixingEvent.Kinds.PROPOSAL_CONFIRMED, null,
+                cid, next, member, req.role().trim().toLowerCase(), null, null, null, null,
+                req.checksPassed(), evidence));
         return created(new Dtos.CidResponse(next));
     }
 
@@ -1395,12 +1450,25 @@ public class SettlementController {
                 note = "mark republished at the attested fix";
                 log.info("FIXING {} finalised; {} mark -> {} (attested by {} of {})",
                         fixCid, fix.instrumentId(), newMark, fix.attestors().size(), fix.threshold());
+                // A fund that holds this instrument is worth something different now. The
+                // desk already values it live off its components; this keeps the fund's
+                // OWN on-ledger record saying the same number. Best-effort, same as above.
+                List<String> funds = ledger.remarkFundsHolding(fix.instrumentId());
+                if (!funds.isEmpty()) {
+                    note += "; fund NAV re-marked for " + String.join(", ", funds);
+                }
             }
         } catch (RuntimeException e) {
             note = "the fix is final, but the mark could not be republished: " + e.getMessage();
             log.warn("FIXING {} finalised but {} mark NOT updated: {}",
                     fixCid, fix.instrumentId(), e.toString());
         }
+        announce(new com.lucilla.settlement.events.LifecycleEvent(
+                com.lucilla.settlement.events.FixingEvent.Kinds.FIXING_FINALIZED, fix.instrumentId(),
+                cid, fixCid, proposer, null, fix.price(), fix.referencePrice(), fix.wrapperFactor(),
+                fix.rationale(), null, Map.of("attestors", fix.attestors().stream()
+                        .map(LedgerService::labelOf).toList(), "threshold", fix.threshold(),
+                        "markUpdated", updated, "session", fix.session())));
         return created(new Dtos.FinalizeFixingResponse(
                 fixCid, fix.instrumentId(), newMark, updated, note));
     }
@@ -1747,10 +1815,12 @@ public class SettlementController {
         // Null stays null: no receiver configured means a fee-free basket.
         String feeReceiver = (req.feeReceiver() == null || req.feeReceiver().isBlank())
                 ? null : ledger.resolveParty(req.feeReceiver());
-        var cmd = LedgerCommands.createBasket(admin, auditor, req.basketId(),
+        // The recipe AND the share, in one transaction: the basket is defined and listed
+        // as a `Fund` instrument together, so it shows in the Asset picker and can anchor
+        // a close the moment it exists. Same path the start-up seed takes.
+        String cid = ledger.defineBasket(admin, auditor, req.basketId(),
                 blankTo(req.description(), req.basketId()), cash, comps, parts,
                 feeReceiver, req.creationFee(), req.redemptionFee());
-        String cid = ledger.submitForCreated(admin, cmd, LedgerCommands.basketDefinitionTemplateId());
         return created(new Dtos.BasketResponse(cid, req.basketId(), req.administrator(), cash,
                 req.components(), req.participants()));
     }

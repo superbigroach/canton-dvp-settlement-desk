@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Regulatory — CrossDesk</title>
+<meta name="description" content="CrossDesk is not a regulated benchmark administrator. Benchmark administration is a licensed activity in the UK and EU. A factual mapping of the CrossDesk methodology to the IOSCO Principles for Financial Benchmarks, what recognition would require, and the sandbox disclosure.">
+<link rel="canonical" href="https://crossdesk-devnet-app.web.app/regulatory">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="CrossDesk">
+<meta property="og:title" content="CrossDesk — regulatory status">
+<meta property="og:description" content="Not a regulated benchmark administrator. What the methodology does and does not do against the IOSCO Principles, and what recognition would require.">
+<meta property="og:url" content="https://crossdesk-devnet-app.web.app/regulatory">
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" content="#0A0B0F">
+<link rel="stylesheet" href="/site/site.css?v=5">
+<script defer src="/site/site.js?v=5"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="/" aria-label="CrossDesk home">Cross<span>Desk</span></a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <a href="/benchmarks/">Benchmarks</a>
+      <a href="/methodology">Methodology</a>
+      <a href="/governance">Governance</a>
+      <a href="/licensing">Licensing</a>
+      <a href="/regulatory">Regulatory</a>
+      <a href="/news">News</a>
+      <a href="/about">About</a>
+      <a href="/desk/login">Sign in</a>
+      <a href="/desk/" class="btn">Open the desk</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="section hero" aria-labelledby="h">
+  <div class="wrap">
+    <div class="kicker"><span>Regulatory</span> <span class="rule"></span></div>
+    <h1 id="h">CrossDesk is not a regulated benchmark administrator.</h1>
+    <p class="lede">Benchmark administration is a licensed activity in the United Kingdom and the European
+      Union. CrossDesk is not authorised, registered, recognised or endorsed as a benchmark administrator
+      in those jurisdictions or in any other, and nothing on this site, in the methodology, or in the
+      software is a claim otherwise.</p>
+    <div class="callout bad">
+      <span class="dot"></span>
+      <p><strong>What follows from that.</strong> A UK- or EU-supervised entity that wishes to reference a
+        CrossDesk fixing in a regulated product must resolve the recognition or endorsement route first.
+        Until then a CrossDesk fixing is a published number with an open methodology and an on-ledger
+        audit trail — not a benchmark within the meaning of the UK or EU Benchmarks Regulation.</p>
+      <p class="qual">Nothing on this page is legal advice. It is a plain statement of status and a factual
+        mapping the administrator can support from its own published documents.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="iosco-h">
+  <div class="wrap">
+    <div class="kicker"><span>IOSCO Principles for Financial Benchmarks</span> <span class="rule"></span></div>
+    <h2 id="iosco-h">Where the methodology stands against the nineteen principles.</h2>
+    <p>The IOSCO Principles (July 2013) are the international reference for benchmark governance, quality
+      and accountability, and the basis of the UK and EU regimes. The table below maps each principle to
+      what the <a href="/methodology">CrossDesk methodology and signer protocol</a> actually specify. It
+      claims only what those documents support. "Aligned" means the published rule addresses the
+      principle; "partial" means it addresses part of it, or by policy rather than by code; "not
+      addressed" means there is nothing to point to yet. This is a self-assessment, not an audit.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th scope="col">#</th><th scope="col">Principle</th><th scope="col">Status</th><th scope="col">What CrossDesk can point to</th></tr></thead>
+        <tbody>
+          <tr><td class="mono" colspan="4" style="color:var(--faint);letter-spacing:0.12em;text-transform:uppercase;font-size:10px">Governance</td></tr>
+          <tr><td class="mono">1</td><td>Overall responsibility of the administrator</td><td><span class="status partial">partial</span></td><td>CrossDesk is named as administrator in the methodology and publishes it under its own name. No separate legal entity, board or accountability framework exists yet.</td></tr>
+          <tr><td class="mono">2</td><td>Oversight of third parties</td><td><span class="status partial">partial</span></td><td>The signer protocol defines what each seat asserts and how a checker must behave (P4); the API refuses a condition that does not belong to the seat claiming it. No contractual oversight of signers is in place.</td></tr>
+          <tr><td class="mono">3</td><td>Conflicts of interest</td><td><span class="status partial">partial — by disclosure, not exclusion</span></td><td>The administrator does not trade the instruments it prices (§7). Signers are chosen <em>because</em> they have positions, composed to oppose one another, with no single interest holding K. The methodology states this is a mitigated conflict, not an absent one (P6).</td></tr>
+          <tr><td class="mono">4</td><td>Control framework</td><td><span class="status partial">partial</span></td><td>The ledger enforces the venue's traded range and the wrapper-mark arithmetic; the API enforces seat-condition matching; a restatement needs the same K of N. No independent control function or written control framework beyond the methodology.</td></tr>
+          <tr><td class="mono">5</td><td>Internal oversight</td><td><span class="status not">not addressed as IOSCO intends</span></td><td>The committee is the oversight function (§7) but it is composed of interested parties, which is the opposite of the independent oversight function the principle describes.</td></tr>
+          <tr><td class="mono" colspan="4" style="color:var(--faint);letter-spacing:0.12em;text-transform:uppercase;font-size:10px">Quality of the benchmark</td></tr>
+          <tr><td class="mono">6</td><td>Benchmark design</td><td><span class="status built">aligned</span></td><td>§2 defines what the fixing measures and what it is not; the official/indicative split is published with the drift between them.</td></tr>
+          <tr><td class="mono">7</td><td>Data sufficiency</td><td><span class="status built">aligned</span></td><td>Tier 1 minimum quality conditions (at least two orders from two distinct parties, crossed quantity above zero) are enforced as module constants; a missing input yields a gap, never an estimate (§5).</td></tr>
+          <tr><td class="mono">8</td><td>Hierarchy of data inputs</td><td><span class="status built">aligned</span></td><td>§3 is an ordered waterfall, and the tier used is published with every fixing.</td></tr>
+          <tr><td class="mono">9</td><td>Transparency of benchmark determinations</td><td><span class="status built">aligned</span></td><td>Every fixing carries its identifier, strike time, value, tier, signers, each signer's verified conditions and protocol version, drift versus indicative, and carry-forward age (§10, P3).</td></tr>
+          <tr><td class="mono">10</td><td>Periodic review</td><td><span class="status partial">partial</span></td><td>Three consecutive carried-forward strikes trigger a cessation review (§3, §8). No scheduled periodic review of the methodology itself is specified.</td></tr>
+          <tr><td class="mono" colspan="4" style="color:var(--faint);letter-spacing:0.12em;text-transform:uppercase;font-size:10px">Quality of the methodology</td></tr>
+          <tr><td class="mono">11</td><td>Content of the methodology</td><td><span class="status built">aligned</span></td><td>Published, versioned, with definitions, the calculation, inputs, the restatement rule, and a per-section statement of what is implemented (§12, P7).</td></tr>
+          <tr><td class="mono">12</td><td>Changes to the methodology</td><td><span class="status built">aligned</span></td><td>Material changes require 30 days' notice; every version is retained; a fixing is interpreted under the version in force at its strike (§9).</td></tr>
+          <tr><td class="mono">13</td><td>Transition (cessation)</td><td><span class="status built">aligned</span></td><td>A cessation notice of no less than 60 calendar days naming the final strike and any successor, enforced on-ledger (§8).</td></tr>
+          <tr><td class="mono">14</td><td>Submitter code of conduct</td><td><span class="status partial">partial</span></td><td>The signer protocol is a per-seat code: named conditions, no opinion on the price, checker rules that forbid auto-confirming a failed condition or widening tolerances (P2, P4). It is not yet a signed agreement with any submitter.</td></tr>
+          <tr><td class="mono">15</td><td>Internal controls over data collection</td><td><span class="status partial">partial</span></td><td>Sealed inputs are protected by the ledger's signatory/observer model rather than an API filter (§5); external market data is never an input to an official fixing. No documented controls over the administrator's own proposal computation beyond publishing every input.</td></tr>
+          <tr><td class="mono" colspan="4" style="color:var(--faint);letter-spacing:0.12em;text-transform:uppercase;font-size:10px">Accountability</td></tr>
+          <tr><td class="mono">16</td><td>Complaints procedures</td><td><span class="status partial">partial</span></td><td>Anyone may report a suspected error to the administrator, and a correction needs K of N (§6). No formal complaints procedure with timelines is published.</td></tr>
+          <tr><td class="mono">17</td><td>Audits</td><td><span class="status not">not addressed</span></td><td>No external audit of the administrator or the methodology has been performed.</td></tr>
+          <tr><td class="mono">18</td><td>Audit trail</td><td><span class="status built">aligned</span></td><td>Every fixing, attestation, refusal and restatement is an immutable ledger record; a superseded fixing is never archived; who signed what, under which protocol version, is permanent and attributable.</td></tr>
+          <tr><td class="mono">19</td><td>Cooperation with regulatory authorities</td><td><span class="status not">not addressed</span></td><td>No arrangement exists. The audit trail is designed to be readable by a regulator; no regulator has been engaged.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="src">Section references are to the <a href="/methodology">fixing methodology</a> (§) and the
+      <a href="/methodology#signer-protocol">signer protocol</a> (P). The count and headings of the
+      principles follow the IOSCO final report of July 2013.</p>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="recog-h">
+  <div class="wrap">
+    <div class="kicker"><span>What recognition would require</span> <span class="rule"></span></div>
+    <h2 id="recog-h">The gap between an open methodology and an authorised administrator.</h2>
+    <p>Under the UK and EU Benchmarks Regulations, an administrator located in the jurisdiction must be
+      authorised or registered by the national competent authority before a supervised entity may use its
+      benchmarks; an administrator located outside the jurisdiction reaches supervised users through
+      equivalence, recognition or endorsement. Whichever route applied to CrossDesk, the items below are
+      what it does not have today.</p>
+    <div class="grid g2">
+      <div class="card warn"><h3>A legal entity and a jurisdiction</h3><p>An administrator is a person, not a repository. The entity, where it is established, and which authority supervises it come before any application.</p></div>
+      <div class="card warn"><h3>An application, or a recognition or endorsement arrangement</h3><p>Authorisation or registration where the entity is located; for supervised users elsewhere, recognition by that jurisdiction's authority or endorsement by an administrator already authorised there.</p></div>
+      <div class="card warn"><h3>An independent oversight function</h3><p>The regimes expect an oversight function independent of parties with positions. The CrossDesk committee is deliberately the opposite. Recognition would require an independent function alongside it, or a different governance answer for the conflict the committee mitigates rather than removes.</p></div>
+      <div class="card warn"><h3>A control framework, complaints procedure and external audit</h3><p>Written controls over input data and determination; a published complaints procedure; and an independent audit of adherence to the methodology — none of which exists today.</p></div>
+      <div class="card warn"><h3>A benchmark statement and submitter agreements</h3><p>A published benchmark statement per identifier, and a signed code of conduct with each contributing seat rather than a protocol they follow informally.</p></div>
+      <div class="card warn"><h3>Regulatory advice before anyone contracts against a number</h3><p>Until there is an entity and, where required, an authorisation, the repository licence states that nothing in it is a price, a valuation, or a benchmark — and the administrator will obtain regulatory advice before publishing a number anyone settles against.</p></div>
+    </div>
+    <p class="src" style="margin-top:22px">The cost of authorisation is not treated as a tax. An administrator that has
+      done this work is much harder to replace than one that has not.</p>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="sandbox-h">
+  <div class="wrap">
+    <div class="kicker"><span>Sandbox disclosure</span> <span class="rule"></span></div>
+    <h2 id="sandbox-h">What the numbers on this site are.</h2>
+    <div class="callout warn">
+      <span class="dot"></span>
+      <p>The values shown on this site come from a <strong>hosted sandbox</strong>: an in-process Canton
+        ledger running the CrossDesk Daml packages, seeded with a demonstration book, that resets when
+        the hosting instance recycles. It is <strong>not a Canton Network participant</strong> and is not
+        connected to DevNet, TestNet or MainNet. It proves the software, not the network integration.</p>
+      <p class="qual">No fixing has been published for commercial use. No committee has been convened; the
+        seats shown on benchmark pages describe the protocol, not occupants. Instruments in the
+        demonstration basket are issued for demonstration and are not the production tokens. A separate,
+        earlier claim of 4.16 cBTC through a CIP-56 registry flow was made on a shared hackathon
+        participant that is no longer online; it is not what the sandbox holds today.</p>
+    </div>
+    <p>Figures cited on the <a href="/licensing">licensing</a> page carry their sources. The repository is
+      source-available under a proprietary licence whose terms state that nothing in it is a price, a
+      valuation, a benchmark, investment advice, or an offer of any financial product or service.</p>
+  </div>
+</section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="cols">
+      <div><h3>Benchmarks</h3><ul>
+        <li><a href="/benchmarks/CBTC">CBTC Close</a></li>
+        <li><a href="/benchmarks/cETH">cETH Close</a></li>
+        <li><a href="/benchmarks/LX1">LX1 NAV</a></li>
+        <li><a href="/benchmarks/">All benchmarks</a></li>
+      </ul></div>
+      <div><h3>Documents</h3><ul>
+        <li><a href="/methodology">Methodology</a></li>
+        <li><a href="/governance">Governance</a></li>
+        <li><a href="/licensing">Licensing</a></li>
+        <li><a href="/regulatory">Regulatory</a></li>
+      </ul></div>
+      <div><h3>CrossDesk</h3><ul>
+        <li><a href="/about">About</a></li>
+        <li><a href="/news">News</a></li>
+        <li><a href="/showcase/">Showcase</a></li>
+        <li><a href="/pitch/">Pitch</a></li>
+        <li><a href="https://github.com/superbigroach/canton-dvp-settlement-desk" rel="noopener">Source</a></li>
+      </ul></div>
+      <div><h3>Desk</h3><ul>
+        <li><a href="/desk/">Open the desk</a></li>
+        <li><a href="/desk/login">Sign in</a></li>
+      </ul></div>
+    </div>
+    <div class="disclosure">
+      <p><strong>Sandbox disclosure.</strong> The values on this site come from a hosted sandbox: an
+        in-process Canton ledger running the CrossDesk Daml packages, seeded with a demonstration book.
+        It is not a Canton Network participant and it is not connected to DevNet, TestNet or MainNet.
+        No fixing has been published for commercial use, and no committee has been convened.
+        Instruments in the demonstration basket are issued for demonstration.</p>
+      <p>CrossDesk is not an authorised or registered benchmark administrator in any jurisdiction.
+        Nothing on this site is a price, a valuation, a benchmark for regulatory purposes, investment
+        advice, or an offer of any financial product or service. See <a href="/regulatory">Regulatory</a>.</p>
+    </div>
+    <p><strong>CrossDesk</strong> — attested fixings and atomic creation and redemption for tokenised
+      funds. Built on the <a href="https://www.canton.network" rel="noopener">Canton Network</a>.</p>
+    <p style="margin-top:16px">
+      <a href="mailto:s.borjas@lucilla.ca">s.borjas@lucilla.ca</a>
+      &nbsp;·&nbsp;
+      <a href="https://t.me/sb_lucilla" rel="noopener">@sb_lucilla</a>
+      &nbsp;·&nbsp;
+      <a href="https://www.linkedin.com/in/sborjasto/" rel="noopener">LinkedIn</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

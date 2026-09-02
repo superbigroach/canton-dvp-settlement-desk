@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import App from './App';
+import Router from './Router';
+import { AuthProvider } from './auth/AuthContext';
 
 // Bundled fonts (no external CDN — self-hosted via npm). Inter for the UI,
 // JetBrains Mono for every financial figure so blotter columns align.
@@ -13,9 +14,12 @@ import '@fontsource/jetbrains-mono/500.css';
 import '@fontsource/jetbrains-mono/700.css';
 
 import './styles.css';
+import './desk.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <App />
+    <AuthProvider>
+      <Router />
+    </AuthProvider>
   </React.StrictMode>,
 );

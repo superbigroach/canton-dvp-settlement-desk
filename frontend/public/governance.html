@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Governance — CrossDesk</title>
+<meta name="description" content="How a CrossDesk fixing is governed: the K-of-N committee model, the four seats and why they are chosen for skin in the game, the LIBOR objection and the three structural differences, the five-tier fallback waterfall with what is built today, and restatement.">
+<link rel="canonical" href="https://crossdesk-devnet-app.web.app/governance">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="CrossDesk">
+<meta property="og:title" content="CrossDesk governance">
+<meta property="og:description" content="The committee model, the four seats, the LIBOR objection answered, the fallback waterfall, and restatement.">
+<meta property="og:url" content="https://crossdesk-devnet-app.web.app/governance">
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" content="#0A0B0F">
+<link rel="stylesheet" href="/site/site.css?v=5">
+<script defer src="/site/site.js?v=5"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="/" aria-label="CrossDesk home">Cross<span>Desk</span></a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <a href="/benchmarks/">Benchmarks</a>
+      <a href="/methodology">Methodology</a>
+      <a href="/governance">Governance</a>
+      <a href="/licensing">Licensing</a>
+      <a href="/regulatory">Regulatory</a>
+      <a href="/news">News</a>
+      <a href="/about">About</a>
+      <a href="/desk/login">Sign in</a>
+      <a href="/desk/" class="btn">Open the desk</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="section hero" aria-labelledby="h">
+  <div class="wrap">
+    <div class="kicker"><span>Governance</span> <span class="rule"></span></div>
+    <h1 id="h">The N are the parties who already have money on the mark.</h1>
+    <p class="lede">A CrossDesk fixing is attested by a K-of-N committee. Its members are not hired referees;
+      they are the issuer, the lender, the venue — parties who already hold an opinion on the number
+      because they already carry a position against it. Attestation is a by-product of that position,
+      and every signature is permanent and attributable on the ledger.</p>
+    <p class="src">No committee has yet been convened. This page describes the model as specified in the
+      <a href="/methodology#s7">methodology §7</a> and the <a href="/methodology#signer-protocol">signer protocol</a>.</p>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="model-h">
+  <div class="wrap">
+    <div class="kicker"><span>The committee model</span> <span class="rule"></span></div>
+    <h2 id="model-h">Sign the number you already rely on.</h2>
+    <p>The hardest question anyone asks of a K-of-N design is: <em>who are your N, what are they paid, and
+      why would an institution accept exposure on someone else's fund?</em> The answer is that nobody is
+      asked to take on liability for a fee. Each signer is asked to sign the number it already relies on —
+      the one its risk system consumes, the one its book carries — and to assert a fact only it can see.
+      Nobody is doing anyone a favour. Every signer is worse off if the number is wrong.</p>
+    <div class="grid g3">
+      <div class="card accent"><h3>Signers are not paid</h3><p>Pay an attestor and they become a hired referee — the model that cannot be assembled or funded, and that raises indemnity questions nobody will sign. The signature is a by-product of a position.</p></div>
+      <div class="card accent"><h3>Signers do not pay</h3><p>They supply credibility. Charging them kills the supply. The committee is not a customer; the committee is how the product gets made.</p></div>
+      <div class="card accent"><h3>Signers assert facts, not opinions</h3><p>No seat is asked whether the price is right. Each seat confirms named conditions it alone can verify, or refuses by naming the one that failed.</p></div>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <caption>Quorum</caption>
+        <thead><tr><th scope="col"></th><th scope="col">Recommended</th><th scope="col">Pilot minimum</th></tr></thead>
+        <tbody>
+          <tr><td>N (seats)</td><td class="mono">5</td><td class="mono">3</td></tr>
+          <tr><td>K (threshold)</td><td class="mono">3</td><td class="mono">2</td></tr>
+          <tr><td>Constraint</td><td>No single interest holds K</td><td>The three must be genuinely opposed: issuer · risk-taker · market-facing</td></tr>
+          <tr><td>CrossDesk as signer?</td><td>No</td><td>Tolerable at the very start, recorded as <code>operator</code>; exit as soon as a fourth party exists</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="src">The administrator does not trade the instruments it prices. Signing is the adjacent conflict,
+      and the operator seat, where it exists, is marked on every fixing it touches.</p>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="seats-h">
+  <div class="wrap">
+    <div class="kicker"><span>The four seats</span> <span class="rule"></span></div>
+    <h2 id="seats-h">Chosen because they disagree.</h2>
+    <p>Every committee is assembled from the same four seats. Fill as many as exist; three is a working
+      quorum. The safety comes from the fact that their interests point in different directions.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th scope="col">Seat</th><th scope="col">Who</th><th scope="col">What it knows that nobody else does</th><th scope="col">Bias</th></tr></thead>
+        <tbody>
+          <tr><td><strong>The issuer</strong></td><td>Whoever created the token</td><td>Supply, reserves, redemption queue, corporate actions</td><td>Higher marks — par makes its asset look sound</td></tr>
+          <tr><td><strong>The custodian / reserve holder</strong></td><td>Whoever holds the underlying</td><td>What is actually there</td><td>Neutral, but liable</td></tr>
+          <tr><td><strong>The taker of risk</strong></td><td>The lender, collateral taker, clearer</td><td>What it will actually lend against it</td><td>Lower marks — it is under-collateralised if the mark is too high</td></tr>
+          <tr><td><strong>The market-facing party</strong></td><td>Market maker, authorised participant, venue</td><td>Where it would really trade right now</td><td>Depends on inventory — and the venue's range is checked by the ledger</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="punch">The issuer must never be a majority of the quorum. If the issuer can reach K using only
+      parties it controls, the committee has proved nothing.</p>
+    <p>A committee of three issuers is not a committee. It is an expensive way for issuers to bless their
+      own valuation. The named conditions each seat verifies — redemption integrity for the issuer, book
+      acceptance for the lender, the observed traded range for the venue — are set out in the
+      <a href="/methodology#p2">signer protocol</a>. Only the venue's condition is checked by the ledger
+      itself; the issuer's and lender's claims are recorded, attributable and permanent, but rest on the
+      signer's own systems.</p>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="libor-h">
+  <div class="wrap">
+    <div class="kicker"><span>The objection</span> <span class="rule"></span></div>
+    <h2 id="libor-h">"You have seated people with positions and called it oversight. That is LIBOR."</h2>
+    <p>It is the best argument against this design, and it deserves to be stated at full strength. LIBOR's
+      panel banks submitted rates on instruments they held positions in, and some of them moved submissions
+      to suit those positions. Three differences, structural rather than rhetorical:</p>
+    <div class="steps">
+      <div class="step"><div>
+        <h3>The panel is composed to disagree</h3>
+        <p>LIBOR's submitters shared a direction of interest. Here the issuer wants par, the lender wants
+          conservative, the venue wants observed — and the methodology requires that no single interest
+          holds K.</p>
+      </div></div>
+      <div class="step"><div>
+        <h3>Submissions are verifiable rather than asserted</h3>
+        <p>A LIBOR submission was an unfalsifiable estimate of where a bank <em>could</em> borrow. Every
+          condition a CrossDesk signer confirms is a fact with a record behind it, and the venue's is checked
+          by the ledger: an attestation whose range does not contain the price cannot exist.</p>
+      </div></div>
+      <div class="step"><div>
+        <h3>Every signature is permanent and attributable</h3>
+        <p>LIBOR ran on phone calls and unlogged discretion. Here who signed which fixing, under which
+          protocol version, having verified which conditions, is on the ledger forever.</p>
+      </div></div>
+    </div>
+    <div class="callout warn">
+      <span class="dot"></span>
+      <p><strong>What honesty requires conceding.</strong> This is a <em>mitigated</em> conflict, not an absent
+        one. A regulated administrator would seat independent members and manage conflicts by exclusion.
+        This design manages conflict by opposition and evidence instead, because a panel of disinterested
+        referees would never be assembled or funded for an asset this size. See
+        <a href="/regulatory">Regulatory</a>.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="waterfall" aria-labelledby="wf-h">
+  <div class="wrap">
+    <div class="kicker"><span>The fallback waterfall</span> <span class="rule"></span></div>
+    <h2 id="wf-h">What happens when K is not reached in the window.</h2>
+    <p>Each fixing is published with the tier that produced it. Tier 1 is the fixing; every other tier is a
+      flagged fallback, and a value that is not painted gold on this site was not attested at tier 1 or 2.
+      The strike window defaults to 30 minutes; a refusal inside it triggers a restrike.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th scope="col">Tier</th><th scope="col">Value</th><th scope="col">Built today?</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">1</td><td><strong>Attested.</strong> K of N seats confirmed the proposal, each naming the conditions it verified. Funds re-mark; the series row is published.</td><td><span class="status built">built, tested</span></td></tr>
+          <tr><td class="mono">2</td><td><strong>Alternate seats.</strong> If a named seat is silent, a declared alternate for the same interest may attest in its place.</td><td><span class="status not">not built</span></td></tr>
+          <tr><td class="mono">3</td><td><strong>Benchmark × last factor.</strong> For a wrapped asset, the current benchmark print multiplied by the last attested par factor, published as a fallback rather than an attestation.</td><td><span class="status partial">arithmetic built; automatic fallback not built</span></td></tr>
+          <tr><td class="mono">4</td><td><strong>Prior fixing, flagged.</strong> The previous fixing's recipe continues to derive a value, published as carried forward with the age of the underlying strike. Three consecutive carried-forward strikes trigger a cessation review.</td><td><span class="status built">built</span></td></tr>
+          <tr><td class="mono">5</td><td><strong>Missed.</strong> No fixing exists for the session. The gap is published as a gap; no value is estimated to fill it.</td><td><span class="status built">built — a missed strike is reported, never filled</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="src">What a fund does at tier 5 — suspend creations and redemptions for the session, or invoke a
+      declared fair-value procedure — belongs to the fund's governing documents, not to the administrator,
+      and must be specified before any fund relies on a CrossDesk fixing. The
+      <a href="/methodology#s3">methodology §3</a> describes the same logic from the calculation side, with a
+      sealed auction as the preferred source where a real market exists on Canton.</p>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="restate-h">
+  <div class="wrap">
+    <div class="kicker"><span>Restatement</span> <span class="rule"></span></div>
+    <h2 id="restate-h">A wrong number is corrected in public, never overwritten.</h2>
+    <div class="grid g2">
+      <div class="card"><h3>Materiality</h3><p>One basis point of the published value, or any error that changes a settlement obligation.</p></div>
+      <div class="card"><h3>Same quorum</h3><p>A correction needs the same K of N as a fixing. One signer cannot correct the record alone, and a restatement with no stated reason is refused on-ledger.</p></div>
+      <div class="card"><h3>Original stays</h3><p>The superseded fixing is not archived. It stays on the record, provably published, with the correction pointing back at it. Archiving it would let the members who published a wrong number veto its correction.</p></div>
+      <div class="card"><h3>Window</h3><p>Two business days from publication, as policy rather than code — enforcing calendar days on-ledger would silently shorten the window across a weekend. Every record carries its own timestamp, so a late correction is auditable.</p></div>
+    </div>
+    <p class="src" style="margin-top:22px">Consumer rule: the current fixing for an identifier and session is the
+      one no other fixing supersedes. Every party disclosed the original is disclosed the replacement.</p>
+  </div>
+</section>
+
+<section class="section plain" aria-labelledby="cta-h">
+  <div class="wrap">
+    <h2 id="cta-h">Taking a seat.</h2>
+    <p>A seat costs nothing and pays nothing. It requires a checker against your own systems that confirms
+      when your conditions pass and halts when one does not. If you hold, lend against, issue or make markets
+      in an asset CrossDesk fixes, that is the conversation.</p>
+    <div class="cta-row">
+      <a class="btn" href="mailto:s.borjas@lucilla.ca?subject=CrossDesk%20committee%20seat">Contact</a>
+      <a class="btn ghost" href="/methodology#signer-protocol">Read the signer protocol →</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="cols">
+      <div><h3>Benchmarks</h3><ul>
+        <li><a href="/benchmarks/CBTC">CBTC Close</a></li>
+        <li><a href="/benchmarks/cETH">cETH Close</a></li>
+        <li><a href="/benchmarks/LX1">LX1 NAV</a></li>
+        <li><a href="/benchmarks/">All benchmarks</a></li>
+      </ul></div>
+      <div><h3>Documents</h3><ul>
+        <li><a href="/methodology">Methodology</a></li>
+        <li><a href="/governance">Governance</a></li>
+        <li><a href="/licensing">Licensing</a></li>
+        <li><a href="/regulatory">Regulatory</a></li>
+      </ul></div>
+      <div><h3>CrossDesk</h3><ul>
+        <li><a href="/about">About</a></li>
+        <li><a href="/news">News</a></li>
+        <li><a href="/showcase/">Showcase</a></li>
+        <li><a href="/pitch/">Pitch</a></li>
+        <li><a href="https://github.com/superbigroach/canton-dvp-settlement-desk" rel="noopener">Source</a></li>
+      </ul></div>
+      <div><h3>Desk</h3><ul>
+        <li><a href="/desk/">Open the desk</a></li>
+        <li><a href="/desk/login">Sign in</a></li>
+      </ul></div>
+    </div>
+    <div class="disclosure">
+      <p><strong>Sandbox disclosure.</strong> The values on this site come from a hosted sandbox: an
+        in-process Canton ledger running the CrossDesk Daml packages, seeded with a demonstration book.
+        It is not a Canton Network participant and it is not connected to DevNet, TestNet or MainNet.
+        No fixing has been published for commercial use, and no committee has been convened.
+        Instruments in the demonstration basket are issued for demonstration.</p>
+      <p>CrossDesk is not an authorised or registered benchmark administrator in any jurisdiction.
+        Nothing on this site is a price, a valuation, a benchmark for regulatory purposes, investment
+        advice, or an offer of any financial product or service. See <a href="/regulatory">Regulatory</a>.</p>
+    </div>
+    <p><strong>CrossDesk</strong> — attested fixings and atomic creation and redemption for tokenised
+      funds. Built on the <a href="https://www.canton.network" rel="noopener">Canton Network</a>.</p>
+    <p style="margin-top:16px">
+      <a href="mailto:s.borjas@lucilla.ca">s.borjas@lucilla.ca</a>
+      &nbsp;·&nbsp;
+      <a href="https://t.me/sb_lucilla" rel="noopener">@sb_lucilla</a>
+      &nbsp;·&nbsp;
+      <a href="https://www.linkedin.com/in/sborjasto/" rel="noopener">LinkedIn</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

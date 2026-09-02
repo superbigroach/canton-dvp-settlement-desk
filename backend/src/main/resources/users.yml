@@ -1,0 +1,79 @@
+# users.yml — the user → role + party mapping seed (docs/PRODUCT-PLAN.md §3).
+# ---------------------------------------------------------------------------
+# Loaded at boot; edits made through /api/admin/users and the signer portal are kept in
+# <DATA_DIR>/users.json and re-applied on top of this file. Point USERS_FILE at a copy
+# of this file to replace the roster without a rebuild.
+#
+# In production the party is on the institution's own participant; the mapping is the
+# same shape. In the sandbox the parties are the ones Test:initialize allocates, and
+# the e-mails are the ones the desk app (frontend/src/desk) signs in with.
+#
+# Roles: admin | signer (seat: issuer|lender|venue, instruments) | ap | fund_admin |
+#        auditor | viewer
+#
+# X-Sandbox-User (AUTH_MODE=sandbox) accepts the e-mail, its local part, or the party
+# label: "issuer@sandbox.crossdesk", "issuer" and "Issuer" all resolve to the same row.
+# ---------------------------------------------------------------------------
+users:
+  - uid: admin-sborjas
+    email: s.borjas@lucilla.ca
+    role: admin
+    party: Issuer           # ledger actions the admin console takes are submitted as Issuer
+    org: CrossDesk
+    displayName: Sebastian Borjas
+
+  - uid: sandbox-issuer
+    email: issuer@sandbox.crossdesk
+    role: signer
+    seat: issuer
+    party: Issuer
+    instruments: [CBTC, cETH]
+    org: Issuer (sandbox stand-in for the wrapper issuer)
+    displayName: Issuer seat
+
+  - uid: sandbox-lender
+    email: lender@sandbox.crossdesk
+    role: signer
+    seat: lender
+    party: Bank
+    instruments: [CBTC, cETH]
+    org: Bank (sandbox stand-in for a lending platform)
+    displayName: Lender seat
+
+  - uid: sandbox-venue
+    email: venue@sandbox.crossdesk
+    role: signer
+    seat: venue
+    party: Venue
+    instruments: [CBTC, cETH]
+    org: Venue (sandbox stand-in for a trading venue)
+    displayName: Venue seat
+
+  - uid: sandbox-alice
+    email: alice@sandbox.crossdesk
+    role: ap
+    party: Alice
+    org: Alice Capital (sandbox AP)
+    displayName: Alice
+
+  - uid: sandbox-bob
+    email: bob@sandbox.crossdesk
+    role: ap
+    party: Bob
+    org: Bob Markets (sandbox AP)
+    displayName: Bob
+
+  - uid: sandbox-fund
+    email: fund@sandbox.crossdesk
+    role: fund_admin
+    party: Bank             # Bank administers LX1 (see DemoSeed)
+    instruments: [LX1]
+    org: LX1 administrator (sandbox)
+    displayName: LX1 fund administrator
+
+  - uid: sandbox-auditor
+    email: auditor@sandbox.crossdesk
+    role: auditor
+    party: Auditor
+    org: Auditor (sandbox)
+    displayName: Auditor

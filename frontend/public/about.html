@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>About — CrossDesk</title>
+<meta name="description" content="What CrossDesk is — a benchmark administrator and transfer agent for tokenised funds on the Canton Network — and what it is not: not an exchange, not a custodian, not a regulated administrator, not a price feed.">
+<link rel="canonical" href="https://crossdesk-devnet-app.web.app/about">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="CrossDesk">
+<meta property="og:title" content="About CrossDesk">
+<meta property="og:description" content="Two roles, neither an exchange: benchmark administrator for tokenised assets on Canton, and transfer agent for the funds that settle against those fixings.">
+<meta property="og:url" content="https://crossdesk-devnet-app.web.app/about">
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" content="#0A0B0F">
+<link rel="stylesheet" href="/site/site.css?v=5">
+<script defer src="/site/site.js?v=5"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="/" aria-label="CrossDesk home">Cross<span>Desk</span></a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <a href="/benchmarks/">Benchmarks</a>
+      <a href="/methodology">Methodology</a>
+      <a href="/governance">Governance</a>
+      <a href="/licensing">Licensing</a>
+      <a href="/regulatory">Regulatory</a>
+      <a href="/news">News</a>
+      <a href="/about">About</a>
+      <a href="/desk/login">Sign in</a>
+      <a href="/desk/" class="btn">Open the desk</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="section hero" aria-labelledby="h">
+  <div class="wrap">
+    <div class="kicker"><span>About</span> <span class="rule"></span></div>
+    <h1 id="h">Two roles. Neither is an exchange.</h1>
+    <p class="lede">CrossDesk is the price layer for tokenised funds on the Canton Network: it administers
+      the fixings those funds settle against, and it is the transfer agent through which their shares
+      are created and redeemed at the attested number.</p>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="is-h">
+  <div class="wrap">
+    <div class="kicker"><span>What CrossDesk is</span> <span class="rule"></span></div>
+    <h2 id="is-h">An administrator, and a transfer agent.</h2>
+    <div class="grid g2">
+      <div class="card buy">
+        <h3>Benchmark administrator</h3>
+        <p>For tokenised assets on Canton that no administrator covers — wrapped assets, baskets, funds
+          whose underlying market is closed. CrossDesk proposes the fixing at a declared time, has a K-of-N
+          committee of parties with money on the mark attest it, and publishes it with its tier, its
+          signers and the conditions each signer verified. Products: <a href="/benchmarks/CBTC">CBTC Close</a>,
+          <a href="/benchmarks/cETH">cETH Close</a>, and fund NAVs such as <a href="/benchmarks/LX1">LX1</a>.</p>
+      </div>
+      <div class="card buy">
+        <h3>Transfer agent</h3>
+        <p>For funds that reference those fixings: creation and redemption in kind, at the attested NAV,
+          atomically, for authorised participants. Deliver the basket, receive shares — or the reverse —
+          all-or-nothing, with the fee charged in the same transaction. The mechanism that keeps a fund
+          glued to its NAV.</p>
+      </div>
+    </div>
+    <p style="margin-top:22px">The whole system is a set of Daml packages on Canton, a Spring backend that
+      operates them, and the desk. On Canton a contract is visible only to its signatories, so a sealed
+      order is observed by nobody and a fixing's signatory set <em>is</em> its attestor set — properties the
+      design relies on rather than adds. A sealed closing auction exists as a module for assets with a
+      real market on Canton; it is not on the pilot surface.</p>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="not-h">
+  <div class="wrap">
+    <div class="kicker"><span>What CrossDesk is not</span> <span class="rule"></span></div>
+    <h2 id="not-h">Stated plainly, because the distinctions matter.</h2>
+    <div class="grid g3">
+      <div class="card"><h3>Not an exchange</h3><p>CrossDesk does not operate a continuous market and does not earn trading fees. A continuous book and a perpetuals layer exist in the code, tested, and neither is sold: operating a market is a licensed activity, and staying out of it is deliberate.</p></div>
+      <div class="card"><h3>Not a custodian</h3><p>CrossDesk holds nobody's assets. Creation and redemption move holdings between the authorised participant and the fund on the ledger; nothing passes through the administrator.</p></div>
+      <div class="card"><h3>Not a regulated administrator</h3><p>Benchmark administration is a licensed activity in the UK and EU. CrossDesk is not authorised, registered or recognised anywhere, and says so on its <a href="/regulatory">Regulatory</a> page.</p></div>
+      <div class="card"><h3>Not a price feed</h3><p>A feed relays a number that exists. CrossDesk attests a value where none exists to relay — a wrapper's discount to par, a basket, a fund at 03:00 on a Sunday — under a published method, with every signature attributable.</p></div>
+      <div class="card"><h3>Not a trader in what it prices</h3><p>The administrator does not take positions in the instruments it fixes. That is a hard constraint on the business, not a preference.</p></div>
+      <div class="card"><h3>Not live on a network participant</h3><p>The hosted desk is a sandbox: an in-process Canton ledger running the real packages with a demonstration book. It proves the software, not the network integration. A DevNet participant is the standing blocker.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="who-h">
+  <div class="wrap">
+    <div class="kicker"><span>Who</span> <span class="rule"></span></div>
+    <h2 id="who-h">Built by one person, so far.</h2>
+    <p>CrossDesk was built for HackCanton Season 2, where it won Best Financial Application on
+      5 August 2026, and has been developed since into the administrator-and-transfer-agent shape
+      described on this site. Source-available, not open source —
+      <a href="https://github.com/superbigroach/canton-dvp-settlement-desk" rel="noopener">read the code</a>.</p>
+    <div class="founder">
+      <div>
+        <span class="role">Founder</span>
+        <div class="name">Sebastian Borjas</div>
+      </div>
+      <div class="links">
+        <a href="mailto:s.borjas@lucilla.ca">s.borjas@lucilla.ca</a>
+        <a href="https://t.me/sb_lucilla" rel="noopener">Telegram @sb_lucilla</a>
+        <a href="https://www.linkedin.com/in/sborjasto/" rel="noopener">LinkedIn</a>
+      </div>
+    </div>
+    <div class="cta-row" style="margin-top:30px">
+      <a class="btn" href="mailto:s.borjas@lucilla.ca?subject=CrossDesk">Ask me something</a>
+      <a class="btn ghost" href="/news">News →</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="cols">
+      <div><h3>Benchmarks</h3><ul>
+        <li><a href="/benchmarks/CBTC">CBTC Close</a></li>
+        <li><a href="/benchmarks/cETH">cETH Close</a></li>
+        <li><a href="/benchmarks/LX1">LX1 NAV</a></li>
+        <li><a href="/benchmarks/">All benchmarks</a></li>
+      </ul></div>
+      <div><h3>Documents</h3><ul>
+        <li><a href="/methodology">Methodology</a></li>
+        <li><a href="/governance">Governance</a></li>
+        <li><a href="/licensing">Licensing</a></li>
+        <li><a href="/regulatory">Regulatory</a></li>
+      </ul></div>
+      <div><h3>CrossDesk</h3><ul>
+        <li><a href="/about">About</a></li>
+        <li><a href="/news">News</a></li>
+        <li><a href="/showcase/">Showcase</a></li>
+        <li><a href="/pitch/">Pitch</a></li>
+        <li><a href="https://github.com/superbigroach/canton-dvp-settlement-desk" rel="noopener">Source</a></li>
+      </ul></div>
+      <div><h3>Desk</h3><ul>
+        <li><a href="/desk/">Open the desk</a></li>
+        <li><a href="/desk/login">Sign in</a></li>
+      </ul></div>
+    </div>
+    <div class="disclosure">
+      <p><strong>Sandbox disclosure.</strong> The values on this site come from a hosted sandbox: an
+        in-process Canton ledger running the CrossDesk Daml packages, seeded with a demonstration book.
+        It is not a Canton Network participant and it is not connected to DevNet, TestNet or MainNet.
+        No fixing has been published for commercial use, and no committee has been convened.
+        Instruments in the demonstration basket are issued for demonstration.</p>
+      <p>CrossDesk is not an authorised or registered benchmark administrator in any jurisdiction.
+        Nothing on this site is a price, a valuation, a benchmark for regulatory purposes, investment
+        advice, or an offer of any financial product or service. See <a href="/regulatory">Regulatory</a>.</p>
+    </div>
+    <p><strong>CrossDesk</strong> — attested fixings and atomic creation and redemption for tokenised
+      funds. Built on the <a href="https://www.canton.network" rel="noopener">Canton Network</a>.</p>
+    <p style="margin-top:16px">
+      <a href="mailto:s.borjas@lucilla.ca">s.borjas@lucilla.ca</a>
+      &nbsp;·&nbsp;
+      <a href="https://t.me/sb_lucilla" rel="noopener">@sb_lucilla</a>
+      &nbsp;·&nbsp;
+      <a href="https://www.linkedin.com/in/sborjasto/" rel="noopener">LinkedIn</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

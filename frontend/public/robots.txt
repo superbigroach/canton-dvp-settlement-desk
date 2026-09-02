@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /desk/
+Disallow: /api/
+
+Sitemap: https://crossdesk-devnet-app.web.app/sitemap.xml

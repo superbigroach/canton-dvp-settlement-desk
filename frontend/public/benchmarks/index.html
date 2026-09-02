@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Benchmarks — CrossDesk</title>
+<meta name="description" content="The CrossDesk fixings: CBTC Close, cETH Close and the LX1 fund NAV. Each value is shown with its tier, its attestation count and its age, and links to a product page with the published series.">
+<link rel="canonical" href="https://crossdesk-devnet-app.web.app/benchmarks/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="CrossDesk">
+<meta property="og:title" content="CrossDesk benchmarks">
+<meta property="og:description" content="CBTC Close, cETH Close and the LX1 NAV — attested daily fixings for tokenised assets on Canton, with tier and age beside every value.">
+<meta property="og:url" content="https://crossdesk-devnet-app.web.app/benchmarks/">
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" content="#0A0B0F">
+<link rel="stylesheet" href="/site/site.css?v=5">
+<script defer src="/site/site.js?v=5"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="/" aria-label="CrossDesk home">Cross<span>Desk</span></a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <a href="/benchmarks/">Benchmarks</a>
+      <a href="/methodology">Methodology</a>
+      <a href="/governance">Governance</a>
+      <a href="/licensing">Licensing</a>
+      <a href="/regulatory">Regulatory</a>
+      <a href="/news">News</a>
+      <a href="/about">About</a>
+      <a href="/desk/login">Sign in</a>
+      <a href="/desk/" class="btn">Open the desk</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="section hero" aria-labelledby="h">
+  <div class="wrap">
+    <div class="kicker"><span>Benchmarks</span> <span class="rule"></span></div>
+    <h1 id="h">The CrossDesk fixings.</h1>
+    <p class="lede">Every identifier has the form <code>CDX-&lt;INSTRUMENT&gt;-&lt;FREQ&gt;</code>. One fixing
+      per identifier per strike; a second strike for the same date is a restatement, never a
+      second fixing. Each published value carries its tier, its signers, and — when carried
+      forward — the age of the underlying strike.</p>
+    <div class="tiles" data-benchmark-tiles aria-live="polite" aria-busy="true"></div>
+    <p class="api-state" data-tiles-state>Loading live values…</p>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="read-h">
+  <div class="wrap">
+    <div class="kicker"><span>Reading a value</span> <span class="rule"></span></div>
+    <h2 id="read-h">What sits beside every number.</h2>
+    <div class="grid g4">
+      <div class="card"><h3>As of</h3><p>The strike instant — the moment the committee's quorum was reached, not the moment the transaction committed. Shown in the benchmark's declared time zone.</p></div>
+      <div class="card"><h3>Attested K of N</h3><p>Written only when K real signatures exist on the ledger. Below K there is no fixing, and the tile says so.</p></div>
+      <div class="card"><h3>Tier</h3><p>Which step of the fallback waterfall produced the value. Tier 1 is a committee-attested strike; higher tiers are flagged fallbacks. See <a href="/governance#waterfall">Governance</a>.</p></div>
+      <div class="card"><h3>Age</h3><p>How long ago the value was struck. A value older than two days is painted as stale.</p></div>
+    </div>
+    <p class="src" style="margin-top:22px">Two numbers are published side by side and must never be confused: the
+      <strong>official fixing</strong>, which creation and redemption settle at, and the
+      <strong>indicative value</strong>, derived continuously from live market data and binding on
+      nobody. This site shows the official fixing. Machine access: <code>GET /api/benchmarks</code>,
+      <code>GET /api/series/{id}</code> and <code>/api/series/{id}.csv</code>.</p>
+  </div>
+</section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="cols">
+      <div><h3>Benchmarks</h3><ul>
+        <li><a href="/benchmarks/CBTC">CBTC Close</a></li>
+        <li><a href="/benchmarks/cETH">cETH Close</a></li>
+        <li><a href="/benchmarks/LX1">LX1 NAV</a></li>
+        <li><a href="/benchmarks/">All benchmarks</a></li>
+      </ul></div>
+      <div><h3>Documents</h3><ul>
+        <li><a href="/methodology">Methodology</a></li>
+        <li><a href="/governance">Governance</a></li>
+        <li><a href="/licensing">Licensing</a></li>
+        <li><a href="/regulatory">Regulatory</a></li>
+      </ul></div>
+      <div><h3>CrossDesk</h3><ul>
+        <li><a href="/about">About</a></li>
+        <li><a href="/news">News</a></li>
+        <li><a href="/showcase/">Showcase</a></li>
+        <li><a href="/pitch/">Pitch</a></li>
+        <li><a href="https://github.com/superbigroach/canton-dvp-settlement-desk" rel="noopener">Source</a></li>
+      </ul></div>
+      <div><h3>Desk</h3><ul>
+        <li><a href="/desk/">Open the desk</a></li>
+        <li><a href="/desk/login">Sign in</a></li>
+      </ul></div>
+    </div>
+    <div class="disclosure">
+      <p><strong>Sandbox disclosure.</strong> The values on this site come from a hosted sandbox: an
+        in-process Canton ledger running the CrossDesk Daml packages, seeded with a demonstration book.
+        It is not a Canton Network participant and it is not connected to DevNet, TestNet or MainNet.
+        No fixing has been published for commercial use, and no committee has been convened.
+        Instruments in the demonstration basket are issued for demonstration.</p>
+      <p>CrossDesk is not an authorised or registered benchmark administrator in any jurisdiction.
+        Nothing on this site is a price, a valuation, a benchmark for regulatory purposes, investment
+        advice, or an offer of any financial product or service. See <a href="/regulatory">Regulatory</a>.</p>
+    </div>
+    <p><strong>CrossDesk</strong> — attested fixings and atomic creation and redemption for tokenised
+      funds. Built on the <a href="https://www.canton.network" rel="noopener">Canton Network</a>.</p>
+    <p style="margin-top:16px">
+      <a href="mailto:s.borjas@lucilla.ca">s.borjas@lucilla.ca</a>
+      &nbsp;·&nbsp;
+      <a href="https://t.me/sb_lucilla" rel="noopener">@sb_lucilla</a>
+      &nbsp;·&nbsp;
+      <a href="https://www.linkedin.com/in/sborjasto/" rel="noopener">LinkedIn</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

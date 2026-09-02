@@ -2,6 +2,8 @@
 // reached through the Vite proxy at /api). Every DTO here mirrors the backend's
 // `Dtos.java` / `LedgerService` view records so the UI stays honest about the wire.
 
+import { authHeaders } from './auth/token';
+
 // ---- DTOs -----------------------------------------------------------------
 
 export interface Party {
@@ -32,7 +34,7 @@ export interface Holding {
 
 export interface Instrument {
   id: string;
-  kind: string;                 // Equity | Cash | CryptoWrapped
+  kind: string;                 // Equity | Cash | CryptoWrapped | MoneyMarket | Fund (a basket; id = basketId)
   description: string;
   referencePrice: number | null; // the official close price (null for cash)
 }
@@ -809,9 +811,13 @@ function errorFrom(res: Response, body: unknown, rawText: string, path: string):
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
+    // Identify the caller on every call (Firebase ID token, or the sandbox header in
+    // dev). The desk's routes were open on the demo; behind the product's auth filter
+    // they are not, and a header added in one place is a header never forgotten.
+    const auth = await authHeaders();
     res = await fetch(`/api${path}`, {
-      headers: { 'Content-Type': 'application/json' },
       ...init,
+      headers: { 'Content-Type': 'application/json', ...auth, ...(init?.headers || {}) },
     });
   } catch (e) {
     // fetch only rejects for network-level failures, and its own message ("Failed to
@@ -840,6 +846,9 @@ export const api = {
   instruments: () => req<Instrument[]>('/instruments'),
   holdings: (party: string) =>
     req<Holding[]>(`/holdings?party=${encodeURIComponent(party)}`),
+  /** Liveness + the ledger end. The ledger end only moves forward within one sandbox
+   *  life, so a value that went BACKWARDS means the sandbox restarted and reseeded. */
+  diag: () => req<{ status: string; ledger?: { reachable?: boolean; ledgerEnd?: number | null } }>('/diag'),
 
   // One-click bilateral DvP: propose → accept → settle, server-orchestrated.
   trade: (body: TradeRequest) =>
@@ -902,7 +911,7 @@ export const api = {
       (actingAs ? `&actingAs=${encodeURIComponent(actingAs)}` : '');
     let res: Response;
     try {
-      res = await fetch(`/api${path}`);
+      res = await fetch(`/api${path}`, { headers: await authHeaders() });
     } catch (e) {
       throw new ApiError(
         `cannot reach the settlement desk at /api${path} — ${errorMessage(e)}`,

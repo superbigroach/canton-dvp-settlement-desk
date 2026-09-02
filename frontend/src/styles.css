@@ -300,6 +300,12 @@ button.primary.venue {
   box-shadow: 0 6px 18px rgba(62,155,114,0.26);
 }
 button.primary.venue:hover:not(:disabled) { box-shadow: 0 8px 24px rgba(62,155,114,0.38); }
+button.primary.sell {
+  border-color: var(--sell-dk);
+  background: linear-gradient(180deg, var(--sell), var(--sell-dk));
+  box-shadow: 0 6px 18px rgba(198,91,91,0.26);
+}
+button.primary.sell:hover:not(:disabled) { box-shadow: 0 8px 24px rgba(198,91,91,0.38); }
 button.primary:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
 
 button.ghost {
@@ -1004,8 +1010,6 @@ button.link:hover { filter: brightness(1.2); }
    already implies, so the sentence needs to read as a fact rather than a caption. */
 .committee .attest-mode { margin: 2px 0 0; line-height: 1.5; }
 .committee .attest-mode strong { color: var(--gold); }
-.arb-strip .hedge-open { margin: 8px 0 10px; font-size: 12.5px; line-height: 1.55; color: var(--muted); }
-.arb-strip .hedge-open strong { color: var(--gold); }
 .arb-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }
 .arb-actions button.primary { width: 100%; }
 .arb-actions button.ghost { width: 100%; margin-top: 0; }
@@ -1013,7 +1017,7 @@ button.link:hover { filter: brightness(1.2); }
 .receipt-time { margin-left: auto; font-size: 11px; color: var(--faint); white-space: nowrap; }
 .receipt-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .arb-actions button { display: flex; flex-direction: column; align-items: center; gap: 2px; }
-.arb-actions .rec { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; opacity: .8; font-weight: 500; }
+.arb-actions .rec { font-size: 10.5px; opacity: .85; font-weight: 500; text-transform: none; letter-spacing: 0; white-space: normal; line-height: 1.3; }
 
 /* =========================================================================
    THE SIGNER PROTOCOL — what a committee member asserts, not what it thinks.
