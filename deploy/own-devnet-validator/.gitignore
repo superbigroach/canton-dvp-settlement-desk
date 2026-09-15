@@ -1,0 +1,5 @@
+# generated at run time — party ids, local desk state, logs, pids. No secrets are ever written.
+.roster-*
+.localnet-backend.pid
+.localnet-backend.log
+.localnet-backend-data/

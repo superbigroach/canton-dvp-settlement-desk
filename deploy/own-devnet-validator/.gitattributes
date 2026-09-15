@@ -1,0 +1,5 @@
+# These files are copied to a Linux VM (gcloud compute scp) and sourced by bash: keep LF.
+*.sh        text eol=lf
+*.env       text eol=lf
+*.yaml      text eol=lf
+*.template  text eol=lf

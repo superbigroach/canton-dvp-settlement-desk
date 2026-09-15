@@ -27,7 +27,7 @@ public class HealthController {
                 "ledgerHost", props.getHost(),
                 "ledgerPort", props.getPort(),
                 "tls", props.isTls(),
-                "auth", props.hasJwt() ? "jwt" : "none",
+                "auth", props.effectiveAuthMode().name().toLowerCase(java.util.Locale.ROOT),
                 "applicationId", props.getApplicationId());
     }
 }

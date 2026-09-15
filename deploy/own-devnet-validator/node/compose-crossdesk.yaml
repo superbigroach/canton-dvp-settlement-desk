@@ -1,0 +1,84 @@
+# =============================================================================
+# compose-crossdesk.yaml — the CrossDesk overlay for the Splice 0.8.1 validator compose.
+#
+# 02-bootstrap-node.sh copies this next to compose.yaml and patches start.sh/stop.sh to pass
+# it LAST, so each environment entry below replaces the same-named entry from
+# compose-disable-auth.yaml (compose merges `environment` by variable name).
+#
+# What it changes, and why:
+#
+# 1. LEDGER API AUTH: none → HS256 (unsafe-jwt-hmac-256) with a 64-hex-char secret from
+#    Secret Manager. The stock no-auth overlay leaves the participant with auth-services=[]:
+#    ANY client that reaches port 5001 acts as ANY party. The HMAC shape is copied from
+#    Splice's own LocalNet (conf/canton/app-provider/app-auth.conf), which is where the
+#    config keys below were verified.
+#    The validator app keeps talking to its participant as ledger-api-user with self-signed
+#    tokens under the same secret.
+#
+# 2. EXPOSURE: gRPC Ledger API 5001 published on the VM's INTERNAL IP only (the VPC firewall
+#    admits just the Cloud Run egress subnet); JSON Ledger API 7575 on 127.0.0.1 only (operator
+#    scripts reach it through the IAP SSH tunnel). nginx / wallet UI stay on 127.0.0.1:80 as
+#    the stock compose ships them — the wallet's validator API still uses the public "unsafe"
+#    development secret, so it must never be reachable from the network.
+#
+# 3. SCAN PROXY: DevNet Scan only answers the allowlisted egress IP. The desk (Cloud Run)
+#    needs Scan's token-standard registry to accept Canton Coin transfer instructions, so a
+#    tiny nginx forwards <internal-ip>:5012 → the sponsor SV's Scan, egressing from the VM.
+#
+# Required env at `start.sh` time (04-onboard.sh sets them; none are written to disk):
+#   CROSSDESK_LEDGER_BIND_IP       the VM internal IP (10.20.0.10)
+#   CROSSDESK_LEDGER_AUDIENCE      e.g. https://ledger-api.crossdesk-devnet.internal
+#   CROSSDESK_LEDGER_HMAC_SECRET   from Secret Manager crossdesk-ledger-hmac-secret
+#   CROSSDESK_SCAN_URL             e.g. https://scan.sv-1.dev.global.canton.network.sync.global
+# =============================================================================
+services:
+  participant:
+    ports:
+      - "${CROSSDESK_LEDGER_BIND_IP:-127.0.0.1}:5001:5001"
+      - "127.0.0.1:7575:7575"
+    environment:
+      - CANTON_PARTICIPANT_ADMIN_USER_NAME=ledger-api-user
+      - |
+        ADDITIONAL_CONFIG_DISABLE_AUTH=
+          canton.participants.participant.ledger-api.auth-services = [{
+            type = unsafe-jwt-hmac-256
+            target-audience = "${CROSSDESK_LEDGER_AUDIENCE:-https://ledger-api.crossdesk-devnet.internal}"
+            secret = "${CROSSDESK_LEDGER_HMAC_SECRET:-}"
+          }]
+
+  validator:
+    environment:
+      - SPLICE_APP_VALIDATOR_WALLET_USER_NAME=administrator
+      - SPLICE_APP_VALIDATOR_LEDGER_API_AUTH_USER_NAME=ledger-api-user
+      - |
+        ADDITIONAL_CONFIG_DISABLE_AUTH=
+          canton.validator-apps.validator_backend {
+            auth = ""
+          }
+          canton.validator-apps.validator_backend {
+            auth = {
+              algorithm = "hs-256-unsafe"
+              audience = "${VALIDATOR_AUTH_AUDIENCE}"
+              secret = "unsafe"
+            }
+          }
+          canton.validator-apps.validator_backend.participant-client.ledger-api.auth-config = ""
+          canton.validator-apps.validator_backend.participant-client.ledger-api.auth-config {
+            type = "self-signed"
+            user = "ledger-api-user"
+            audience = "${CROSSDESK_LEDGER_AUDIENCE:-https://ledger-api.crossdesk-devnet.internal}"
+            secret = "${CROSSDESK_LEDGER_HMAC_SECRET:-}"
+          }
+
+  crossdesk-scan-proxy:
+    image: "nginx:${NGINX_VERSION}"
+    restart: always
+    environment:
+      - CROSSDESK_SCAN_URL=${CROSSDESK_SCAN_URL:-https://scan.sv-1.dev.global.canton.network.sync.global}
+      - NGINX_ENVSUBST_OUTPUT_DIR=/etc/nginx/conf.d
+    volumes:
+      - ./scan-proxy.conf.template:/etc/nginx/templates/default.conf.template:ro
+    ports:
+      - "${CROSSDESK_LEDGER_BIND_IP:-127.0.0.1}:5012:5012"
+    networks:
+      - ${DOCKER_NETWORK:-splice_validator}

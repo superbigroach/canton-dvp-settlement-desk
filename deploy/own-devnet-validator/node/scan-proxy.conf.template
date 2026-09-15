@@ -1,0 +1,24 @@
+# nginx template (envsubst on ${CROSSDESK_SCAN_URL}) — forwards the Token Standard registry
+# and read-only Scan API to the sponsor SV's Scan, egressing from the allowlisted VM IP.
+# Reachable only from the Cloud Run egress subnet (VPC firewall crossdesk-allow-run-ledger).
+server {
+  listen 5012;
+  client_max_body_size 1m;
+
+  location /registry/ {
+    proxy_pass ${CROSSDESK_SCAN_URL};
+    proxy_ssl_server_name on;
+    proxy_set_header Host $proxy_host;
+    proxy_read_timeout 30s;
+  }
+
+  location /api/scan/ {
+    limit_except GET POST { deny all; }
+    proxy_pass ${CROSSDESK_SCAN_URL};
+    proxy_ssl_server_name on;
+    proxy_set_header Host $proxy_host;
+    proxy_read_timeout 30s;
+  }
+
+  location / { return 404; }
+}

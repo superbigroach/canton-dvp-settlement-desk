@@ -23,6 +23,30 @@ ledger:
   jwt: ${LEDGER_JWT:}
   application-id: ${LEDGER_APPLICATION_ID:canton-dvp-desk}
   connect-timeout-seconds: ${LEDGER_CONNECT_TIMEOUT_SECONDS:10}
+  # gRPC :authority override — only when the Ledger API is behind a name-routed proxy
+  # (Splice compose nginx: LEDGER_AUTHORITY=grpc-ledger-api.localhost). Blank = host:port.
+  authority: ${LEDGER_AUTHORITY:}
+  # Party roster, "Label=partyId,..." (full ids). When set it replaces the live
+  # party-management listing. Required on shared nodes, our own validator and LocalNet.
+  parties: ${LEDGER_PARTIES:}
+  # Token source: auto | none | static | refresh | client-credentials | hmac.
+  # auto: LEDGER_HMAC_SECRET -> hmac; LEDGER_REFRESH_TOKEN -> refresh;
+  #       LEDGER_CLIENT_SECRET -> client-credentials; LEDGER_JWT -> static; else none.
+  # See deploy/own-devnet-validator/README.md Phase 3.
+  auth-mode: ${LEDGER_AUTH_MODE:auto}
+  # refresh (Keycloak, Noders-style) + client-credentials (OIDC)
+  token-endpoint: ${LEDGER_TOKEN_ENDPOINT:}
+  client-id: ${LEDGER_CLIENT_ID:}
+  client-secret: ${LEDGER_CLIENT_SECRET:}
+  refresh-token: ${LEDGER_REFRESH_TOKEN:}
+  refresh-seconds: ${LEDGER_REFRESH_SECONDS:1800}
+  # hmac (own DevNet node / LocalNet): the desk mints {sub, aud, iat, exp} HS256 itself.
+  # In hmac mode the application id is FORCED to token-subject (v2: userId must equal sub).
+  token-audience: ${LEDGER_TOKEN_AUDIENCE:}
+  token-scope: ${LEDGER_TOKEN_SCOPE:}
+  token-subject: ${LEDGER_TOKEN_SUBJECT:}
+  hmac-secret: ${LEDGER_HMAC_SECRET:}
+  token-ttl-seconds: ${LEDGER_TOKEN_TTL_SECONDS:3600}
 
 # ---------------------------------------------------------------------------
 # CIP-56 token standard — the off-ledger Registry API (/registry/...) and the

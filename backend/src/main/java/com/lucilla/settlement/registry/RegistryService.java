@@ -735,11 +735,8 @@ public class RegistryService {
         if (disclosed != null && !disclosed.isEmpty()) {
             submission = submission.withDisclosedContracts(disclosed);
         }
-        if (connection.hasActiveToken()) {
-            // Travels in gRPC call metadata, never in the command — nothing logged here
-            // can contain it.
-            submission = submission.withAccessToken(connection.activeToken());
-        }
+        // The bearer token is attached by LedgerConnection's channel interceptor (the
+        // current, renewed token) — not per submission, which would duplicate the header.
 
         log.info("REGISTRY SUBMIT commandId={} applicationId={} actAs={} disclosed={} {} args={}",
                 commandId, applicationId, actAs,

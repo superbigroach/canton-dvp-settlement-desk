@@ -147,11 +147,9 @@ public class LedgerService {
                         Optional.empty(),                 // v2: Optional<String> synchronizerId
                         List.of(command))
                 .withActAs(actAs);
-        if (connection.properties().hasJwt()) {
-            // v2 takes the raw token, not an Optional. It goes into gRPC call metadata
-            // and is never part of the command, so nothing below can log it.
-            submission = submission.withAccessToken(connection.properties().getJwt());
-        }
+        // No per-submission withAccessToken: LedgerConnection's channel interceptor attaches
+        // the CURRENT (renewed) token to every call. Setting it here too would pin a stale
+        // static token and add a second Authorization header.
 
         log.info("LEDGER SUBMIT commandId={} applicationId={} actAs={} {} args={}",
                 commandId, applicationId, actAs, what, LedgerErrors.describeArgs(command));
@@ -1172,6 +1170,17 @@ public class LedgerService {
      * friendly {@code label} is the party hint — the prefix before {@code "::"}.
      */
     public List<PartyView> listParties() {
+        if (connection.properties().hasPartyRoster()) {
+            // A configured roster (LEDGER_PARTIES) wins: shared nodes, our own validator and
+            // LocalNet all carry the fixed *-crossdesk parties, and the backend's ledger user
+            // is deliberately NOT a participant admin, so it could not list parties anyway.
+            List<PartyView> out = new ArrayList<>();
+            for (var e : com.lucilla.settlement.config.PartyRoster.parse(
+                    connection.properties().getParties())) {
+                out.add(new PartyView(e.party(), e.label(), e.label(), true));
+            }
+            return out;
+        }
         return withRetry("list parties", () -> {
             var stub = connection.partyManagement();
             var req = com.daml.ledger.api.v2.admin.PartyManagementServiceOuterClass
