@@ -136,3 +136,21 @@ spring:
 # Surface a JSON error body (message + status) instead of the default HTML page.
 server.error:
   include-message: always
+
+# ---------------------------------------------------------------------------
+# HOW EACH ASSET'S BACKING IS PROVEN, which decides what the ISSUER seat is asked
+# to assert. Adding an asset is a config line, never a code change.
+#
+#   attested            reserve held under an attestor set with a periodic
+#                       proof-of-reserve.  e.g. cBTC
+#   onchain-verifiable  reserve locked in protocol-controlled contracts, readable
+#                       at any block. No attestor quorum exists.  e.g. cETH
+#   custodial           reserve held by a custodian who reports holdings.
+#                       e.g. a tokenised equity
+#
+# An instrument that is not listed is treated as `attested`, the strictest
+# profile: an asset we know nothing about is not quietly given an easier checklist.
+signer:
+  reserve-models:
+    CBTC: ${RESERVE_MODEL_CBTC:attested}
+    cETH: ${RESERVE_MODEL_CETH:onchain-verifiable}

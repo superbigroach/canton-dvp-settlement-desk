@@ -140,6 +140,7 @@ public class PublicBenchmarkController {
         last.put("asOf", r.asOf());
         last.put("tier", r.tier());
         last.put("tierLabel", r.tierLabel());
+        last.put("displayLabel", displayLabel(r));
         last.put("k", r.k());
         last.put("n", r.n());
         last.put("signers", r.signers());
@@ -148,6 +149,28 @@ public class PublicBenchmarkController {
         if (r.referencePrice() != null) last.put("referencePrice", r.referencePrice());
         if (r.wrapperFactor() != null) last.put("wrapperFactor", r.wrapperFactor());
         return last;
+    }
+
+    /**
+     * What a human should be told this row is, which is not always what the tier is called.
+     *
+     * <p>A tier-5 row with {@code n == 0} is not a missed strike: <b>no committee has been
+     * seated</b>, so no strike could ever have reached {@code K}. Calling that "missed" tells a
+     * reader the system failed, when in fact the protocol worked exactly as specified and is
+     * waiting for signers. The tier itself is unchanged  it stays 5 on the ledger, in the CSV
+     * and in the series API, because the data model must not be bent to flatter the UI.
+     */
+    static String displayLabel(SeriesRow r) {
+        if (r.tier() == 5 && r.n() == 0) return "awaiting committee";
+        return switch (r.tierLabel()) {
+            case "attested" -> "attested";
+            case "alternate-seats" -> "attested (alternate seats)";
+            case "benchmark-x-factor" -> "derived from benchmark print";
+            case "carried-forward" -> "carried forward";
+            case "missed" -> "missed";
+            case "seed" -> "seed value, not attested";
+            default -> r.tierLabel();
+        };
     }
 
     static List<SeriesRow> filter(List<SeriesRow> rows, String from, String to, Integer limit) {

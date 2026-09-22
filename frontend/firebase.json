@@ -47,6 +47,10 @@
         "destination": "/benchmarks/benchmark.html"
       },
       {
+        "source": "/documents",
+        "destination": "/documents.html"
+      },
+      {
         "source": "/methodology",
         "destination": "/methodology.html"
       },
@@ -76,6 +80,15 @@
       }
     ],
     "headers": [
+      {
+        "source": "**",
+        "headers": [
+          { "key": "X-Frame-Options", "value": "DENY" },
+          { "key": "X-Content-Type-Options", "value": "nosniff" },
+          { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+          { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=()" }
+        ]
+      },
       {
         "source": "/",
         "headers": [
@@ -158,7 +171,7 @@
         ]
       },
       {
-        "source": "/@(methodology|governance|licensing|regulatory|news|about)",
+        "source": "/@(documents|methodology|governance|licensing|regulatory|news|about)",
         "headers": [
           {
             "key": "Cache-Control",
@@ -191,6 +204,13 @@
             "key": "Cache-Control",
             "value": "no-cache, max-age=0, must-revalidate"
           }
+        ]
+      },
+      {
+        "source": "/documents/**.md",
+        "headers": [
+          { "key": "Content-Type", "value": "text/plain; charset=utf-8" },
+          { "key": "Cache-Control", "value": "no-cache, max-age=0, must-revalidate" }
         ]
       },
       {

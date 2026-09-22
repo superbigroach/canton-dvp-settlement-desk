@@ -740,7 +740,8 @@ public class LedgerService {
                                     f.referencePrice.orElse(null),
                                     f.wrapperFactor.orElse(null),
                                     f.supersedes.map(cid -> cid.contractId).orElse(null),
-                                    f.restatementReason.orElse(null)));
+                                    f.restatementReason.orElse(null),
+                                    f.admin));
                         }
                     });
             return out;
@@ -1615,7 +1616,12 @@ public class LedgerService {
             java.math.BigDecimal referencePrice,          // the benchmark print
             java.math.BigDecimal wrapperFactor,           // the attested par ratio
             String supersedes,                            // contract id this corrects
-            String restatementReason) {
+            String restatementReason,
+            // The administrator the fixing NAMES. Appended last. On-ledger this is a plain
+            // field — `NavFixing` is `signatory attestors`, so a party can create one
+            // naming any admin, any K, any N. Consumers must check it against a real
+            // OperatorCommittee (SeriesService) rather than trust the fixing's own claim.
+            String admin) {
 
         /** True when this fix's value MOVES — a zero rate is the old snapshot exactly. */
         public boolean accruing() {

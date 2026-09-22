@@ -70,7 +70,17 @@ public class AuthFilter implements Filter {
             chain.doFilter(request, response);
             return;
         }
-        String path = http.getRequestURI();
+        // CLASSIFY THE PATH SPRING WILL ROUTE, NOT THE BYTES THE CLIENT SENT.
+        // getRequestURI() is raw: percent-escapes intact, matrix params (";x") intact.
+        // Spring MVC routes on the DECODED path with matrix params stripped. Classifying
+        // the raw form let "/api;x/admin/users" read as NOT_API here and reach the admin
+        // controller there — a full bypass, confirmed live on 22 Sep 2026. Normalise
+        // first; anything that cannot be normalised unambiguously is refused outright.
+        String path = normalisedPath(http.getRequestURI());
+        if (path == null) {
+            reject(out, AuthException.unauthenticated("malformed request path"), http.getRequestURI());
+            return;
+        }
         String ctx = http.getContextPath();
         if (ctx != null && !ctx.isEmpty() && path.startsWith(ctx)) {
             path = path.substring(ctx.length());
@@ -169,6 +179,13 @@ public class AuthFilter implements Filter {
             TokenVerifier.Verified v = verifier.verify(token);
             Optional<UserRecord> mapped = users.byEmail(v.email());
             if (mapped.isPresent()) {
+                // A roster row is bound to an e-mail. An identity provider will hand a token
+                // to anyone who REGISTERS an address; only verification proves they hold it.
+                // Mapping an unverified claim to a seat — or to admin — would let a stranger
+                // become the administrator by typing the administrator's address at sign-up.
+                if (!v.emailVerified()) {
+                    throw AuthException.forbidden("e-mail address is not verified with the identity provider");
+                }
                 return Optional.of(Principal.of(mapped.get(), "firebase"));
             }
             log.info("AUTH verified {} ({}) is not in the user mapping — viewer", v.email(), v.uid());
@@ -206,6 +223,43 @@ public class AuthFilter implements Filter {
         } catch (RuntimeException e) {
             log.warn("act-as event not recorded: {}", e.toString());
         }
+    }
+
+    /**
+     * The path as Spring MVC will match it: matrix parameters stripped from every segment,
+     * percent-escapes decoded, no traversal. Returns {@code null} for anything ambiguous —
+     * backslashes, empty segments, {@code ..}, undecodable escapes, or an escape that
+     * decodes to a slash (which would let one segment masquerade as two).
+     */
+    static String normalisedPath(String raw) {
+        if (raw == null || raw.isEmpty()) return "/";
+        StringBuilder sb = new StringBuilder(raw.length());
+        String[] segments = raw.split("/", -1);
+        for (int i = 0; i < segments.length; i++) {
+            String seg = segments[i];
+            int semi = seg.indexOf(';');
+            if (semi >= 0) seg = seg.substring(0, semi);
+            if (i > 0) sb.append('/');
+            sb.append(seg);
+        }
+        String stripped = sb.toString();
+        String decoded;
+        try {
+            decoded = new java.net.URI(stripped).getPath();
+        } catch (java.net.URISyntaxException e) {
+            return null;
+        }
+        if (decoded == null || decoded.isEmpty()) return null;
+        if (decoded.contains("\\") || decoded.contains("//") || decoded.indexOf('\0') >= 0) return null;
+        for (String seg : decoded.split("/", -1)) {
+            if (seg.equals("..") || seg.equals(".")) return null;
+        }
+        // An escape that decoded INTO a slash means the raw form had fewer segments than
+        // the routed form. Refuse rather than guess which one Spring will see.
+        long rawSlashes = stripped.chars().filter(ch -> ch == '/').count();
+        long decSlashes = decoded.chars().filter(ch -> ch == '/').count();
+        if (rawSlashes != decSlashes) return null;
+        return decoded;
     }
 
     private void reject(HttpServletResponse out, AuthException e, String path) throws IOException {

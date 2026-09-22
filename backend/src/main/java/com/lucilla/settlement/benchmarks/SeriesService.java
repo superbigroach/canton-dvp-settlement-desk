@@ -39,7 +39,7 @@ public class SeriesService {
         String session = sched == null ? "Close" : sched.getSession();
         ZoneId zone = sched == null ? ZoneId.of("Europe/London") : sched.zone();
         String auditor = ledger.resolveParty("Auditor");
-        List<LedgerService.NavFixingView> fixings = ledger.navFixingsVisibleTo(auditor);
+        List<LedgerService.NavFixingView> fixings = recognised(ledger.navFixingsVisibleTo(auditor));
         int committeeSize = committeeSize();
 
         // The seed: the instrument's own published mark (a fund: its NAV from components).
@@ -103,4 +103,50 @@ public class SeriesService {
             return 0;
         }
     }
+
+    /**
+     * Only fixings that a REAL committee could have produced.
+     *
+     * <p>WHY. On-ledger, {@code NavFixing} is {@code signatory attestors} and {@code admin},
+     * {@code threshold} and the attestor list are plain fields. Nothing binds a fixing to an
+     * {@code OperatorCommittee}, so a single party can create a proposal naming the real
+     * administrator with {@code threshold = 1} and itself as sole approver, finalise it, and
+     * hold a "committee fixing" that this service would otherwise publish as attested.
+     * (Daml audit G1/G2, 22 Sep 2026.) Until the contract itself carries the committee, the
+     * consumer must do the binding: a fixing is recognised only if some committee visible
+     * to the auditor has the same admin, contains every attestor as a member, declares the
+     * same threshold, and that threshold is actually met. Anything else is dropped and
+     * logged — never rendered, never used as a mark.
+     */
+    List<LedgerService.NavFixingView> recognised(List<LedgerService.NavFixingView> fixings) {
+        List<LedgerService.CommitteeView> committees;
+        try {
+            committees = ledger.committeesVisibleTo(ledger.resolveParty("Auditor"));
+        } catch (RuntimeException e) {
+            committees = List.of();
+        }
+        List<LedgerService.NavFixingView> out = new ArrayList<>();
+        for (var f : fixings) {
+            boolean ok = false;
+            for (var c : committees) {
+                if (f.admin() == null || !f.admin().equals(c.admin())) continue;
+                if (f.threshold() != c.threshold()) continue;
+                if (f.attestors() == null || f.attestors().size() < c.threshold()) continue;
+                if (!c.members().containsAll(f.attestors())) continue;
+                ok = true;
+                break;
+            }
+            if (ok) {
+                out.add(f);
+            } else {
+                log.warn("FIXING {} for {} REJECTED: not produced by any recognised committee "
+                        + "(admin={}, threshold={}, attestors={}) — possible forgery, not published",
+                        f.contractId(), f.instrumentId(), LedgerService.labelOf(f.admin()),
+                        f.threshold(), f.attestors());
+            }
+        }
+        return out;
+    }
+
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(SeriesService.class);
 }

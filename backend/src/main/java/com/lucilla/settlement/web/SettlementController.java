@@ -1367,10 +1367,15 @@ public class SettlementController {
      * signer ticks exactly what the backend will take.
      */
     @GetMapping("/signer-protocol")
-    public Dtos.SignerProtocolResponse signerProtocol() {
+    public Dtos.SignerProtocolResponse signerProtocol(
+            @RequestParam(name = "instrument", required = false) String instrument) {
+        // WITH an instrument, the ISSUER seat is served as that asset's reserve model can
+        // honestly assert it — an on-chain-backed asset is never shown an attestor-quorum
+        // box it cannot fill. WITHOUT one, the strictest (attested) profile is served, so
+        // an unqualified call never understates what a signer will be held to.
         return new Dtos.SignerProtocolResponse(
                 SignerProtocol.VERSION,
-                SignerProtocol.roles().stream()
+                SignerProtocol.rolesFor(SignerProtocol.reserveModelOf(instrument)).stream()
                         .map(r -> new Dtos.SignerRoleView(
                                 r.key(), r.title(), r.uniquelyKnows(),
                                 r.conditions().stream()
@@ -1388,12 +1393,22 @@ public class SettlementController {
         // least one condition is named; it cannot know whether `book-acceptance` is a
         // check the venue seat is entitled to claim. That belongs to the protocol
         // version, which lives at the edge — see SignerProtocol's class comment.
+        String member = ledger.resolveParty(req.member());
+
+        // WHICH ASSET. The seat a signer is held to depends on how this instrument's backing
+        // is proven: an issuer whose reserve is an on-chain lock has no attestor quorum to
+        // report, and must not be refused for failing to supply one. Resolved before the
+        // refusal check so the protocol asks each model only what it can actually prove.
+        String proposalInstrument = ledger.fixingProposalsVisibleTo(member).stream()
+                .filter(p -> p.contractId().equals(cid))
+                .map(LedgerService.FixingProposalView::instrumentId)
+                .findFirst().orElse(null);
+
         String bad = SignerProtocol.rejectionReason(req.role(), req.checksPassed(),
-                req.observedLow() != null, req.observedHigh() != null);
+                req.observedLow() != null, req.observedHigh() != null, proposalInstrument);
         if (bad != null) {
             throw new IllegalArgumentException(bad);
         }
-        String member = ledger.resolveParty(req.member());
         String ref = blankTo(req.protocolRef(), SignerProtocol.refFor(req.role()));
 
         // VERIFY THE NUMBERS BEFORE SUBMITTING. When an issuer or lender brings per-condition
@@ -1401,6 +1416,16 @@ public class SettlementController {
         // own price — and refuses with the specific failure. `verified: true` on the event
         // means THIS code checked the numbers, never that the caller said so.
         com.lucilla.settlement.ledger.SignerEvidence.Result verified = null;
+        // A SEAT THAT MUST BRING NUMBERS MAY NOT TICK. Before 22 Sep 2026 a missing evidence
+        // block skipped verification and the confirm went to the ledger anyway, where it is
+        // indistinguishable from a verified one. The venue is the exception: its evidence is
+        // the observed range (or an attested absence), checked below and on-ledger.
+        boolean venueSeat = "venue".equalsIgnoreCase(req.role() == null ? "" : req.role().trim());
+        if (!venueSeat && req.evidence() == null
+                && com.lucilla.settlement.ledger.SignerEvidence.required(req.role())) {
+            throw new IllegalArgumentException("the " + req.role().trim().toLowerCase()
+                    + " seat must supply evidence for every condition it claims; a bare tick is not an attestation");
+        }
         if (req.evidence() != null && com.lucilla.settlement.ledger.SignerEvidence.required(req.role())) {
             BigDecimal proposalPrice = ledger.fixingProposalsVisibleTo(member).stream()
                     .filter(p -> p.contractId().equals(cid))

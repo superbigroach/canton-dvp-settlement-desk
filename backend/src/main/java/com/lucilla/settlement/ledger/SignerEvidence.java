@@ -32,16 +32,32 @@ public final class SignerEvidence {
 
     private SignerEvidence() {}
 
-    /** How stale a proof-of-reserve may be. */
+    /**
+     * Default staleness allowed on a reserve or holdings statement.
+     *
+     * <p>A DEFAULT, not a law. 24h suits a daily proof-of-reserve and a daily on-chain
+     * read; it fails a custodian that reports on a slower cycle, and applying it to one
+     * would force a true statement to be refused. Overridden per instrument via
+     * {@code signer.freshness-hours}; see {@link Tolerances#freshnessHours()}.
+     */
     public static final Duration RESERVES_MAX_AGE = Duration.ofHours(24);
     /** Clock skew allowed on {@code acceptedAt} before it counts as "in the future". */
     public static final Duration FUTURE_SKEW = Duration.ofMinutes(5);
 
     /** The lender's declared tolerances, from its signer settings. */
-    public record Tolerances(int markBps, int liquidationBps) {
+    public record Tolerances(int markBps, int liquidationBps, int freshnessHours) {
+
+        public Tolerances(int markBps, int liquidationBps) {
+            this(markBps, liquidationBps, (int) RESERVES_MAX_AGE.toHours());
+        }
 
         public static Tolerances defaults() {
             return new Tolerances(SignerProtocol.DEFAULT_TOLERANCE_BPS, SignerProtocol.DEFAULT_TOLERANCE_BPS);
+        }
+
+        /** The staleness window this asset's model actually supports. */
+        public Duration freshness() {
+            return Duration.ofHours(freshnessHours <= 0 ? RESERVES_MAX_AGE.toHours() : freshnessHours);
         }
 
         /** Read {@code tolerances.markBps} / {@code tolerances.liquidationBps}; missing → 25 bp. */
@@ -182,9 +198,10 @@ public final class SignerEvidence {
                     if (age.isNegative() && age.abs().compareTo(FUTURE_SKEW) > 0) {
                         yield "reserves-current: reservesAsOf " + asOf + " is in the future";
                     }
-                    yield age.compareTo(RESERVES_MAX_AGE) <= 0 ? null
+                    Duration reserveLimit = tol == null ? RESERVES_MAX_AGE : tol.freshness();
+                    yield age.compareTo(reserveLimit) <= 0 ? null
                             : "reserves-current: the proof-of-reserve is " + age.toHours() + "h old; it must be under "
-                            + RESERVES_MAX_AGE.toHours() + "h";
+                            + reserveLimit.toHours() + "h";
                 }
                 case "reserves-cover-supply" -> {
                     BigDecimal reserves = num(block, "reserves", out);
@@ -204,6 +221,78 @@ public final class SignerEvidence {
                     if (depth.signum() < 0 || max.signum() < 0) yield "redemption-queue-clear: depths must be non-negative";
                     yield depth.compareTo(max) <= 0 ? null
                             : "redemption-queue-clear: queueDepth " + plain(depth) + " exceeds maxQueueDepth " + plain(max);
+                }
+                case "holdings-current" -> {
+                    Instant asOf = instant(block, "statementAsOf", out);
+                    if (asOf == null) yield missing(c, block);
+                    Duration age = Duration.between(asOf, now);
+                    out.put("ageHours", BigDecimal.valueOf(age.toMinutes())
+                            .divide(BigDecimal.valueOf(60), 2, RoundingMode.HALF_UP));
+                    if (age.isNegative() && age.abs().compareTo(FUTURE_SKEW) > 0) {
+                        yield "holdings-current: statementAsOf " + asOf + " is in the future";
+                    }
+                    Duration holdingsLimit = tol == null ? RESERVES_MAX_AGE : tol.freshness();
+                    yield age.compareTo(holdingsLimit) <= 0 ? null
+                            : "holdings-current: the statement is " + out.get("ageHours")
+                              + "h old, over the " + holdingsLimit.toHours() + "h limit declared for this asset";
+                }
+                case "holdings-cover-supply" -> {
+                    BigDecimal holdings = num(block, "holdings", out);
+                    BigDecimal supply = num(block, "supply", out);
+                    if (holdings == null || supply == null) yield missing(c, block);
+                    if (holdings.signum() < 0 || supply.signum() < 0) {
+                        yield "holdings-cover-supply: holdings and supply must be non-negative";
+                    }
+                    yield holdings.compareTo(supply) >= 0 ? null
+                            : "holdings-cover-supply: holdings " + plain(holdings)
+                              + " is below issued supply " + plain(supply);
+                }
+                case "no-encumbrance" -> {
+                    BigDecimal enc = num(block, "encumbered", out);
+                    if (enc == null) yield missing(c, block);
+                    if (enc.signum() < 0) yield "no-encumbrance: encumbered must be non-negative";
+                    yield enc.signum() == 0 ? null
+                            : "no-encumbrance: " + plain(enc) + " units are pledged, lent or encumbered";
+                }
+                case "shares-outstanding-reconciled" -> {
+                    BigDecimal reg = num(block, "registerShares", out);
+                    BigDecimal led = num(block, "ledgerShares", out);
+                    if (reg == null || led == null) yield missing(c, block);
+                    if (reg.signum() < 0 || led.signum() < 0) {
+                        yield "shares-outstanding-reconciled: share counts must be non-negative";
+                    }
+                    yield reg.compareTo(led) == 0 ? null
+                            : "shares-outstanding-reconciled: register shows " + plain(reg)
+                              + " but the ledger shows " + plain(led);
+                }
+                case "fees-accrued" -> {
+                    BigDecimal fees = num(block, "accruedFees", out);
+                    if (fees == null) yield missing(c, block);
+                    yield fees.signum() >= 0 ? null
+                            : "fees-accrued: accruedFees cannot be negative";
+                }
+                case "no-prints-attested" -> {
+                    // The thin-market case, which on Canton is the normal one. The venue states
+                    // that its book had no trades in the window and quotes where the book stood,
+                    // so a fixing derived from other inputs is SUPPORTED rather than contradicted.
+                    // An empty book is a legitimate answer: both sides zero means there was no
+                    // quote either — weaker evidence, still true, and the band carries that.
+                    BigDecimal bid = num(block, "bestBid", out);
+                    BigDecimal ask = num(block, "bestAsk", out);
+                    if (bid == null || ask == null) yield missing(c, block);
+                    if (bid.signum() < 0 || ask.signum() < 0) {
+                        yield "no-prints-attested: bestBid and bestAsk must be non-negative (0 means no quote)";
+                    }
+                    boolean quoted = bid.signum() > 0 && ask.signum() > 0;
+                    out.put("quoted", quoted ? BigDecimal.ONE : BigDecimal.ZERO);
+                    if (!quoted) yield null;
+                    if (bid.compareTo(ask) > 0) {
+                        yield "no-prints-attested: bestBid " + plain(bid) + " is above bestAsk " + plain(ask);
+                    }
+                    if (proposal == null || proposal.signum() <= 0) yield null;
+                    yield (proposal.compareTo(bid) >= 0 && proposal.compareTo(ask) <= 0) ? null
+                            : "no-prints-attested: the proposal " + plain(proposal)
+                              + " sits outside your quoted " + plain(bid) + " / " + plain(ask);
                 }
                 case "independent-mark-within-tolerance" -> {
                     BigDecimal mark = num(block, "independentMark", out);
