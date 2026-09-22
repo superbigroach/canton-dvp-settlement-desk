@@ -188,8 +188,14 @@ public class AuthFilter implements Filter {
                 }
                 return Optional.of(Principal.of(mapped.get(), "firebase"));
             }
-            log.info("AUTH verified {} ({}) is not in the user mapping — viewer", v.email(), v.uid());
-            return Optional.of(Principal.unmapped(v.uid(), v.email(), "firebase"));
+            // NOT ON THE ROSTER = NOT IN. The identity provider will sign in anyone with a
+            // Google account; the roster is the invitation list. Before 22 Sep 2026 an unknown
+            // verified e-mail became a "viewer" that could read /api/me — harmless, but it let
+            // a stranger confirm that the desk exists and that their address is unknown to it.
+            // Now it is a 403 that names the fix: the administrator adds the e-mail first.
+            log.info("AUTH verified {} ({}) is not on the roster — refused", v.email(), v.uid());
+            throw AuthException.forbidden("this e-mail is not on the roster; the administrator must add it "
+                    + "with a role before it can sign in");
         }
         if (props.isSandbox()) {
             String ref = http.getHeader(SANDBOX_HEADER);
