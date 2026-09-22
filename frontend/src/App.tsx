@@ -622,7 +622,7 @@ export default function App() {
         {/* The desk lives at /desk/; the marketing site is at /. Without this the only
             way back is editing the URL bar, which is how a visitor ends up stuck on an
             app with no ledger behind it and no idea what the product is. */}
-        <a className="brand" href="/" title="Back to crossdesk.app" style={{ textDecoration: 'none', color: 'inherit' }}>
+        <a className="brand" href="/" title="Back to etpfoundry.com" style={{ textDecoration: 'none', color: 'inherit' }}>
           <span className="logo" aria-hidden>◈</span>
           <div className="brand-text">
             <span className="brand-name">CANTON DvP DESK</span>

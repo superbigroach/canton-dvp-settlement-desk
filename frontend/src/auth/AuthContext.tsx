@@ -109,7 +109,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setDegraded(true);
       } else if (unavailable) {
         setMe(placeholder(id));
-        setMeError(`CrossDesk has not published its identity route yet — ${errorMessage(e)}`);
+        setMeError(`ETP Foundry has not published its identity route yet — ${errorMessage(e)}`);
         setDegraded(true);
       } else {
         // 401/403: signed in with the provider, but CrossDesk has no mapping (or rejects the token).

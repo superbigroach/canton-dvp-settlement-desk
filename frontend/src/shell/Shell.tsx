@@ -72,10 +72,10 @@ export default function Shell() {
   return (
     <div className="shell">
       <header className="shell-top">
-        <a className="brand" href="/" title="crossdesk.app">
+        <a className="brand" href="/" title="etpfoundry.com">
           <span className="logo" aria-hidden>◈</span>
           <div className="brand-text">
-            <span className="brand-name">CROSSDESK</span>
+            <span className="brand-name">ETP FOUNDRY</span>
             <span className="brand-sub">the desk</span>
           </div>
         </a>
@@ -142,7 +142,7 @@ export default function Shell() {
         </main>
       </div>
       <footer className="foot">
-        CrossDesk is not a regulated benchmark administrator. Values shown are struck on a hosted sandbox unless the
+        ETP Foundry is not a regulated benchmark administrator. Values shown are struck on a hosted sandbox unless the
         page says otherwise; tier and age are shown on every published value.
       </footer>
     </div>
@@ -161,17 +161,17 @@ export function Home() {
   const failed = auth.meStatus !== null && (auth.meStatus >= 500 || auth.meStatus < 0);
   return (
     <div className="card">
-      <h2>{failed ? 'CrossDesk could not resolve who you are' : 'No role yet'}</h2>
+      <h2>{failed ? 'ETP Foundry could not resolve who you are' : 'No role yet'}</h2>
       {failed ? (
         <p className="hint">
           You are signed in as <strong>{auth.me.email}</strong>, but the identity route failed before it could say
-          which role, party and seat that address maps to. This is a CrossDesk fault, not a missing mapping — try again
+          which role, party and seat that address maps to. This is an ETP Foundry fault, not a missing mapping — try again
           in a moment, and tell CrossDesk if it persists.
         </p>
       ) : (
         <p className="hint">
           You are signed in as <strong>{auth.me.email}</strong>, but CrossDesk has not mapped that address to a role,
-          party and seat. Ask CrossDesk to add you (Admin → Users &amp; roles), then sign in again.
+          party and seat. Ask ETP Foundry to add you (Admin → Users &amp; roles), then sign in again.
         </p>
       )}
       {auth.meError && <p className="error">{auth.meError}</p>}

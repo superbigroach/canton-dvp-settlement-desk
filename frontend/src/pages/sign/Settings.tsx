@@ -79,7 +79,7 @@ export default function Settings() {
     <div className="page">
       <div className="page-head">
         <h1>Settings</h1>
-        <p className="hint">Where CrossDesk notifies your seat, what your automated signer tolerates, and the key it signs with.</p>
+        <p className="hint">Where ETP Foundry notifies your seat, what your automated signer tolerates, and the key it signs with.</p>
       </div>
       <LoadState loading={loaded.loading && !form} error={loaded.error} onRetry={loaded.reload}>
         {form && (

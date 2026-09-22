@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Benchmarks — ETP Foundry</title>
-<meta name="description" content="The ETP Foundry fixings: CBTC Close, cETH Close and the LX1 fund NAV. Each value is shown with its tier, its attestation count and its age, and links to a product page with the published series.">
-<link rel="canonical" href="https://etpfoundry.com/benchmarks/">
+<title>Documents — ETP Foundry</title>
+<meta name="description" content="The published document set for ETP Foundry benchmarks: rulebook, benchmark statement, chain and wrapper event policy, suitability analysis and factsheets. Versioned, with every change recorded.">
+<link rel="canonical" href="https://etpfoundry.com/documents">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="ETP Foundry">
-<meta property="og:title" content="ETP Foundry benchmarks">
-<meta property="og:description" content="CBTC Close, cETH Close and the LX1 NAV — attested daily fixings for tokenised assets on Canton, with tier and age beside every value.">
-<meta property="og:url" content="https://etpfoundry.com/benchmarks/">
+<meta property="og:title" content="Documents — ETP Foundry">
+<meta property="og:description" content="Three licence types, who pays what, and why an official price is priced like a benchmark rather than like fund accounting.">
+<meta property="og:url" content="https://etpfoundry.com/documents">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#0A0B0F">
 <link rel="stylesheet" href="/site/site.css?v=8">
@@ -46,38 +46,75 @@
 </header>
 
 <main id="main">
-
-<section class="section hero" aria-labelledby="h">
+<section class="hero">
   <div class="wrap">
-    <div class="kicker"><span>Benchmarks</span> <span class="rule"></span></div>
-    <h1 id="h">The ETP Foundry fixings.</h1>
-    <p class="lede">Every identifier has the form <code>CDX-&lt;INSTRUMENT&gt;-&lt;FREQ&gt;</code>. One fixing
-      per identifier per strike; a second strike for the same date is a restatement, never a
-      second fixing. Each published value carries its tier, its signers, and — when carried
-      forward — the age of the underlying strike.</p>
-    <div class="tiles" data-benchmark-tiles aria-live="polite" aria-busy="true"></div>
-    <p class="api-state" data-tiles-state>Loading live values…</p>
+    <h1>Documents</h1>
+    <p class="lede">A benchmark is a number plus the rules that produced it, published in
+      advance. This is that set. Every document is versioned, and superseded versions stay
+      published so the trajectory is visible.</p>
+    <p class="note"><strong>Status.</strong> Every document below is a <strong>draft at
+      version 0.1</strong>. No benchmark has been published for commercial use, no committee
+      has been convened, and no value has been struck. These rules are written before the
+      numbers exist, which is the order that makes them rules.</p>
   </div>
 </section>
 
-<section class="section" aria-labelledby="read-h">
+<section class="band">
   <div class="wrap">
-    <div class="kicker"><span>Reading a value</span> <span class="rule"></span></div>
-    <h2 id="read-h">What sits beside every number.</h2>
-    <div class="grid g4">
-      <div class="card"><h3>As of</h3><p>The strike instant — the moment the committee's quorum was reached, not the moment the transaction committed. Shown in the benchmark's declared time zone.</p></div>
-      <div class="card"><h3>Attested K of N</h3><p>Written only when K real signatures exist on the ledger. Below K there is no fixing, and the tile says so.</p></div>
-      <div class="card"><h3>Tier</h3><p>Which step of the fallback waterfall produced the value. Tier 1 is a committee-attested strike; higher tiers are flagged fallbacks. See <a href="/governance#waterfall">Governance</a>.</p></div>
-      <div class="card"><h3>Age</h3><p>How long ago the value was struck. A value older than two days is painted as stale.</p></div>
-    </div>
-    <p class="src" style="margin-top:22px">Two numbers are published side by side and must never be confused: the
-      <strong>official fixing</strong>, which creation and redemption settle at, and the
-      <strong>indicative value</strong>, derived continuously from live market data and binding on
-      nobody. This site shows the official fixing. Machine access: <code>GET /api/benchmarks</code>,
-      <code>GET /api/series/{id}</code> and <code>/api/series/{id}.csv</code>.</p>
+    <table class="docs">
+      <thead><tr><th>Document</th><th>What it answers</th><th>Version</th><th></th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>Rulebook</strong><br><span class="muted">Index construction and fixing methodology, all asset classes</span></td>
+          <td>How is the number computed, from what inputs, by whom, and what happens when it cannot be?</td>
+          <td>0.1 &middot; 21 Sep 2026</td>
+          <td><a href="/documents/rulebook-v0.1.md">Read</a></td>
+        </tr>
+        <tr>
+          <td><strong>Benchmark statement</strong><br><span class="muted">Canton Series</span></td>
+          <td>What does it measure, what are its limitations, and who may use it for what?</td>
+          <td>0.1 &middot; 22 Sep 2026</td>
+          <td><a href="/documents/benchmark-statement-v0.1.md">Read</a></td>
+        </tr>
+        <tr>
+          <td><strong>Chain and wrapper event policy</strong></td>
+          <td>What happens on a hard fork, a reserve shortfall, a de-peg, a registrar failure or a registry migration?</td>
+          <td>0.1 &middot; 22 Sep 2026</td>
+          <td><a href="/documents/chain-event-policy-v0.1.md">Read</a></td>
+        </tr>
+        <tr>
+          <td><strong>Suitability analysis</strong></td>
+          <td>Is this fit to underlie a regulated financial product? <strong>Today: no &mdash; and here is exactly why.</strong></td>
+          <td>0.1 &middot; 22 Sep 2026</td>
+          <td><a href="/documents/suitability-analysis-v0.1.md">Read</a></td>
+        </tr>
+        <tr>
+          <td><strong>Factsheets</strong><br><span class="muted">Template, cBTC Close, cBTC&ndash;cETH 50/50</span></td>
+          <td>What parameters does this specific benchmark use?</td>
+          <td>0.1 &middot; 22 Sep 2026</td>
+          <td><a href="/documents/factsheets-v0.1.md">Read</a></td>
+        </tr>
+      </tbody>
+    </table>
   </div>
 </section>
 
+<section class="band alt">
+  <div class="wrap">
+    <h2>Not yet written</h2>
+    <p>Listed so the gaps are visible rather than discovered.</p>
+    <ul>
+      <li><strong>Oversight committee minutes</strong> &mdash; published in summary after each quarterly meeting. None has been held.</li>
+      <li><strong>Constituent venue list</strong> &mdash; the criteria are in the rulebook &sect;4.0; no venue has been admitted.</li>
+      <li><strong>Independent assurance</strong> &mdash; an external audit against the IOSCO principles, when a licensee requires one.</li>
+    </ul>
+    <h2>How these change</h2>
+    <p>A methodology change is proposed on-ledger, requires the same K of N as a fixing, and
+      takes effect after five business days&rsquo; notice &mdash; thirty days for a material
+      change, with written notice to every licensee. <strong>No change is ever retroactive</strong>,
+      and every published value carries the rulebook version that produced it.</p>
+  </div>
+</section>
 </main>
 
 <footer class="site-footer">

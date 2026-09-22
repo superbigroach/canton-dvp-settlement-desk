@@ -29,13 +29,13 @@ export function humaniseLedgerError(msg: string): { message: string; hint?: stri
 }
 
 function statusSentence(status: number, path: string): string {
-  if (status === 0) return `no response from CrossDesk (${path})`;
+  if (status === 0) return `no response from ETP Foundry (${path})`;
   if (status === 401) return 'not signed in, or the session has expired — sign in again';
   if (status === 403) return 'your role is not allowed to do that';
   if (status === 404) return `this route is not available on the backend yet (${path})`;
-  if (status === 500) return `CrossDesk hit an internal error on ${path} — a backend fault, not something you did`;
-  if (status >= 502 && status <= 504) return 'CrossDesk or its Canton participant is not responding — check GET /api/diag';
-  return `CrossDesk returned HTTP ${status} for ${path}`;
+  if (status === 500) return `ETP Foundry hit an internal error on ${path} — a backend fault, not something you did`;
+  if (status >= 502 && status <= 504) return 'ETP Foundry or its Canton participant is not responding — check GET /api/diag';
+  return `ETP Foundry returned HTTP ${status} for ${path}`;
 }
 
 async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -48,7 +48,7 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
   try {
     res = await fetch(`/api${path}`, { ...init, headers });
   } catch (e) {
-    throw new ApiError(`cannot reach CrossDesk at /api${path} — ${errorMessage(e)}`, 0);
+    throw new ApiError(`cannot reach ETP Foundry at /api${path} — ${errorMessage(e)}`, 0);
   }
   const text = await res.text();
   const body = parseJson(text);
@@ -67,7 +67,7 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
       { code: b ? asText(b.code) || undefined : undefined, hint },
     );
   }
-  if (text && body === null) throw new ApiError(`CrossDesk returned a non-JSON response for ${path}`, res.status);
+  if (text && body === null) throw new ApiError(`ETP Foundry returned a non-JSON response for ${path}`, res.status);
   return body as T;
 }
 

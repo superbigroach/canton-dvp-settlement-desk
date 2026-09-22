@@ -23,6 +23,26 @@ For each asset the fund is to hold for real:
 Without 1 and 3 the asset cannot be received. Without 1 the fund cannot tell it apart from a
 lookalike.
 
+## 1a. The fifth fact: how the backing is proven
+
+The four facts identify the asset. This one decides **what its issuer seat can honestly
+assert**, and it is captured at the same time.
+
+| Reserve model | What it means | Issuer asserts |
+|---|---|---|
+| `attested` | held under an attestor set with a periodic proof-of-reserve (cBTC) | attestors online, attestation < 24h, reserves >= supply, queue clear |
+| `onchain-verifiable` | locked in protocol-controlled contracts, readable at any block (cETH) | own on-chain verification < 24h, locked >= supply, queue clear |
+| `custodial` | held by a custodian that reports holdings (a tokenised equity) | custodian statement < 24h, holdings >= supply, queue clear |
+
+Configured per instrument in `application.yml` under `signer.reserve-models`, so onboarding
+an asset is a config line rather than a code change. **An instrument that is not listed is
+held to `attested`**, the strictest profile.
+
+**Why this exists.** The issuer conditions were written for cBTC. Applied unchanged to cETH
+they demand `quorumSigners` from an asset with no attestor set, leaving the signer to fail
+or to invent a number - and inventing a number to pass a check is exactly what this protocol
+exists to prevent. Ask each model only what it can prove.
+
 ## 2. Known-good: cBTC on HackCanton devnet
 
 The one asset where all four are established, by having actually claimed 4.16 of it:

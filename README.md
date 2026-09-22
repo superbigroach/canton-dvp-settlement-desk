@@ -1,4 +1,4 @@
-# CrossDesk — a sealed closing auction that discovers its own price, on Canton
+# ETP Foundry (formerly CrossDesk) — benchmark fixings and fund creation/redemption for tokenised assets, on Canton
 
 > **Source-available, not open source.** This is a commercial product, published so it can be read.
 > You may read, fork and evaluate it; you may **not** run it in production, operate it as a service,
@@ -15,9 +15,10 @@
 > cBTC (4.16 real cBTC was claimed through the CIP-56 registry flow and is held **separately**; the
 > fund's own cBTC and cETH legs are self-issued test assets).
 
-## The product, as of 2 September 2026 — start here if you want to use it
+## The product, as of 22 September 2026 — start here if you want to use it
 
-CrossDesk is now two things, and neither is an exchange:
+ETP Foundry (the company and product formerly called CrossDesk — Best Financial Application,
+HackCanton Season 2) is two things, and neither is an exchange:
 
 1. **A benchmark administrator** for tokenised assets on Canton that no administrator covers. It
    proposes a price at a scheduled time, has a K-of-N committee of parties with money on the mark
@@ -30,9 +31,9 @@ sandbox reseeds on every restart. Nothing here is a regulated benchmark, and the
 
 | Surface | URL | Who |
 |---|---|---|
-| Site: benchmarks, methodology, governance, licensing, regulatory | https://crossdesk-devnet-app.web.app | public |
+| Site: benchmarks, methodology, governance, documents, licensing, regulatory | https://etpfoundry.com (crossdesk-devnet-app.web.app still resolves) | public |
 | Public API: `GET /api/benchmarks`, `/api/benchmarks/{id}`, `/api/series/{id}` (+`.csv`), `/api/methodology`, `/api/signer-protocol`, `/api/fixing-schedule` | same host | licensees, anyone |
-| App: sign in, role portals | https://crossdesk-devnet-app.web.app/desk/login | signers, APs, fund admins, auditors, admin |
+| App: sign in, role portals | https://etpfoundry.com/desk/login | signers, APs, fund admins, auditors, admin |
 | Operator desk (the original one-page desk) | `/desk/ops` | admin |
 
 **Roles and what each sees after sign-in** (Firebase Authentication; the backend maps email → role,
@@ -64,7 +65,11 @@ those events.
 `s.borjas@lucilla.ca`; signers `issuer@`, `lender@`, `venue@sandbox.crossdesk` (parties Issuer,
 Bank, Venue); APs `alice@`, `bob@sandbox.crossdesk`; `fund@sandbox.crossdesk` (fund admin, party
 Bank); `auditor@sandbox.crossdesk`. With `AUTH_MODE=sandbox` on the backend the header
-`X-Sandbox-User: <email>` stands in for a token, which is how the hosted demo currently runs.
+`X-Sandbox-User: <email>` stands in for a token — **local evaluation only.** The hosted host has
+run `AUTH_MODE=firebase` since 22 September 2026: anonymous and header-only requests get 401, and
+only e-mail-verified Firebase users map to a roster row. (Until that date the hosted demo ran in
+sandbox mode, which made every anonymous caller the operator — found and closed in the 22 Sep
+audit, `BUSINESS/5-RUN-THE-COMMITTEE/12-FULL-SYSTEM-AUDIT-2026-09-22.md`.)
 
 **What is not done**, in the order it matters: a Canton Network participant (the standing blocker);
 a real committee (no institution has signed a fixing); issuer and lender claims are recorded, not
@@ -326,7 +331,10 @@ consumes it — all atomically settled on one engine.**
   that re-executes the transaction (`MarketOnClose.daml`, Flow 2).
 - **A committee-struck anchor.** The number the auction runs against only exists
   once a **threshold K of N** independent members have attested it — provable from
-  the contract's own signature set (`Governance.daml`, Flow 3).
+  the contract's own signature set (`Governance.daml`, Flow 3). ⚠️ On the 2.x
+  package K and N are fields the proposer chooses, not facts bound to the
+  committee; the published series filters for that, the ledger does not yet —
+  see `docs/SIGNER_PROTOCOL.md` §8 and the 3.0.0 change it describes.
 - **An in-kind primary market.** A basket (e.g. `LX1 = 0.10 cETH + 0.01 CBTC` per
   share) is an ordinary tokenised instrument; an authorised participant delivers
   the exact underlyings and receives freshly-minted shares, or the reverse, in
@@ -735,6 +743,15 @@ way, as an accumulating multisignature:
 3. `FinalizeFixing` — once ≥ K have signed, it mints a `NavFixing` whose
    **signatory set *is* the attestors**. The fix cannot exist without K genuine
    signatures — provable from the contract itself.
+
+⚠️ **Audit finding, 22 Sep 2026 — read before repeating the paragraph above.** The
+K signatures are genuine, but *which* K and *which* committee are not bound: `admin`,
+`threshold` and the approver list are plain fields, so any party can propose with
+`threshold = 1` naming the real administrator and finalise alone. The backend now
+publishes only fixings a real `OperatorCommittee` could have produced
+(`SeriesService.recognised`); closing it on-ledger is package 3.0.0
+(`signatory admin :: approvers`, threshold bounds on the committee). Details:
+`docs/SIGNER_PROTOCOL.md` §8.
 
 ### What binding an auction to a fix means now
 

@@ -1,6 +1,7 @@
-# CrossDesk Signer Protocol
+# ETP Foundry Signer Protocol
 
-**Version 1 — 30 August 2026.** Administrator: CrossDesk. Companion to
+**Version 2 — 22 September 2026** (v1 30 August 2026). Administrator: ETP Foundry
+(formerly CrossDesk). Wire value: `SIGNER_PROTOCOL v2`, served by `GET /api/signer-protocol`. Companion to
 `docs/FIXING_METHODOLOGY.md`, which is the rulebook for the fixing itself. This document is the
 rulebook for the people who sign it.
 
@@ -8,6 +9,13 @@ rulebook for the people who sign it.
 > (`ConfirmWithChecks`, `SignerCheck`, `ProposeWrappedFixing`) — see §7 for the per-section state.
 > **No fixing has been published and no committee has been convened.** Nothing here is a claim
 > that a seat is currently occupied.
+>
+> **What changed in v2 (22 Sep 2026):** two new seats (`custodian`, `transfer-agent`); the venue
+> may attest the *absence* of prints (`no-prints-attested`) instead of halting; each instrument
+> declares a **reserve model** (`attested` · `onchain-verifiable` · `custodial`) that selects
+> which issuer conditions apply — `GET /api/signer-protocol?instrument=…`; a bare tick is refused
+> for every seat except the venue; and the published series recognises a fixing only if a real
+> committee could have produced it (§7, last rows). See §8 for what is still not enforced on-ledger.
 
 ---
 
@@ -193,6 +201,60 @@ The administrator either restrikes with a corrected input, or the fixing does no
 
 ---
 
+## 4a. Holding a seat: accounts, credentials, and key custody
+
+### How a seat is issued
+
+**A seat is issued, never self-registered.** The roster is seeded from `users.yml` and
+persisted to `users.json`; the administrator adds a signer, which mints the account and binds
+it to a Canton party. Open registration would let anyone self-declare as a lender, and the
+value of `K`-of-`N` is entirely in *who* the `N` are — §2 is meaningless if the seats are
+self-asserted.
+
+Each row carries: uid · email · Canton party · seat role · declared tolerances · API key hash.
+
+### Three ways to act on a seat
+
+| Mode | Credential | Use |
+|---|---|---|
+| **Portal** | Firebase identity token | A human reviewing and confirming in the signer portal. Checkboxes render from `GET /signer-protocol`, so a box on screen is always a box the API accepts |
+| **Programmatic** | API key, `ck_` + 32 random bytes, **SHA-256 hashed at rest, shown once** | The signer's own checker (`signer-service`) on their infrastructure |
+| **Sandbox** | `X-Sandbox-User:` header | Evaluating the protocol with no account and nothing at stake |
+
+A signer credential may **only** confirm or refuse fixings for instruments its seat covers.
+It cannot move assets, propose a fixing, or act as another seat.
+
+### Key custody — the trust ladder
+
+A signature is worth exactly what it costs to forge. **Every value states the level each
+signature was made at**; the fixing record shows the mix, e.g. `K=3 of N=5 — L1:2, L2:1`.
+
+| Level | Signing key | Administrator could forge? | Signer cost |
+|---|---|---|---|
+| **L1 — hosted party** | On the administrator's participant; the API key authorises and the administrator exercises the choice as the signer's party | **Yes, technically** | Zero |
+| **L2 — external signing** | Held by the signer off-ledger; the administrator submits an already-signed transaction | No | Moderate |
+| **L3 — own participant** | On the signer's own Canton participant | No | High |
+
+**L1 is honest for a pilot and dishonest as a destination.** It is the right level for a free
+shadow run or a design partnership, where nothing settles against the value. It is **not**
+acceptable for an OFFICIAL fixing a third party settles against: a lender whose liquidation
+engine consumes the mark will ask what stops the administrator signing on its behalf, and at
+L1 the true answer is "a scoped API key the administrator issued and controls."
+
+**Target state: every signer at L2 or above before the first OFFICIAL fixing is used by a
+third party.**
+
+This is the concession that belongs beside §6. The composition argument answers *"you seated
+interested parties."* It does not answer *"you hold their keys."* Only the ladder does.
+
+### Administrator impersonation
+
+The administrator can assume a mapped user's identity for a single request — an operational
+necessity for support. Every such act is recorded. **The capability is disclosed to every
+signer at onboarding, and is never used to confirm a fixing on a signer's behalf.**
+
+---
+
 ## 5. When `K` is not reached
 
 No `NavFixing` exists. `RunClose` has nothing to assert against, so no auction prints, and
@@ -252,6 +314,12 @@ An EU- or UK-supervised entity referencing a CrossDesk fixing must resolve
 | §4 escalation when a seat is silent | **implemented, tested (2 Sep 2026)** — tier 2 of the fallback waterfall runs *inside* the window: at half the window every seat that has not confirmed gets a `proposal.reminder` webhook and event with `escalation: 1`; at three quarters the same seats get `escalation: 2` and the `alternates` configured per seat on `/api/admin/schedule` are brought in (an alternate who is not a committee member on-ledger is named in the event and skipped). Only after the window closes do tiers 3–5 run. On by default |
 | §5 fund behaviour when `K` is not reached | **not specified** — belongs to the fund's governing documents |
 | §2d operator-exit rule | **policy only** — `role = "operator"` makes it visible; nothing enforces the exit |
+| **v2** custodian and transfer-agent seats | **implemented, deployed 22 Sep 2026** — `custodian`: `holdings-current` (statement age ≤ `freshnessHours`), `holdings-cover-supply`, `no-encumbrance`; `transfer-agent`: `shares-outstanding-reconciled`, `fees-accrued`. Same evidence-or-422 path as issuer/lender |
+| **v2** venue `no-prints-attested` | **implemented, deployed** — a venue with no prints in the window attests that fact with its best bid/ask instead of leaving the seat silent; mutually exclusive with `traded-range` on the same proposal |
+| **v2** reserve model per instrument | **implemented, deployed** — `signer.reserve-models` (`RESERVE_MODEL_CBTC`, `RESERVE_MODEL_CETH` env) → `SignerProtocol.reserveModelOf(instrument)`; the confirm path refuses a condition that does not belong to the seat *under that model*. ⚠️ Portal schemas and the 422 body still advertise the strict profile — the model is applied at confirm time only (audit medium #5) |
+| **v2** no bare ticks | **implemented, deployed** — `confirm-checked` refuses any non-venue seat that omits the evidence block; `verified: false` attestations can no longer be created from the desk |
+| **v2** committee recognition on publish | **implemented, deployed** — `SeriesService.recognised()` drops any `NavFixing` whose admin/threshold/attestors are not matched by a real `OperatorCommittee` visible to the auditor, and logs it as a possible forgery. This is a *consumer-side* defence; see §8 |
+| **v2** identity | **deployed** — hosted host runs `AUTH_MODE=firebase`; only e-mail-verified Firebase users map to a roster row; request paths are normalised before the filter classifies them |
 
 **The honest summary, in three layers:**
 
@@ -271,3 +339,32 @@ signer's internal systems daily, which is the disinterested-referee model that c
 and it should be disclosed to anyone taking a seat rather than glossed. What the evidence rule
 changes is the *shape* of a false attestation: it is no longer a box that was ticked, it is a
 number that was typed, and a number can be checked after the fact.
+
+---
+
+## 8. What the ledger does not yet enforce — read before quoting §3
+
+The sentence in §3, *"the signatory set IS the attestor set, so the quorum is provable from the
+ledger rather than asserted in a PDF"*, is true **and incomplete**. The 22 September 2026 audit
+found that on the 2.x package:
+
+- `FixingProposal` is `signatory approvers` and `NavFixing` is `signatory attestors`, but `admin`,
+  `threshold` and the member list are **plain fields**. Nothing binds them to an
+  `OperatorCommittee`. A party can therefore create a proposal naming the real administrator with
+  `threshold = 1` and itself as the only approver, finalise it, and hold a contract that reads as
+  "committee-attested" — K-of-K for a K the forger chose.
+- `ConfirmWithChecks` enforces the venue range **only when both bounds are supplied**; a venue that
+  sends none is silently skipped and its signature still counts. Plain `Confirm` bypasses evidence.
+- Two fixings for the same instrument, session and day can coexist; "newest" is a consumer
+  convention, not a ledger fact.
+
+**Today's mitigation** is off-ledger: `SeriesService.recognised()` publishes only fixings a real
+committee could have produced. That protects the public series and every consumer that reads it
+through this API. It does **not** protect a consumer that reads the ledger directly.
+
+**The fix** is package **3.0.0** — `signatory admin :: approvers` on the proposal and the fixing,
+`ensure threshold >= 2 && threshold < length members && admin notElem members` on the committee,
+venue range mandatory, plain `Confirm` retired, an `asOfDate` slot contract for uniqueness, and
+members as observers of `NavFixing` so a non-attesting member can open a restatement. A signatory
+change is not a compatible upgrade, so this is a new package; there is nothing to migrate because
+no fixing exists. **Until 3.0.0 is on the participant, §3 is quoted with this section attached.**

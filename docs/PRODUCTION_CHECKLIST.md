@@ -237,3 +237,30 @@ rather than misbehaves (11).
 
 **What it does not establish:** anything about real third-party assets. Every instrument here is
 seed data issued by `Issuer` on this project's own templates. Real cBTC is unaffected by all of it.
+
+---
+
+## 13. Security hardening — verified on the hosted host, 22 September 2026
+
+Not a plan. Each row is a request made against `https://crossdesk-demo-367745852528.us-central1.run.app`
+(the Cloud Run service behind `etpfoundry.com/api/**`) after the revision named.
+
+| # | Request | Before | After | Revision |
+|---|---|---|---|---|
+| 1 | `GET /api/me` with no credentials | **200 — `role: admin`** (`AUTH_MODE=sandbox` made the anonymous caller the operator) | **401** | 00017 (`AUTH_MODE=firebase`) |
+| 2 | `GET /api/me` with `X-Sandbox-User: <admin e-mail>` | 200 admin | 401 | 00017 |
+| 3 | `GET /api/admin/users` | 200 | 401 | 00017 |
+| 4 | `GET /api/%61dmin/users` (encoded path) | classified NOT_API by the raw-URI filter | 401 | 00018 |
+| 5 | `GET /api;x/admin/users` (matrix param) | classified NOT_API | **401** direct to Cloud Run. ⚠️ Via `etpfoundry.com` the same URL returns **200 text/html** — the hosting catch-all landing page, never the backend (open item: replace catch-all with `404.html`) | 00018 |
+| 6 | Firebase user whose e-mail is not verified | mapped to roster row | 403 | 00018 |
+| 7 | `POST /api/fixing/{cid}/confirm-checked` as issuer with no `evidence` | 201, `verified: false` | 400 — evidence required for every seat except the venue | 00018 |
+| 8 | `GET /api/signer-protocol` | `SIGNER_PROTOCOL v1` | `SIGNER_PROTOCOL v2` | 00018 |
+| 9 | `GET /api/signer-protocol?instrument=cETH` (`RESERVE_MODEL_CETH=onchain-verifiable`) | strict issuer profile | issuer = `reserves-current`, `reserves-cover-supply`, `redemption-queue-clear` | 00015 |
+| 10 | `GET /api/benchmarks`, `/api/methodology`, `/api/fixing-schedule` | 200 | 200 (public routes unaffected) | 00018 |
+| 11 | `GET /api/benchmarks` with a forged `NavFixing` on the ledger (threshold 1, sole approver) | would publish as attested | dropped, `WARN … possible forgery` in the log | 00019 (`SeriesService.recognised`) |
+
+**Not verified live:** row 11 end to end — no forged fixing exists on the hosted ledger to test
+against; the filter is reasoned from the Daml and the committee view, and the log line is the
+observable. Rows 6 and 7 were verified by code path and unit reasoning, not by creating an
+unverified Firebase user or an open proposal on the hosted ledger. **Not fixed** — see
+`STATUS_AND_ROADMAP.md` §6 tasks 10–13.

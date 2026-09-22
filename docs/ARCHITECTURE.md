@@ -1,6 +1,7 @@
-# Architecture — CrossDesk (Canton DvP / sealed-auction settlement desk)
+# Architecture — ETP Foundry (formerly CrossDesk) · Canton benchmark fixings, fund creation/redemption, DvP
 
-The stack top-to-bottom, local vs. production, and how a trade flows end to end.
+The stack top-to-bottom, local vs. production, how a trade flows end to end, and — since the
+22 September 2026 audit — where each security control actually lives.
 
 ## The 60-second version
 A **React/TypeScript** front end talks over REST to a **Java 17 / Spring Boot** service. That
@@ -69,3 +70,49 @@ React → Spring Boot (Docker → Kubernetes/GKE via Helm)
 - **Load-bearing design:** holdings are issuer-signed / owner-observer → a two-leg swap settles in ONE atomic transaction via delegated authority (no counterparty co-sign). Making the holder a signatory would break single-transaction atomicity.
 - **Auth = JWT + mTLS, not wallet signatures** — OAuth/Firebase-style; the participant signs with HSM/KMS keys the topology maps to the party.
 - **Instant hard finality** (BFT synchronizer) → credit after one block, no reorgs, no T+2 — why it fits institutional settlement.
+
+## Security posture — as verified 22 September 2026
+
+Three layers, each enforcing something the others cannot. Read with
+`BUSINESS/5-RUN-THE-COMMITTEE/12-FULL-SYSTEM-AUDIT-2026-09-22.md`, which is the ranked finding list.
+
+```
+Firebase Hosting (etpfoundry.com)   /api/** → Cloud Run · everything else → static site
+        │  security headers on ** (X-Frame-Options DENY · nosniff · Referrer-Policy · Permissions-Policy)
+Spring Boot  AuthFilter            identity: Firebase ID token (email-verified only) · API key (ck_, SHA-256 at rest)
+        │                          · X-Sandbox-User ONLY when AUTH_MODE=sandbox (hosted host runs AUTH_MODE=firebase)
+        │                          path is NORMALISED before classification: `;params` stripped per segment, decoded,
+        │                          `..` / `//` / backslash / encoded-slash refused → unauthenticated
+        │  SettlementController     every non-venue seat must carry evidence (no bare ticks); SignerEvidence
+        │                          applies each condition's rule server-side; reserve model per instrument
+        │  SeriesService.recognised  a NavFixing is PUBLISHED only if a real OperatorCommittee visible to the
+        │                          auditor has the same admin, declares the same threshold, that threshold is
+        │                          met, and every attestor is a member — else dropped + logged as possible forgery
+Ledger API (JWT actAs/readAs)      the operator backend holds actAs for every hosted (L1) seat — see trust ladder
+Daml  Governance.daml              FixingProposal `signatory approvers`; NavFixing `signatory attestors`;
+                                   ConfirmWithChecks enforces low ≤ price ≤ high WHEN the venue supplies a range
+```
+
+**What the ledger does NOT yet enforce (needs the 3.0.0 package — a signatory change breaks
+upgrade compatibility, so it is a new package, not a patch):** `admin`, `threshold` and the member
+list on a proposal/fixing are plain fields with no link to an `OperatorCommittee`. A single party
+can mint a "committee fixing" with `threshold = 1` and itself as sole approver. Today the backend
+filter above is the only thing keeping such a fixing off the published series. The fix is
+`signatory admin :: approvers`, `ensure threshold >= 2 && threshold < length members && admin
+notElem members`, venue range mandatory, plain `Confirm` retired, one fixing per (instrument,
+session, asOfDate). Decision pending; no fixing is published and no committee is convened, so
+there is nothing to migrate.
+
+**Trust ladder (who can forge what).** L1 hosted party — the operator's backend signs for the
+seat, so K-of-N collapses to the operator's key; suitable for evaluation only, never for a fixing
+a third party settles against. L2 external signing — the seat's own service POSTs evidence under
+its own API key; the operator still submits the ledger command. L3 own participant — the seat
+hosts its party and signs on its own node; the operator cannot forge it. Disclosed in the rulebook
+§6.7 and `SIGNER_PROTOCOL.md` §5.
+
+**Open, in the order they matter** (all in the audit file): creation/redemption fee payable in
+counterfeit cash (`Basket.daml` `chargeFee` does not check the cash issuer — appended
+`Optional cashIssuer`, upgrade-safe); signer-service still on the 3-seat protocol v1 (halts, never
+confirms wrongly); admin act-as can confirm as a seat; tolerance caps; BigDecimal scale bound;
+webhook-URL SSRF; `/api/diag` detail public; hosting catch-all serves the landing page as 200 for
+unknown paths; per-instrument freshness not bound.

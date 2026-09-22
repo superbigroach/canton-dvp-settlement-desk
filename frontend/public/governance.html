@@ -3,25 +3,32 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Governance — CrossDesk</title>
-<meta name="description" content="How a CrossDesk fixing is governed: the K-of-N committee model, the four seats and why they are chosen for skin in the game, the LIBOR objection and the three structural differences, the five-tier fallback waterfall with what is built today, and restatement.">
-<link rel="canonical" href="https://crossdesk-devnet-app.web.app/governance">
+<title>Governance — ETP Foundry</title>
+<meta name="description" content="How an ETP Foundry fixing is governed: the K-of-N committee model, the four seats and why they are chosen for skin in the game, the LIBOR objection and the three structural differences, the five-tier fallback waterfall with what is built today, and restatement.">
+<link rel="canonical" href="https://etpfoundry.com/governance">
 <meta property="og:type" content="article">
-<meta property="og:site_name" content="CrossDesk">
-<meta property="og:title" content="CrossDesk governance">
+<meta property="og:site_name" content="ETP Foundry">
+<meta property="og:title" content="ETP Foundry governance">
 <meta property="og:description" content="The committee model, the four seats, the LIBOR objection answered, the fallback waterfall, and restatement.">
-<meta property="og:url" content="https://crossdesk-devnet-app.web.app/governance">
-<meta name="twitter:card" content="summary">
+<meta property="og:url" content="https://etpfoundry.com/governance">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#0A0B0F">
-<link rel="stylesheet" href="/site/site.css?v=5">
-<script defer src="/site/site.js?v=5"></script>
+<link rel="stylesheet" href="/site/site.css?v=8">
+<script defer src="/site/site.js?v=8"></script>
+<link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32.png">
+<link rel="apple-touch-icon" href="/brand/apple-touch-icon.png">
+<meta property="og:image" content="https://etpfoundry.com/brand/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:image" content="https://etpfoundry.com/brand/og.png">
+<meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1">
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
 
 <header class="site-header">
   <div class="wrap">
-    <a class="logo" href="/" aria-label="CrossDesk home">Cross<span>Desk</span></a>
+    <a class="logo" href="/" aria-label="ETP Foundry home">ETP<span>Foundry</span></a>
     <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
     <nav class="site-nav" id="site-nav" aria-label="Primary">
       <a href="/benchmarks/">Benchmarks</a>
@@ -29,6 +36,7 @@
       <a href="/governance">Governance</a>
       <a href="/licensing">Licensing</a>
       <a href="/regulatory">Regulatory</a>
+      <a href="/documents">Documents</a>
       <a href="/news">News</a>
       <a href="/about">About</a>
       <a href="/desk/login">Sign in</a>
@@ -43,7 +51,7 @@
   <div class="wrap">
     <div class="kicker"><span>Governance</span> <span class="rule"></span></div>
     <h1 id="h">The N are the parties who already have money on the mark.</h1>
-    <p class="lede">A CrossDesk fixing is attested by a K-of-N committee. Its members are not hired referees;
+    <p class="lede">An ETP Foundry fixing is attested by a K-of-N committee. Its members are not hired referees;
       they are the issuer, the lender, the venue — parties who already hold an opinion on the number
       because they already carry a position against it. Attestation is a by-product of that position,
       and every signature is permanent and attributable on the ledger.</p>
@@ -74,7 +82,7 @@
           <tr><td>N (seats)</td><td class="mono">5</td><td class="mono">3</td></tr>
           <tr><td>K (threshold)</td><td class="mono">3</td><td class="mono">2</td></tr>
           <tr><td>Constraint</td><td>No single interest holds K</td><td>The three must be genuinely opposed: issuer · risk-taker · market-facing</td></tr>
-          <tr><td>CrossDesk as signer?</td><td>No</td><td>Tolerable at the very start, recorded as <code>operator</code>; exit as soon as a fourth party exists</td></tr>
+          <tr><td>ETP Foundry as signer?</td><td>No</td><td>Tolerable at the very start, recorded as <code>operator</code>; exit as soon as a fourth party exists</td></tr>
         </tbody>
       </table>
     </div>
@@ -128,7 +136,7 @@
       <div class="step"><div>
         <h3>Submissions are verifiable rather than asserted</h3>
         <p>A LIBOR submission was an unfalsifiable estimate of where a bank <em>could</em> borrow. Every
-          condition a CrossDesk signer confirms is a fact with a record behind it, and the venue's is checked
+          condition an ETP Foundry signer confirms is a fact with a record behind it, and the venue's is checked
           by the ledger: an attestation whose range does not contain the price cannot exist.</p>
       </div></div>
       <div class="step"><div>
@@ -169,7 +177,7 @@
     </div>
     <p class="src">What a fund does at tier 5 — suspend creations and redemptions for the session, or invoke a
       declared fair-value procedure — belongs to the fund's governing documents, not to the administrator,
-      and must be specified before any fund relies on a CrossDesk fixing. The
+      and must be specified before any fund relies on an ETP Foundry fixing. The
       <a href="/methodology#s3">methodology §3</a> describes the same logic from the calculation side, with a
       sealed auction as the preferred source where a real market exists on Canton.</p>
   </div>
@@ -195,9 +203,9 @@
     <h2 id="cta-h">Taking a seat.</h2>
     <p>A seat costs nothing and pays nothing. It requires a checker against your own systems that confirms
       when your conditions pass and halts when one does not. If you hold, lend against, issue or make markets
-      in an asset CrossDesk fixes, that is the conversation.</p>
+      in an asset ETP Foundry fixes, that is the conversation.</p>
     <div class="cta-row">
-      <a class="btn" href="mailto:s.borjas@lucilla.ca?subject=CrossDesk%20committee%20seat">Contact</a>
+      <a class="btn" href="mailto:s.borjas@lucilla.ca?subject=ETP Foundry%20committee%20seat">Contact</a>
       <a class="btn ghost" href="/methodology#signer-protocol">Read the signer protocol →</a>
     </div>
   </div>
@@ -219,8 +227,9 @@
         <li><a href="/governance">Governance</a></li>
         <li><a href="/licensing">Licensing</a></li>
         <li><a href="/regulatory">Regulatory</a></li>
+        <li><a href="/documents">Documents</a></li>
       </ul></div>
-      <div><h3>CrossDesk</h3><ul>
+      <div><h3>ETP Foundry</h3><ul>
         <li><a href="/about">About</a></li>
         <li><a href="/news">News</a></li>
         <li><a href="/showcase/">Showcase</a></li>
@@ -238,12 +247,13 @@
         It is not a Canton Network participant and it is not connected to DevNet, TestNet or MainNet.
         No fixing has been published for commercial use, and no committee has been convened.
         Instruments in the demonstration basket are issued for demonstration.</p>
-      <p>CrossDesk is not an authorised or registered benchmark administrator in any jurisdiction.
+      <p>ETP Foundry is not an authorised or registered benchmark administrator in any jurisdiction.
         Nothing on this site is a price, a valuation, a benchmark for regulatory purposes, investment
         advice, or an offer of any financial product or service. See <a href="/regulatory">Regulatory</a>.</p>
     </div>
-    <p><strong>CrossDesk</strong> — attested fixings and atomic creation and redemption for tokenised
+    <p><strong>ETP Foundry</strong> — attested fixings and atomic creation and redemption for tokenised
       funds. Built on the <a href="https://www.canton.network" rel="noopener">Canton Network</a>.</p>
+    <p class="formerly" style="margin-top:12px;opacity:.85">ETP Foundry was formerly <strong>CrossDesk</strong> &mdash; winner of <a href="/news">Best Financial Application, HackCanton Season 2</a> (Grand Final, 5 August 2026). Same team, same code, new name.</p>
     <p style="margin-top:16px">
       <a href="mailto:s.borjas@lucilla.ca">s.borjas@lucilla.ca</a>
       &nbsp;·&nbsp;

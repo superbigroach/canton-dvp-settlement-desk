@@ -186,3 +186,31 @@ warnings) on SDK 2.9.4.
 **Next:**
 - Devnet deploy per DEPLOY.md; paste the `SettlementBatch` / `SettlementReceipt`
   update ids as on-ledger evidence.
+
+## 2026-09-22 — Rename to ETP Foundry; full security audit; signer protocol v2
+
+**Built.** Site, SPA and docs renamed CrossDesk → ETP Foundry (`etpfoundry.com`, "formerly
+CrossDesk, Best Financial Application HackCanton S2" kept as a line). Signer protocol **v2**:
+custodian + transfer-agent seats, venue `no-prints-attested`, per-instrument reserve model
+(`attested` / `onchain-verifiable` / `custodial`, `?instrument=`), bare ticks refused for every
+non-venue seat. Rulebook, benchmark statement, chain-event policy, suitability analysis and
+factsheets written under `BUSINESS/5-RUN-THE-COMMITTEE/`.
+
+**Found (three independent audits, every CRITICAL re-verified live).** The hosted API ran
+`AUTH_MODE=sandbox` — anonymous = operator/admin on 45 mutating routes. The auth filter
+classified the raw URI, so `/api;x/…` and encoded paths were classified as not-API. On the 2.x
+Daml, `admin`/`threshold`/members on a proposal are plain fields: one party can forge a
+"committee fixing" with threshold 1. Fee leg does not pin the cash issuer.
+
+**Fixed and verified on Cloud Run** (revisions 00017 → 00019): `AUTH_MODE=firebase`; path
+normalisation before classification; e-mail-verified users only; evidence mandatory; protocol
+v2; `SeriesService.recognised()` publishes only fixings a real committee could have produced.
+Full ranked list: `BUSINESS/5-RUN-THE-COMMITTEE/12-FULL-SYSTEM-AUDIT-2026-09-22.md`.
+
+**Learned.** A 200 is not a leak until you read the body — the matrix-path "bypass" via
+etpfoundry.com was the hosting catch-all's landing page, not the roster. Corrected in the audit.
+
+**Next.** Decision on package 3.0.0 (`signatory admin :: approvers`, threshold bounds); fee
+`cashIssuer` pin; signer-service v2. Docs updated: `ARCHITECTURE.md` (security posture),
+`SIGNER_PROTOCOL.md` (§8 what the ledger does not enforce), `README.md`, `STATUS_AND_ROADMAP.md`
+§6 tasks 10–13, `PRODUCTION_CHECKLIST.md` §13.

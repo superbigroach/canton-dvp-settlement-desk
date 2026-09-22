@@ -127,14 +127,25 @@
     if (!last) return { text: 'no fixing published', cls: 'pending' };
     var have = Array.isArray(last.signers) ? last.signers.length : 0;
     var k = last.k, n = last.n;
-    if (k != null && n != null && have >= k) return { text: 'attested ' + have + ' of ' + n, cls: 'attested' };
-    if (n != null) return { text: 'awaiting attestation · ' + have + ' of ' + n, cls: 'pending' };
-    return { text: 'attestation unknown', cls: 'pending' };
+    /* No committee seated yet: K=0 of N=0 is not an attestation, and showing it as
+       'attested 0 of 0' would claim signatures that do not exist. */
+    if (!n) return { text: 'awaiting committee', cls: 'pending' };
+    if (k != null && k > 0 && have >= k) return { text: 'attested ' + have + ' of ' + n, cls: 'attested' };
+    return { text: 'awaiting attestation · ' + have + ' of ' + n, cls: 'pending' };
   }
-  function tierLabel(t) {
+
+  function tierLabel(t, row) {
     if (t == null) return 'tier —';
-    return 'tier ' + t + (TIER[t] ? ' · ' + TIER[t] : '');
+    /* displayLabel from the API knows the tier's meaning in context: a tier-5 row with
+       no committee is 'awaiting committee', not 'missed'. Tier numbering never changes. */
+    /* Same rule the API applies, computed locally so the label is right even if the
+       backend has not yet shipped displayLabel. */
+    var name = (row && row.displayLabel) ? row.displayLabel
+             : (t === 5 && row && !row.n) ? 'awaiting committee'
+             : TIER[t];
+    return 'tier ' + t + (name ? ' · ' + name : '');
   }
+
   /* Gold only for an officially struck, attested value (tier 1 or 2 with K signatures). */
   function isOfficial(last) {
     if (!last || last.price == null) return false;
@@ -155,7 +166,7 @@
     var meta = el('div', 'meta');
     var a = attestation(last);
     meta.appendChild(el('span', a.cls, a.text));
-    meta.appendChild(el('span', null, tierLabel(last && last.tier)));
+    meta.appendChild(el('span', null, tierLabel(last && last.tier, last)));
     var age = ageOf(last);
     if (age != null) meta.appendChild(el('span', age > 86400 * 2 ? 'stale' : null, fmtAge(age)));
     return meta;
@@ -219,7 +230,7 @@
     tr.appendChild(price);
     tr.appendChild(el('td', 'num', r.referencePrice != null ? fmtNum(r.referencePrice) : '—'));
     tr.appendChild(el('td', 'num', r.wrapperFactor != null ? fmtNum(r.wrapperFactor, 4) : '—'));
-    tr.appendChild(el('td', 'mono', tierLabel(r.tier)));
+    tr.appendChild(el('td', 'mono', tierLabel(r.tier, r)));
     var kn = el('td', 'mono' + (a.cls === 'attested' ? '' : ' restated'), a.text);
     tr.appendChild(kn);
     tr.appendChild(el('td', 'mono' + (r.restated ? ' restated' : ''), r.restated ? 'restated' : ''));
@@ -273,7 +284,7 @@
     var b = merge(id, null);
     var setText = function (sel, txt) { var n = $(sel, root); if (n) n.textContent = txt; };
     var paint = function (bm) {
-      document.title = bm.name + ' — CrossDesk benchmark';
+      document.title = bm.name + ' — ETP Foundry benchmark';
       setText('[data-id]', bm.identifier || bm.id);
       setText('[data-name]', bm.name);
       setText('[data-description]', bm.description || '');
@@ -288,7 +299,7 @@
       setText('[data-asof]', bm.last && bm.last.asOf ? fmtAsOf(bm.last.asOf, bm.timezone) : '—');
       var a = attestation(bm.last);
       var att = $('[data-attested]', root); if (att) { att.textContent = a.text; att.className = a.cls; }
-      setText('[data-tier]', tierLabel(bm.last && bm.last.tier));
+      setText('[data-tier]', tierLabel(bm.last && bm.last.tier, bm.last));
       var age = ageOf(bm.last);
       setText('[data-age]', age != null ? fmtAge(age) : '—');
       var signers = $('[data-signers]', root);

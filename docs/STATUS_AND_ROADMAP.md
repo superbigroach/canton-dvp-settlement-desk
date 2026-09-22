@@ -116,6 +116,12 @@ on BitSafe's templates, and that is a separate holding. The demo fund's own cBTC
 - CIP-56 token-standard holdings, transfers, allocations and DvP against the official Splice
   interfaces.
 - Continuous order book, and cash-settled perpetuals. **Both work and neither is sold** — see §7.
+- **Security hardening, 22 September 2026** (full list in
+  `BUSINESS/5-RUN-THE-COMMITTEE/12-FULL-SYSTEM-AUDIT-2026-09-22.md`): hosted API moved from
+  `AUTH_MODE=sandbox` (anonymous = operator) to `firebase`; request-path normalisation before the
+  auth filter; e-mail-verified users only; evidence mandatory for every non-venue seat; signer
+  protocol v2 (custodian + transfer-agent seats, `no-prints-attested`, per-instrument reserve
+  models); published series recognises only fixings a real committee could have produced.
 
 ## 6. Next — in order
 
@@ -132,6 +138,10 @@ on BitSafe's templates, and that is a separate holding. The demo fund's own cBTC
 | 7b | **Operator as a Decentralized Party** — closes "one party, one key" on the venue itself. No template changes; the open question is what threshold coordination does to write latency. See `ECOSYSTEM_ALIGNMENT.md` §3 | **task 2** | design done |
 | 8 | **Minimum-quality flag on the published fixing** — record *which tier* produced it and whether it was carried forward (methodology §3, §10) | nothing | hours |
 | 9 | **Cessation process** (methodology §8) — a notice period, not code | nothing | policy |
+| **10** | **Package 3.0.0 — bind the fixing to the committee on-ledger.** `signatory admin :: approvers` on `FixingProposal`/`NavFixing`; `ensure threshold >= 2 && threshold < N && admin notElem members`; venue range mandatory; retire plain `Confirm`; `asOfDate` slot; members observe `NavFixing`. Breaks SCU compatibility → new package, nothing to migrate | **a decision** | a day + tests |
+| 11 | **Fee leg issuer pin** — `Basket.daml` `chargeFee` does not check the cash issuer; an AP can pay the fee in self-minted "USDC". Appended `Optional cashIssuer`, upgrade-safe | nothing | hours |
+| 12 | **Signer-service v2** — still hardcodes the 3-seat / 10-condition protocol; cannot run custodian/transfer-agent, never sends `?instrument=`, halts instead of attesting no prints. Degrades safely (halts, never confirms wrongly) | nothing | a day |
+| 13 | Act-as refused on confirm/refuse routes; tolerance caps (≤ 500 bp); BigDecimal scale bound; webhook-URL SSRF guard; `/api/diag` behind admin; hosting catch-all → `404.html`; bind `signer.freshness-hours` per instrument | nothing | a day total |
 
 **Do not start task 7 before task 2.** Building an adapter that has never touched a real registrar
 produces code that looks finished and is unverified — the one outcome worse than not having it.

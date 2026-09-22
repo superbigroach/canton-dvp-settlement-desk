@@ -43,7 +43,7 @@ export function firebaseErrorMessage(e: unknown): string {
   const code = (e as { code?: string })?.code ?? '';
   switch (code) {
     case 'auth/operation-not-allowed':
-      return 'That sign-in method is not enabled on this project yet. Ask CrossDesk to enable it in the Firebase console (Authentication → Sign-in method).';
+      return 'That sign-in method is not enabled on this project yet. Ask ETP Foundry to enable it in the Firebase console (Authentication → Sign-in method).';
     case 'auth/invalid-credential':
     case 'auth/wrong-password':
     case 'auth/user-not-found':

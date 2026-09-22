@@ -37,10 +37,10 @@ export default function Login() {
   return (
     <div className="login">
       <div className="login-card card">
-        <a className="brand" href="/" title="crossdesk.app">
+        <a className="brand" href="/" title="etpfoundry.com">
           <span className="logo" aria-hidden>◈</span>
           <div className="brand-text">
-            <span className="brand-name">CROSSDESK</span>
+            <span className="brand-name">ETP FOUNDRY</span>
             <span className="brand-sub">sign in to the desk</span>
           </div>
         </a>
@@ -70,7 +70,7 @@ export default function Login() {
               {busy === 'google' ? 'Opening Google…' : 'Continue with Google'}
             </button>
             <p className="hint subtle">
-              Accounts are created by CrossDesk. Signing in with an address that has no role shows an empty desk, not an error.
+              Accounts are created by ETP Foundry. Signing in with an address that has no role shows an empty desk, not an error.
             </p>
           </>
         )}
@@ -106,7 +106,7 @@ export default function Login() {
         {error && <div className="banner error" role="alert"><span>{error}</span></div>}
       </div>
       <p className="login-foot muted">
-        Not a regulated benchmark administrator · values are struck on a hosted sandbox · <a href="/">crossdesk.app</a>
+        Not a regulated benchmark administrator · values are struck on a hosted sandbox · <a href="/">etpfoundry.com</a>
       </p>
     </div>
   );

@@ -3,4 +3,4 @@ Allow: /
 Disallow: /desk/
 Disallow: /api/
 
-Sitemap: https://crossdesk-devnet-app.web.app/sitemap.xml
+Sitemap: https://etpfoundry.com/sitemap.xml
