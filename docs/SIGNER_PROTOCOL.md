@@ -342,11 +342,37 @@ number that was typed, and a number can be checked after the fact.
 
 ---
 
-## 8. What the ledger does not yet enforce — read before quoting §3
+## 8. What the ledger enforces since package 3.0.0 — and what it did not before
 
-The sentence in §3, *"the signatory set IS the attestor set, so the quorum is provable from the
-ledger rather than asserted in a PDF"*, is true **and incomplete**. The 22 September 2026 audit
-found that on the 2.x package:
+**Resolved 22 September 2026, package `crossdesk-3.0.0`.** The sentence in §3 — *"the
+signatory set IS the attestor set, so the quorum is provable from the ledger rather than
+asserted in a PDF"* — is now true without qualification:
+
+- `FixingProposal`, `RestatementProposal` and `NavFixing` are **`signatory admin :: approvers`**.
+  A proposal can only be born inside a choice on an `OperatorCommittee` the administrator
+  signed; a fixing only from such a proposal. A forgery is not refused — it cannot be
+  constructed (`Test:testFixingCannotBeForged`, which tries it with two colluding members and
+  fails at the ledger).
+- The committee's `ensure` bounds the quorum: `threshold >= 2`, `threshold <= N`, and the
+  **administrator is not a member**. It proposes and publishes; it never attests.
+- Plain `Confirm` is **gone**. Every attestation carries a `SignerCheck`; a venue must give the
+  traded range the price sits inside or attest `no-prints-attested`; a range from any other
+  seat is refused on-ledger. A restatement's confirmers file their own evidence — the
+  original's is never carried forward.
+- Every proposal and fixing carries an attested **`asOfDate`**, and one `FixingSeries` per
+  (administrator, instrument, session) is consumed and advanced by every finalise, so the
+  ledger guarantees **one fixing per series per day**. Daml 3 has no contract keys; the series
+  contract is the slot.
+- Any approver or the administrator may finalise — the proposer no longer holds a veto.
+- Committee members observe every `NavFixing`, so a member that did not sign can open a
+  restatement of it.
+
+`SeriesService.recognised()` on the backend stays as defence in depth. The Java bindings,
+the desk and the hosted demo were moved to 3.0.0 the same day; the shared HackCanton node
+(`backend-devnet/`) is still on 2.1.0 and is not a benchmark surface.
+
+**For the record — what 2.x got wrong.** The 22 September 2026 audit found that on the 2.x
+package:
 
 - `FixingProposal` is `signatory approvers` and `NavFixing` is `signatory attestors`, but `admin`,
   `threshold` and the member list are **plain fields**. Nothing binds them to an
@@ -358,13 +384,6 @@ found that on the 2.x package:
 - Two fixings for the same instrument, session and day can coexist; "newest" is a consumer
   convention, not a ledger fact.
 
-**Today's mitigation** is off-ledger: `SeriesService.recognised()` publishes only fixings a real
-committee could have produced. That protects the public series and every consumer that reads it
-through this API. It does **not** protect a consumer that reads the ledger directly.
-
-**The fix** is package **3.0.0** — `signatory admin :: approvers` on the proposal and the fixing,
-`ensure threshold >= 2 && threshold < length members && admin notElem members` on the committee,
-venue range mandatory, plain `Confirm` retired, an `asOfDate` slot contract for uniqueness, and
-members as observers of `NavFixing` so a non-attesting member can open a restatement. A signatory
-change is not a compatible upgrade, so this is a new package; there is nothing to migrate because
-no fixing exists. **Until 3.0.0 is on the participant, §3 is quoted with this section attached.**
+Between the audit and the 3.0.0 deploy (a few hours, same day), the only mitigation was
+off-ledger: `SeriesService.recognised()` published only fixings a real committee could have
+produced. No fixing existed on any shared ledger during that window.

@@ -25,15 +25,15 @@ call returns** — start each in its own background process, not with `setsid -f
 daml sandbox --port 6900                       # ~40s to "Canton sandbox is ready"
 
 # 2) code + seed
-daml ledger upload-dar --host localhost --port 6900 .daml/dist/crossdesk-2.1.0.dar
+daml ledger upload-dar --host localhost --port 6900 .daml/dist/crossdesk-3.0.0.dar
 daml script --ledger-host localhost --ledger-port 6900 \
-  --dar .daml/dist/crossdesk-2.1.0.dar --script-name Test:initialize
+  --dar .daml/dist/crossdesk-3.0.0.dar --script-name Test:initialize
 
 # 3) backend  — LEDGER_PARTIES IS REQUIRED LOCALLY. See the note below.
 daml ledger list-parties --host localhost --port 6900     # copy the ::1220… suffix
 cd backend-devnet && S="::122065c2…"   # the suffix from the line above
 LEDGER_HOST=localhost LEDGER_PORT=6900 LEDGER_TLS=false SERVER_PORT=8080 \
-  LEDGER_PARTIES="Issuer=Issuer$S,Venue=Venue$S,Alice=Alice$S,Bob=Bob$S,Bank=Bank$S,Auditor=Auditor$S,Agent=Agent$S,Eve=Eve$S" \
+  LEDGER_PARTIES="Issuer=Issuer$S,Venue=Venue$S,Alice=Alice$S,Bob=Bob$S,Bank=Bank$S,Auditor=Auditor$S,Agent=Agent$S,Eve=Eve$S,Operator=Operator$S" \
   java -jar build/libs/canton-dvp-desk-1.0.0.jar
 
 # 4) desk
@@ -258,6 +258,9 @@ Not a plan. Each row is a request made against `https://crossdesk-demo-367745852
 | 9 | `GET /api/signer-protocol?instrument=cETH` (`RESERVE_MODEL_CETH=onchain-verifiable`) | strict issuer profile | issuer = `reserves-current`, `reserves-cover-supply`, `redemption-queue-clear` | 00015 |
 | 10 | `GET /api/benchmarks`, `/api/methodology`, `/api/fixing-schedule` | 200 | 200 (public routes unaffected) | 00018 |
 | 11 | `GET /api/benchmarks` with a forged `NavFixing` on the ledger (threshold 1, sole approver) | would publish as attested | dropped, `WARN … possible forgery` in the log | 00019 (`SeriesService.recognised`) |
+| 12 | Create a `FixingProposal` / `NavFixing` naming the real administrator, as two colluding members (`Test:testFixingCannotBeForged`) | constructible on 2.x | **refused by the ledger** — missing the administrator's signature (package 3.0.0) | 00020 (`crossdesk-3.0.0.dar`) |
+| 13 | `POST /api/fixing/{cid}/confirm` (bare tick) | 201 | **410** for a signed-in caller — plain `Confirm` no longer exists in the package (401 before sign-in, as for every desk route) | 00020 |
+| 14 | Second finalise for the same instrument/session/day | second `NavFixing` coexists | refused — the `FixingSeries` slot is already advanced | 00020 |
 
 **Not verified live:** row 11 end to end — no forged fixing exists on the hosted ledger to test
 against; the filter is reasoned from the Daml and the committee view, and the log line is the

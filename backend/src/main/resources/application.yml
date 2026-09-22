@@ -114,7 +114,8 @@ auth:
   data-dir: ${DATA_DIR:./data}
   # The party the desk PROPOSES as when the scheduler strikes (must be a committee
   # member). "Issuer" in the sandbox; on a participant, the administrator's own party.
-  operator-party: ${OPERATOR_PARTY:Issuer}
+  # 3.0.0: the operator ADMINISTERS the committee and never attests; it is its own party.
+  operator-party: ${OPERATOR_PARTY:Operator}
 
 # The strike runner (docs/PRODUCT-PLAN.md §4/§5 "Scheduler"). Safe on the sandbox:
 # everything it does is a ledger command any operator could send by hand, plus an

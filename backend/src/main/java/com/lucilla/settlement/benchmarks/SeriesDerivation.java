@@ -49,7 +49,8 @@ public final class SeriesDerivation {
             List<String> signers = f.attestors().stream().map(label).toList();
             int n = Math.max(committeeSize, Math.max(signers.size(), (int) f.threshold()));
             rows.add(new SeriesRow(
-                    dateOf(f.accrualFrom(), zone), f.accrualFrom().toString(),
+                    f.asOfDate() == null ? dateOf(f.accrualFrom(), zone) : f.asOfDate().toString(),
+                    f.accrualFrom().toString(),
                     f.price(), f.referencePrice(), f.wrapperFactor(),
                     1, signers.size(), n, signers, f.contractId(), f.isRestatement(),
                     SeriesRow.labelFor(1), f.session(),

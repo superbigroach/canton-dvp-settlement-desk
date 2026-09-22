@@ -1239,7 +1239,7 @@ public class SettlementController {
         String proposer = ledger.resolveParty(req.proposer());
         var cmd = LedgerCommands.proposeFixing(cid, proposer, req.instrumentId(),
                 blankTo(req.cashInstrument(), "USDC"), LedgerCommands.session(req.session()),
-                req.price(), blankTo(req.rationale(), ""));
+                req.price(), blankTo(req.rationale(), ""), asOfOrToday(req.asOfDate()));
         String propCid = ledger.submitForCreated(proposer, cmd, LedgerCommands.fixingProposalTemplateId());
         announce(new com.lucilla.settlement.events.LifecycleEvent(
                 com.lucilla.settlement.events.FixingEvent.Kinds.PROPOSAL_CREATED, req.instrumentId(),
@@ -1279,7 +1279,7 @@ public class SettlementController {
         var cmd = LedgerCommands.proposeAccruingFixing(cid, proposer, req.instrumentId(),
                 blankTo(req.cashInstrument(), "USDC"), LedgerCommands.session(req.session()),
                 req.price(), blankTo(req.rationale(), ""),
-                req.ratePerAnnum(), dayCount, accrualFrom);
+                req.ratePerAnnum(), dayCount, accrualFrom, asOfOrToday(req.asOfDate()));
         String propCid = ledger.submitForCreated(proposer, cmd, LedgerCommands.fixingProposalTemplateId());
         announce(new com.lucilla.settlement.events.LifecycleEvent(
                 com.lucilla.settlement.events.FixingEvent.Kinds.PROPOSAL_CREATED, req.instrumentId(),
@@ -1302,15 +1302,15 @@ public class SettlementController {
      * with one more signature). Repeat until the threshold is reached.
      */
     @PostMapping("/fixing/{cid}/confirm")
-    public ResponseEntity<Dtos.CidResponse> confirmFixing(
-            @PathVariable String cid, @Valid @RequestBody Dtos.ConfirmFixingRequest req) {
-        String member = ledger.resolveParty(req.member());
-        String next = ledger.submitForCreated(member,
-                LedgerCommands.confirmFixing(cid, member), LedgerCommands.fixingProposalTemplateId());
-        announce(new com.lucilla.settlement.events.LifecycleEvent(
-                com.lucilla.settlement.events.FixingEvent.Kinds.PROPOSAL_CONFIRMED, null,
-                cid, next, member, null, null, null, null, null, List.of(), Map.of()));
-        return created(new Dtos.CidResponse(next));
+    public ResponseEntity<Map<String, Object>> confirmFixing(
+            @PathVariable String cid, @RequestBody(required = false) Dtos.ConfirmFixingRequest req) {
+        // RETIRED WITH PACKAGE 3.0.0. A signature with no evidence is a vote, and the
+        // signer protocol exists to make a vote insufficient. The Daml choice is gone,
+        // so this cannot be re-enabled by configuration; it is a 410 that says where to go.
+        return ResponseEntity.status(org.springframework.http.HttpStatus.GONE).body(Map.of(
+                "error", "plain confirm was retired in package 3.0.0: every attestation carries evidence",
+                "proposal", cid,
+                "use", List.of("POST /api/fixing/{cid}/confirm-checked", "POST /api/proposals/{cid}/confirm")));
     }
 
     /**
@@ -1330,7 +1330,8 @@ public class SettlementController {
         String cash = blankTo(req.cashInstrument(), "USDC");
         String sess = LedgerCommands.session(req.session());
         var cmd = LedgerCommands.proposeWrappedFixing(cid, proposer, req.instrumentId(),
-                cash, sess, req.benchmarkPrice(), req.parFactor(), req.rationale());
+                cash, sess, req.benchmarkPrice(), req.parFactor(), req.rationale(),
+                asOfOrToday(req.asOfDate()));
         String propCid = ledger.submitForCreated(proposer, cmd, LedgerCommands.fixingProposalTemplateId());
 
         BigDecimal strike = req.benchmarkPrice().multiply(req.parFactor());
@@ -1480,8 +1481,18 @@ public class SettlementController {
         String proposer = ledger.resolveParty(req.proposer());
         List<String> publishTo = (req.publishTo() == null ? List.<String>of() : req.publishTo())
                 .stream().map(ledger::resolveParty).toList();
+        // THE SERIES SLOT (3.0.0). The finalise consumes the benchmark's FixingSeries and
+        // advances it to the proposal's asOfDate; a second fixing for the same day finds
+        // the slot taken and is refused by the ledger. The slot is looked up (or stood up
+        // on first use) as the committee's administrator, who signs it.
+        LedgerService.FixingProposalView p = ledger.fixingProposalsVisibleTo(proposer).stream()
+                .filter(v -> v.contractId().equals(cid)).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "no open proposal " + cid + " is visible to " + LedgerService.labelOf(proposer)));
+        String seriesCid = fixingSeriesFor(p.admin(), p.auditor(), p.instrumentId(), p.session(), p.members());
         String fixCid = ledger.submitForCreated(proposer,
-                LedgerCommands.finalizeFixing(cid, publishTo), LedgerCommands.navFixingTemplateId());
+                LedgerCommands.finalizeFixing(cid, proposer, seriesCid, publishTo),
+                LedgerCommands.navFixingTemplateId());
 
         // PUBLISH THE ATTESTED MARK, or the fix is a number nothing values against.
         //
@@ -1537,6 +1548,40 @@ public class SettlementController {
                         "markUpdated", updated, "markNote", note, "session", fix.session())));
         return created(new Dtos.FinalizeFixingResponse(
                 fixCid, fix.instrumentId(), newMark, updated, note));
+    }
+
+    /** The ISO date the caller attests the fixing describes, or today at the methodology's home clock. */
+    static java.time.LocalDate asOfOrToday(String iso) {
+        if (iso == null || iso.isBlank()) {
+            return java.time.LocalDate.now(java.time.ZoneId.of("Europe/London"));
+        }
+        try {
+            return java.time.LocalDate.parse(iso.trim());
+        } catch (java.time.format.DateTimeParseException e) {
+            throw new IllegalArgumentException("asOfDate must be an ISO date (YYYY-MM-DD): " + iso);
+        }
+    }
+
+    /**
+     * The {@code FixingSeries} for one benchmark, stood up on first use. Looked up AS the
+     * administrator (its signatory). {@code observers} are the committee members, so an
+     * approver can finalise against it.
+     */
+    String fixingSeriesFor(String admin, String auditor, String instrumentId, String session,
+                           List<String> observers) {
+        return ledger.fixingSeriesVisibleTo(admin).stream()
+                .filter(s -> s.admin().equals(admin) && s.instrumentId().equalsIgnoreCase(instrumentId)
+                        && s.session().equalsIgnoreCase(session))
+                .map(LedgerService.FixingSeriesView::contractId)
+                .findFirst()
+                .orElseGet(() -> {
+                    String cid = ledger.submitForCreated(admin,
+                            LedgerCommands.createFixingSeries(admin, auditor, instrumentId, session, observers),
+                            LedgerCommands.fixingSeriesTemplateId());
+                    log.info("FIXING SERIES opened for {} {} by {}: {}", instrumentId, session,
+                            LedgerService.labelOf(admin), cid);
+                    return cid;
+                });
     }
 
     // ---- Continuous accrual: what the fund is worth RIGHT NOW ---------------

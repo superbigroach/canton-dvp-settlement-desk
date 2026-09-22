@@ -34,7 +34,7 @@ second toolchain to drift. Produce them first:
 
 ```bash
 # the package
-daml build                       # -> .daml/dist/crossdesk-2.1.0.dar
+daml build                       # -> .daml/dist/crossdesk-3.0.0.dar
 
 # the desk
 cd backend && ./gradlew bootJar  # -> build/libs/canton-dvp-desk-1.0.0.jar
@@ -44,7 +44,7 @@ Stage them into this directory, then deploy:
 
 ```bash
 cd deploy/demo
-cp ../../.daml/dist/crossdesk-2.1.0.dar ./crossdesk.dar
+cp ../../.daml/dist/crossdesk-3.0.0.dar ./crossdesk.dar
 cp ../../backend/build/libs/canton-dvp-desk-1.0.0.jar ./app.jar
 
 gcloud run deploy crossdesk-demo \

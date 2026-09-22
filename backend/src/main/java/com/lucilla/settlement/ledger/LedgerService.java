@@ -741,7 +741,7 @@ public class LedgerService {
                                     f.wrapperFactor.orElse(null),
                                     f.supersedes.map(cid -> cid.contractId).orElse(null),
                                     f.restatementReason.orElse(null),
-                                    f.admin));
+                                    f.admin, f.asOfDate, f.members));
                         }
                     });
             return out;
@@ -796,7 +796,31 @@ public class LedgerService {
                                     f.cashInstrument, f.session, f.price, f.rationale,
                                     f.ratePerAnnum, f.dayCount, f.accrualFrom, f.approvers,
                                     f.referencePrice.orElse(null), f.wrapperFactor.orElse(null),
-                                    checks, f.tier.orElse(null)));
+                                    checks, f.tier.orElse(null), f.asOfDate));
+                        }
+                    });
+            return out;
+        });
+    }
+
+    /** The {@code FixingSeries} slots visible to {@code party} (3.0.0). */
+    public List<FixingSeriesView> fixingSeriesVisibleTo(String party) {
+        return withRetry("fixing series for " + party, () -> {
+            DamlLedgerClient client = connection.get();
+            ContractFilter<com.lucilla.settlement.model.governance.FixingSeries.Contract> filter =
+                    ContractFilter.of(com.lucilla.settlement.model.governance.FixingSeries.COMPANION);
+            List<FixingSeriesView> out = new ArrayList<>();
+            client.getStateClient()
+                    .getActiveContracts(filter, Set.of(party), false,
+                            client.getStateClient().getLedgerEnd().blockingGet())
+                    .timeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .blockingForEach(active -> {
+                        for (com.lucilla.settlement.model.governance.FixingSeries.Contract c
+                                : active.activeContracts) {
+                            var k = c.data;
+                            out.add(new FixingSeriesView(c.id.contractId, k.admin, k.auditor,
+                                    k.instrumentId, k.session, k.observers,
+                                    k.lastAsOf.orElse(null), k.struck));
                         }
                     });
             return out;
@@ -1617,11 +1641,12 @@ public class LedgerService {
             java.math.BigDecimal wrapperFactor,           // the attested par ratio
             String supersedes,                            // contract id this corrects
             String restatementReason,
-            // The administrator the fixing NAMES. Appended last. On-ledger this is a plain
-            // field — `NavFixing` is `signatory attestors`, so a party can create one
-            // naming any admin, any K, any N. Consumers must check it against a real
-            // OperatorCommittee (SeriesService) rather than trust the fixing's own claim.
-            String admin) {
+            // The administrator. Since package 3.0.0 a SIGNATORY of the fixing, so it is
+            // the party that signed, not a claim. SeriesService still cross-checks it
+            // against a real OperatorCommittee — defence in depth costs one query.
+            String admin,
+            java.time.LocalDate asOfDate,                  // the day the fixing describes (3.0.0)
+            List<String> members) {                        // the roster the attestors came from
 
         /** True when this fix's value MOVES — a zero rate is the old snapshot exactly. */
         public boolean accruing() {
@@ -1648,7 +1673,8 @@ public class LedgerService {
             java.math.BigDecimal ratePerAnnum, String dayCount, java.time.Instant accrualFrom,
             List<String> approvers,
             java.math.BigDecimal referencePrice, java.math.BigDecimal wrapperFactor,
-            List<SignerCheckView> attestations, String tier) {
+            List<SignerCheckView> attestations, String tier,
+            java.time.LocalDate asOfDate) {
 
         public boolean quorumReached() {
             return approvers.size() >= threshold;
@@ -1659,6 +1685,12 @@ public class LedgerService {
     public record CommitteeView(
             String contractId, String admin, List<String> members, long threshold,
             String auditor, String label) {
+    }
+
+    /** One benchmark's series slot: which day it last struck, and how many times (3.0.0). */
+    public record FixingSeriesView(
+            String contractId, String admin, String auditor, String instrumentId, String session,
+            List<String> observers, java.time.LocalDate lastAsOf, long struck) {
     }
 
     /** A basket creation/redemption receipt with its economics. */

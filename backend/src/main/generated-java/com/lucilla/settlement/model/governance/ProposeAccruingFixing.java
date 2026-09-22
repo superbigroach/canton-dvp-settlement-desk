@@ -2,6 +2,7 @@ package com.lucilla.settlement.model.governance;
 
 import static com.daml.ledger.javaapi.data.codegen.json.JsonLfEncoders.apply;
 
+import com.daml.ledger.javaapi.data.Date;
 import com.daml.ledger.javaapi.data.Numeric;
 import com.daml.ledger.javaapi.data.Party;
 import com.daml.ledger.javaapi.data.Text;
@@ -21,13 +22,14 @@ import java.lang.Override;
 import java.lang.String;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
 public class ProposeAccruingFixing extends DamlRecord<ProposeAccruingFixing> {
-  public static final String _packageId = "f442ed0a18dad43b70c730775e6991c2bb8ee6bf01385f7c5325552559cafa9b";
+  public static final String _packageId = "9f697598fdc5fee1bf367e5acd6ca4eb84c7368c987ce1093f58227384f3d0f8";
 
   public final String proposer;
 
@@ -47,9 +49,11 @@ public class ProposeAccruingFixing extends DamlRecord<ProposeAccruingFixing> {
 
   public final Instant accrualFrom;
 
+  public final LocalDate asOfDate;
+
   public ProposeAccruingFixing(String proposer, String instrumentId, String cashInstrument,
       String session, BigDecimal price, String rationale, BigDecimal ratePerAnnum, String dayCount,
-      Instant accrualFrom) {
+      Instant accrualFrom, LocalDate asOfDate) {
     this.proposer = proposer;
     this.instrumentId = instrumentId;
     this.cashInstrument = cashInstrument;
@@ -59,12 +63,13 @@ public class ProposeAccruingFixing extends DamlRecord<ProposeAccruingFixing> {
     this.ratePerAnnum = ratePerAnnum;
     this.dayCount = dayCount;
     this.accrualFrom = accrualFrom;
+    this.asOfDate = asOfDate;
   }
 
   public static ValueDecoder<ProposeAccruingFixing> valueDecoder() throws IllegalArgumentException {
     return value$ -> {
       Value recordValue$ = value$;
-      List<com.daml.ledger.javaapi.data.DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(9,0,
+      List<com.daml.ledger.javaapi.data.DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(10,0,
           recordValue$);
       String proposer = PrimitiveValueDecoders.fromParty.decode(fields$.get(0).getValue());
       String instrumentId = PrimitiveValueDecoders.fromText.decode(fields$.get(1).getValue());
@@ -76,13 +81,14 @@ public class ProposeAccruingFixing extends DamlRecord<ProposeAccruingFixing> {
           .decode(fields$.get(6).getValue());
       String dayCount = PrimitiveValueDecoders.fromText.decode(fields$.get(7).getValue());
       Instant accrualFrom = PrimitiveValueDecoders.fromTimestamp.decode(fields$.get(8).getValue());
+      LocalDate asOfDate = PrimitiveValueDecoders.fromDate.decode(fields$.get(9).getValue());
       return new ProposeAccruingFixing(proposer, instrumentId, cashInstrument, session, price,
-          rationale, ratePerAnnum, dayCount, accrualFrom);
+          rationale, ratePerAnnum, dayCount, accrualFrom, asOfDate);
     } ;
   }
 
   public com.daml.ledger.javaapi.data.DamlRecord toValue() {
-    ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field> fields = new ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field>(9);
+    ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field> fields = new ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field>(10);
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("proposer", new Party(this.proposer)));
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("instrumentId", new Text(this.instrumentId)));
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("cashInstrument", new Text(this.cashInstrument)));
@@ -92,11 +98,12 @@ public class ProposeAccruingFixing extends DamlRecord<ProposeAccruingFixing> {
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("ratePerAnnum", new Numeric(this.ratePerAnnum)));
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("dayCount", new Text(this.dayCount)));
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("accrualFrom", Timestamp.fromInstant(this.accrualFrom)));
+    fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("asOfDate", new Date((int) this.asOfDate.toEpochDay())));
     return new com.daml.ledger.javaapi.data.DamlRecord(fields);
   }
 
   public static JsonLfDecoder<ProposeAccruingFixing> jsonDecoder() {
-    return JsonLfDecoders.record(Arrays.asList("proposer", "instrumentId", "cashInstrument", "session", "price", "rationale", "ratePerAnnum", "dayCount", "accrualFrom"), name -> {
+    return JsonLfDecoders.record(Arrays.asList("proposer", "instrumentId", "cashInstrument", "session", "price", "rationale", "ratePerAnnum", "dayCount", "accrualFrom", "asOfDate"), name -> {
           switch (name) {
             case "proposer": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
             case "instrumentId": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(1, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text);
@@ -107,10 +114,11 @@ public class ProposeAccruingFixing extends DamlRecord<ProposeAccruingFixing> {
             case "ratePerAnnum": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(6, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10));
             case "dayCount": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(7, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text);
             case "accrualFrom": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(8, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.timestamp);
+            case "asOfDate": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(9, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.date);
             default: return null;
           }
         }
-        , (Object[] args) -> new ProposeAccruingFixing(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6]), JsonLfDecoders.cast(args[7]), JsonLfDecoders.cast(args[8])));
+        , (Object[] args) -> new ProposeAccruingFixing(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6]), JsonLfDecoders.cast(args[7]), JsonLfDecoders.cast(args[8]), JsonLfDecoders.cast(args[9])));
   }
 
   public static ProposeAccruingFixing fromJson(String json) throws JsonLfDecoder.Error {
@@ -127,7 +135,8 @@ public class ProposeAccruingFixing extends DamlRecord<ProposeAccruingFixing> {
         JsonLfEncoders.Field.of("rationale", apply(JsonLfEncoders::text, rationale)),
         JsonLfEncoders.Field.of("ratePerAnnum", apply(JsonLfEncoders::numeric, ratePerAnnum)),
         JsonLfEncoders.Field.of("dayCount", apply(JsonLfEncoders::text, dayCount)),
-        JsonLfEncoders.Field.of("accrualFrom", apply(JsonLfEncoders::timestamp, accrualFrom)));
+        JsonLfEncoders.Field.of("accrualFrom", apply(JsonLfEncoders::timestamp, accrualFrom)),
+        JsonLfEncoders.Field.of("asOfDate", apply(JsonLfEncoders::date, asOfDate)));
   }
 
   @Override
@@ -149,20 +158,22 @@ public class ProposeAccruingFixing extends DamlRecord<ProposeAccruingFixing> {
         Objects.equals(this.rationale, other.rationale) &&
         Objects.equals(this.ratePerAnnum, other.ratePerAnnum) &&
         Objects.equals(this.dayCount, other.dayCount) &&
-        Objects.equals(this.accrualFrom, other.accrualFrom);
+        Objects.equals(this.accrualFrom, other.accrualFrom) &&
+        Objects.equals(this.asOfDate, other.asOfDate);
   }
 
   @Override
   public int hashCode() {
     return Objects.hash(this.proposer, this.instrumentId, this.cashInstrument, this.session,
-        this.price, this.rationale, this.ratePerAnnum, this.dayCount, this.accrualFrom);
+        this.price, this.rationale, this.ratePerAnnum, this.dayCount, this.accrualFrom,
+        this.asOfDate);
   }
 
   @Override
   public String toString() {
-    return String.format("com.lucilla.settlement.model.governance.ProposeAccruingFixing(%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+    return String.format("com.lucilla.settlement.model.governance.ProposeAccruingFixing(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         this.proposer, this.instrumentId, this.cashInstrument, this.session, this.price,
-        this.rationale, this.ratePerAnnum, this.dayCount, this.accrualFrom);
+        this.rationale, this.ratePerAnnum, this.dayCount, this.accrualFrom, this.asOfDate);
   }
 
   /**

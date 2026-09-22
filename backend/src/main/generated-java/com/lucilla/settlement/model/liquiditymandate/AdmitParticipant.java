@@ -22,7 +22,7 @@ import java.util.List;
 import java.util.Objects;
 
 public class AdmitParticipant extends DamlRecord<AdmitParticipant> {
-  public static final String _packageId = "f442ed0a18dad43b70c730775e6991c2bb8ee6bf01385f7c5325552559cafa9b";
+  public static final String _packageId = "9f697598fdc5fee1bf367e5acd6ca4eb84c7368c987ce1093f58227384f3d0f8";
 
   public final String participant;
 

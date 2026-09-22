@@ -2,6 +2,7 @@ package com.lucilla.settlement.model.governance;
 
 import static com.daml.ledger.javaapi.data.codegen.json.JsonLfEncoders.apply;
 
+import com.daml.ledger.javaapi.data.Party;
 import com.daml.ledger.javaapi.data.Value;
 import com.daml.ledger.javaapi.data.codegen.DamlRecord;
 import com.daml.ledger.javaapi.data.codegen.PrimitiveValueDecoders;
@@ -21,32 +22,38 @@ import java.util.List;
 import java.util.Objects;
 
 public class FinalizeRestatement extends DamlRecord<FinalizeRestatement> {
-  public static final String _packageId = "f442ed0a18dad43b70c730775e6991c2bb8ee6bf01385f7c5325552559cafa9b";
+  public static final String _packageId = "9f697598fdc5fee1bf367e5acd6ca4eb84c7368c987ce1093f58227384f3d0f8";
 
-  public FinalizeRestatement() {
+  public final String finalizer;
+
+  public FinalizeRestatement(String finalizer) {
+    this.finalizer = finalizer;
   }
 
   public static ValueDecoder<FinalizeRestatement> valueDecoder() throws IllegalArgumentException {
     return value$ -> {
       Value recordValue$ = value$;
-      List<com.daml.ledger.javaapi.data.DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(0,0,
+      List<com.daml.ledger.javaapi.data.DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(1,0,
           recordValue$);
-      return new FinalizeRestatement();
+      String finalizer = PrimitiveValueDecoders.fromParty.decode(fields$.get(0).getValue());
+      return new FinalizeRestatement(finalizer);
     } ;
   }
 
   public com.daml.ledger.javaapi.data.DamlRecord toValue() {
-    ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field> fields = new ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field>(0);
+    ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field> fields = new ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field>(1);
+    fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("finalizer", new Party(this.finalizer)));
     return new com.daml.ledger.javaapi.data.DamlRecord(fields);
   }
 
   public static JsonLfDecoder<FinalizeRestatement> jsonDecoder() {
-    return JsonLfDecoders.record(Arrays.asList(), name -> {
+    return JsonLfDecoders.record(Arrays.asList("finalizer"), name -> {
           switch (name) {
+            case "finalizer": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
             default: return null;
           }
         }
-        , (Object[] args) -> new FinalizeRestatement());
+        , (Object[] args) -> new FinalizeRestatement(JsonLfDecoders.cast(args[0])));
   }
 
   public static FinalizeRestatement fromJson(String json) throws JsonLfDecoder.Error {
@@ -54,7 +61,8 @@ public class FinalizeRestatement extends DamlRecord<FinalizeRestatement> {
   }
 
   public JsonLfEncoder jsonEncoder() {
-    return JsonLfEncoders.record();
+    return JsonLfEncoders.record(
+        JsonLfEncoders.Field.of("finalizer", apply(JsonLfEncoders::party, finalizer)));
   }
 
   @Override
@@ -68,17 +76,19 @@ public class FinalizeRestatement extends DamlRecord<FinalizeRestatement> {
     if (!(object instanceof FinalizeRestatement)) {
       return false;
     }
-    return true;
+    FinalizeRestatement other = (FinalizeRestatement) object;
+    return Objects.equals(this.finalizer, other.finalizer);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash();
+    return Objects.hash(this.finalizer);
   }
 
   @Override
   public String toString() {
-    return "com.lucilla.settlement.model.governance.FinalizeRestatement";
+    return String.format("com.lucilla.settlement.model.governance.FinalizeRestatement(%s)",
+        this.finalizer);
   }
 
   /**

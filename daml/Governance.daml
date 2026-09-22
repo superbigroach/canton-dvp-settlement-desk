@@ -97,11 +97,55 @@
 -- attesting a rate.
 -- ===========================================================================
 
+-- ===========================================================================
+-- PACKAGE 3.0.0 (22 September 2026) — THE FIXING IS BOUND TO THE COMMITTEE.
+-- ===========================================================================
+-- WHAT 2.x GOT WRONG, found by the 22 Sep audit and verified by reading this file:
+--   `FixingProposal` was `signatory approvers` and `NavFixing` was `signatory
+--   attestors`, while `admin`, `threshold` and `members` were PLAIN FIELDS. Nothing
+--   tied a proposal to an `OperatorCommittee`. So any party could create a proposal
+--   naming the real administrator with `threshold = 1` and itself as the only
+--   approver, finalise it alone, and hold a contract that read as "committee-attested"
+--   — K-of-K for a K the forger chose. The signatures were genuine; WHICH K and WHICH
+--   committee were not.
+--
+-- WHAT 3.0.0 DOES ABOUT IT, and why each piece is a signatory change and not a check:
+--   1. `signatory admin :: approvers` on the proposal and `admin :: attestors` on the
+--      fixing. A proposal can now only be born inside a choice on the committee the
+--      administrator signed, and a fixing can only be born from such a proposal. The
+--      forgery is not "refused" — it cannot be constructed, because the forger does
+--      not hold the administrator's authority. `admin` stops being a claim and becomes
+--      the party that signed.
+--   2. The committee's `ensure` bounds the quorum: `threshold >= 2`, `threshold <=
+--      length members`, `admin notElem members`. A one-signature "committee" and an
+--      administrator that attests its own number are both unconstructible.
+--   3. The administrator may PROPOSE without being an approver. It is the operator:
+--      it computes the number and opens the round; it never signs it. That is the
+--      §2d operator-exit rule of the signer protocol, enforced rather than promised.
+--   4. Plain `Confirm` is RETIRED. Every attestation carries a `SignerCheck`, and a
+--      venue must either give the traded range the price sits inside or attest the
+--      ABSENCE of prints (`no-prints-attested`). A range from any other seat is
+--      refused. Half-evidence no longer counts as a signature.
+--   5. Every proposal and fixing carries an attested `asOfDate`, and a `FixingSeries`
+--      contract per (administrator, instrument, session) advances on each finalise,
+--      so the ledger — not a consumer's "take the newest" convention — guarantees at
+--      most one fixing per series per day. Daml 3 has no contract keys; the series
+--      contract is the slot.
+--   6. Committee members observe the fixing, so a member that did not sign it can
+--      still open a restatement of it.
+--
+-- WHY A NEW PACKAGE AND NOT AN UPGRADE. A signatory change is not a compatible
+-- upgrade under Daml's smart-contract-upgrade rules; neither is a non-Optional field.
+-- There was nothing to migrate — no fixing published, no committee convened on any
+-- shared ledger — which is exactly why this was done before the first one.
+-- ===========================================================================
+
 module Governance where
 
 import DA.List (dedup)
 import DA.Time (subTime, convertRelTimeToMicroseconds)
 import DA.Optional (isSome)
+import DA.Action (when)
 
 -- ===========================================================================
 -- THE DAY-COUNT CONVENTION — the input that looks like a detail and is not.
@@ -365,6 +409,36 @@ data SignerCheck = SignerCheck
   deriving (Eq, Show)
 
 -- ---------------------------------------------------------------------------
+-- checkEvidence — THE VENUE RULE (3.0.0), shared by a fixing and its restatement.
+-- ---------------------------------------------------------------------------
+-- The venue's evidence is MANDATORY, in one of two shapes. Either the traded range
+-- the mark sits inside — a venue whose own book never printed there is the single
+-- most informative refusal in the protocol — or an attestation that there were NO
+-- prints in the window (`no-prints-attested`, rulebook §5.3a), which is a different
+-- fact and must not be dressed as a range. A range from any other seat is refused:
+-- only the venue holds transaction data, so only the venue may assert one.
+checkEvidence : Decimal -> SignerCheck -> Update ()
+checkEvidence price check = do
+  assertMsg "a signer must name at least one condition it verified"
+    (not (null check.checksPassed))
+  let isVenue = check.role == "venue"
+  case (check.observedLow, check.observedHigh) of
+    (Some lo, Some hi) -> do
+      assertMsg "only the venue seat attests a traded range" isVenue
+      assertMsg "a venue that supplies a range is attesting prints, not their absence"
+        ("no-prints-attested" `notElem` check.checksPassed)
+      assertMsg "observed range is inverted" (lo <= hi)
+      assertMsg "attested price sits outside the venue's observed range"
+        (price >= lo && price <= hi)
+    (None, None) ->
+      when isVenue do
+        assertMsg "a venue attests its traded range, or the absence of prints (no-prints-attested)"
+          ("no-prints-attested" `elem` check.checksPassed)
+        assertMsg "a venue attesting no prints cannot also claim a traded range"
+          ("traded-range" `notElem` check.checksPassed)
+    _ -> abort "an observed range needs both a low and a high"
+
+-- ---------------------------------------------------------------------------
 -- OperatorCommittee — the standing K-of-N committee (the decentralised operator).
 -- ---------------------------------------------------------------------------
 -- This is the configuration record: who the member parties are, and how many of
@@ -385,10 +459,18 @@ template OperatorCommittee
     -- it and everyone can see the roster/threshold under which fixes are struck.
     observer (auditor :: members)
 
-    ensure threshold > 0
+    -- 3.0.0: THE QUORUM IS BOUNDED HERE, so a committee that could not produce a
+    -- meaningful attestation cannot exist to be proposed into.
+    --   * K >= 2 — one signature is an opinion, not a quorum. K = 1 was the exact
+    --     shape of the forgery this package closes.
+    --   * K <= N — a quorum that can never be reached is a fixing that can never be
+    --     struck. (K = N, unanimity, is allowed: fragile, but honest.)
+    --   * the administrator is NOT a member — it proposes and publishes; it never
+    --     attests its own number. Signer protocol §2d, enforced.
+    ensure threshold >= 2
         && threshold <= length members
         && length (dedup members) == length members   -- no duplicate members
-        && not (null members)
+        && admin `notElem` members
 
     -- PROPOSE A FIXING — a member opens a price attestation for an instrument's
     -- open/close. Nonconsuming so the committee runs many fixes off one committee
@@ -446,7 +528,8 @@ template OperatorCommittee
         accrualFrom  : Time
       controller proposer
       do
-        assertMsg "proposer must be a committee member" (proposer `elem` members)
+        assertMsg "proposer must be the administrator or a committee member"
+          (proposer == admin || proposer `elem` members)
         assertMsg "a restatement must state why the original was wrong" (reason /= "")
         original <- fetch supersedes
         -- A committee may only correct a fixing struck under ITS OWN quorum. Without
@@ -467,12 +550,19 @@ template OperatorCommittee
           -- Disclosure survives a correction: every desk that could read the wrong
           -- number must be able to read the right one, without re-publishing by hand.
           publishTo = original.publishedTo
-          approvers = [proposer]
+          -- The administrator opens the round; it does not sign it (3.0.0 §3).
+          approvers = if proposer == admin then [] else [proposer]
+          -- A correction is a fact about the SAME date the original described.
+          asOfDate = original.asOfDate
           -- A correction carries the ORIGINAL's wrapper mark and evidence forward by
           -- default; a restatement that also changes the factor sets it explicitly.
           referencePrice = original.referencePrice
           wrapperFactor = original.wrapperFactor
-          attestations = original.attestations
+          -- EVIDENCE IS NEVER CARRIED FORWARD (3.0.0). It is per-signer, and the
+          -- members who correct a number are not necessarily the ones who struck
+          -- it; each files its own with ConfirmRestatement. (2.x copied the
+          -- original's, which a differently-composed quorum could not even publish.)
+          attestations = None
           tier = original.tier
 
     nonconsuming choice ProposeFixing : ContractId FixingProposal
@@ -483,20 +573,25 @@ template OperatorCommittee
         session        : Text     -- "Open" | "Close": which fix this is
         price          : Decimal  -- the proposed official price
         rationale      : Text     -- why (e.g. "VWAP of the sealed cross", a source)
+        asOfDate       : Date     -- the calendar day this fixing describes (3.0.0)
       controller proposer
       do
-        assertMsg "proposer must be a committee member" (proposer `elem` members)
+        assertMsg "proposer must be the administrator or a committee member"
+          (proposer == admin || proposer `elem` members)
         assertMsg "price must be positive" (price > 0.0)
         assertMsg "session must be Open or Close" (session == "Open" || session == "Close")
         now <- getTime
         create FixingProposal with
           admin; members; threshold; auditor
           proposer
-          instrumentId; cashInstrument; session; price; rationale
+          instrumentId; cashInstrument; session; price; rationale; asOfDate
           -- A PURE SNAPSHOT: nothing accrues, so the day count cannot matter and the
           -- accrual origin is only there to keep the record shape uniform.
           ratePerAnnum = 0.0; dayCount = "NONE"; accrualFrom = now
-          approvers = [proposer]        -- the proposer is the first attestor
+          -- A MEMBER that proposes is the first attestor. The ADMINISTRATOR that
+          -- proposes is not: it opens the round and signs the contract as admin, but
+          -- it is never counted toward K (3.0.0 §3).
+          approvers = if proposer == admin then [] else [proposer]
           -- No wrapper mark and no protocol evidence on the plain path: this choice
           -- predates both and must keep behaving exactly as it always did.
           referencePrice = None
@@ -526,9 +621,11 @@ template OperatorCommittee
         benchmarkPrice : Decimal  -- the underlying benchmark print, e.g. CF BRR
         parFactor      : Decimal  -- 1.0 = attested at par; < 1.0 = attested at a discount
         rationale      : Text     -- cite the benchmark and its strike, not an opinion
+        asOfDate       : Date     -- the calendar day this fixing describes (3.0.0)
       controller proposer
       do
-        assertMsg "proposer must be a committee member" (proposer `elem` members)
+        assertMsg "proposer must be the administrator or a committee member"
+          (proposer == admin || proposer `elem` members)
         assertMsg "session must be Open or Close" (session == "Open" || session == "Close")
         assertMsg "reference price must be positive" (benchmarkPrice > 0.0)
         -- A factor at or below zero is not a discount, it is a typo. The upper bound
@@ -542,10 +639,10 @@ template OperatorCommittee
         create FixingProposal with
           admin; members; threshold; auditor
           proposer
-          instrumentId; cashInstrument; session; rationale
+          instrumentId; cashInstrument; session; rationale; asOfDate
           price = benchmarkPrice * parFactor
           ratePerAnnum = 0.0; dayCount = "NONE"; accrualFrom = now
-          approvers = [proposer]
+          approvers = if proposer == admin then [] else [proposer]
           referencePrice = Some benchmarkPrice
           wrapperFactor = Some parFactor
           attestations = None
@@ -584,9 +681,11 @@ template OperatorCommittee
         ratePerAnnum   : Decimal  -- e.g. 0.036 for 3.6%/yr; may be NEGATIVE (see navAt)
         dayCount       : Text     -- "ACT/360" (USD money market) | "ACT/365F"
         accrualFrom    : Time     -- the instant this mark applies from
+        asOfDate       : Date     -- the calendar day this fixing describes (3.0.0)
       controller proposer
       do
-        assertMsg "proposer must be a committee member" (proposer `elem` members)
+        assertMsg "proposer must be the administrator or a committee member"
+          (proposer == admin || proposer `elem` members)
         assertMsg "base NAV must be positive" (price > 0.0)
         assertMsg "session must be Open or Close" (session == "Open" || session == "Close")
         -- REJECT AN UNKNOWN CONVENTION RATHER THAN DEFAULTING ONE. Silently falling
@@ -599,13 +698,68 @@ template OperatorCommittee
         create FixingProposal with
           admin; members; threshold; auditor
           proposer
-          instrumentId; cashInstrument; session; price; rationale
+          instrumentId; cashInstrument; session; price; rationale; asOfDate
           ratePerAnnum; dayCount; accrualFrom
-          approvers = [proposer]
+          approvers = if proposer == admin then [] else [proposer]
           referencePrice = None
           wrapperFactor = None
           attestations = None
           tier = Some "committee"
+
+-- ---------------------------------------------------------------------------
+-- FixingSeries — THE SLOT: at most one fixing per (administrator, instrument,
+-- session, day). 3.0.0.
+-- ---------------------------------------------------------------------------
+-- Daml 3 has no contract keys, so uniqueness has to be a contract the finalise
+-- step CONSUMES. One series contract stands per benchmark; `FinalizeFixing` fetches
+-- it, checks the date is strictly later than the last one struck, and advances it
+-- in the same transaction that creates the `NavFixing`. Two fixings for the same
+-- day therefore cannot both be published: the second finalise finds the slot taken.
+-- A restatement does NOT advance the series — it corrects the day already struck.
+--
+-- Signed by the administrator only: the series is the benchmark's identity, and
+-- which days it has printed is an administrative fact, not an attested one.
+template FixingSeries
+  with
+    admin        : Party
+    auditor      : Party
+    instrumentId : Text
+    session      : Text            -- "Open" | "Close"
+    observers    : [Party]         -- the committee members, so an approver can finalise
+    lastAsOf     : Optional Date   -- the most recent day with a published fixing
+    struck       : Int             -- how many fixings this series has published
+  where
+    signatory admin
+    -- The members observe the series: `FinalizeFixing` fetches it, and a fetch
+    -- needs the contract visible to the party that submits. Without this, only the
+    -- administrator could ever finalise — which is the proposer-veto problem again,
+    -- moved one seat over.
+    observer (auditor :: observers)
+
+    ensure instrumentId /= ""
+        && (session == "Open" || session == "Close")
+        && struck >= 0
+
+    -- ADVANCE — record that `asOfDate` has been struck. Exercised from inside
+    -- `FinalizeFixing`, where the administrator's authority is present because it
+    -- signs the proposal being finalised.
+    choice Advance : ContractId FixingSeries
+      with
+        asOfDate : Date
+      controller admin
+      do
+        case lastAsOf of
+          Some d -> assertMsg "a fixing for this series is already published on or after this date"
+                      (asOfDate > d)
+          None   -> pure ()
+        create this with lastAsOf = Some asOfDate; struck = struck + 1
+
+    -- DISCLOSE — let one more party (a new member) see the series.
+    choice DiscloseSeries : ContractId FixingSeries
+      with
+        party : Party
+      controller admin
+      do create this with observers = party :: filter (/= party) observers
 
 -- ---------------------------------------------------------------------------
 -- FixingProposal — an in-progress price attestation gathering member signatures.
@@ -633,12 +787,15 @@ template FixingProposal
     ratePerAnnum   : Decimal  -- 0.0 = a non-accruing snapshot (the ProposeFixing path)
     dayCount       : Text     -- "ACT/360" | "ACT/365F" | "NONE" (non-accruing)
     accrualFrom    : Time     -- the instant the mark applies from
-    approvers      : [Party]  -- members who have attested so far (grows via Confirm)
+    -- THE DAY THIS FIXING DESCRIBES (3.0.0). Attested with the price, because "the
+    -- 22 September close" is a fact the members sign, not a timestamp the ledger
+    -- happened to see. `FixingSeries` uses it to guarantee one fixing per day.
+    asOfDate       : Date
+    approvers      : [Party]  -- members who have attested so far (grows via ConfirmWithChecks)
     -- ---------------------------------------------------------------------
-    -- APPENDED LAST AND ALL OPTIONAL — same upgrade rule as NavFixing's
-    -- restatement lineage: a non-Optional field, or one inserted mid-record,
-    -- fails NOT_VALID_UPGRADE_PACKAGE and orphans every proposal in flight.
-    -- `None` on all three reproduces the pre-existing behaviour exactly.
+    -- The wrapper mark, the evidence and the tier. Optional because a proposal
+    -- opened on the plain path carries none of them, not for upgrade reasons —
+    -- 3.0.0 is a new package and owes 2.x nothing.
     -- ---------------------------------------------------------------------
     -- THE WRAPPER MARK — the judgement no benchmark administrator makes.
     -- CF Benchmarks prices BTC. It has never priced cBTC. cBTC is a CLAIM on BTC
@@ -659,14 +816,22 @@ template FixingProposal
     -- evidence. `None` is a fixing struck before the field existed.
     tier           : Optional Text          -- "auction" | "committee"
   where
-    -- The approvers gathered so far ALL sign — this is the accumulating multisig.
-    signatory approvers
+    -- 3.0.0: THE ADMINISTRATOR SIGNS EVERY PROPOSAL, plus the approvers gathered so
+    -- far (the accumulating multisig). A proposal can therefore only be created
+    -- inside a choice on an `OperatorCommittee` the administrator signed — there is
+    -- no other place its authority is available — which is what binds the proposal
+    -- to a real committee rather than to a committee it merely names.
+    signatory admin :: approvers
     -- Every committee member (so they can confirm) and the auditor observe it.
     -- Members already in `approvers` are also signatories; Daml dedups the overlap.
     observer (auditor :: members)
 
     ensure price > 0.0
         && length (dedup approvers) == length approvers   -- an approver signs at most once
+        -- Only members attest, and the administrator is never one of them.
+        && all (`elem` members) approvers
+        && admin `notElem` approvers
+        && threshold >= 2
         && supportedDayCount dayCount
         && ratePerAnnum > -1.0
         -- The wrapper mark reconciles, or is absent entirely (see wrapperConsistent).
@@ -681,24 +846,15 @@ template FixingProposal
         -- never sit next to a live rate and quietly accrue on an assumed convention.
         && (dayCount /= "NONE" || ratePerAnnum == 0.0)
 
-    -- CONFIRM — another member adds its attestation. The confirming member controls
-    -- the choice (its authority is present), so the successor can add it to the
-    -- signatory set; the existing approvers' authority carries because they sign
-    -- this contract. One new signature per transaction.
-    choice Confirm : ContractId FixingProposal
-      with
-        member : Party
-      controller member
-      do
-        assertMsg "confirmer must be a committee member" (member `elem` members)
-        assertMsg "member has already attested this fix"  (member `notElem` approvers)
-        create this with approvers = member :: approvers
+    -- (Plain `Confirm` — a signature with no evidence — was RETIRED in 3.0.0. An
+    -- attestation that cannot say what it verified is a vote, and a vote is what
+    -- the signer protocol exists to make insufficient.)
 
-    -- CONFIRM WITH CHECKS — the same attestation, plus the protocol evidence.
-    -- A SEPARATE choice rather than extra fields on `Confirm`, so the plain path
-    -- keeps its exact signature and nothing already integrated has to change.
-    -- Behaviourally identical: one new signature per transaction. The difference is
-    -- that the resulting fixing can answer WHY each member signed, which is what an
+    -- CONFIRM WITH CHECKS — a member adds its attestation AND the protocol evidence.
+    -- The confirming member controls the choice (its authority is present), so the
+    -- successor can add it to the signatory set; the existing signatories' authority
+    -- carries because they sign this contract. One new signature per transaction.
+    -- The resulting fixing can answer WHY each member signed, which is what an
     -- oversight record is and what a signature count alone is not.
     choice ConfirmWithChecks : ContractId FixingProposal
       with
@@ -710,40 +866,42 @@ template FixingProposal
         assertMsg "member has already attested this fix"  (member `notElem` approvers)
         assertMsg "the evidence must be signed by the confirming member"
           (check.member == member)
-        assertMsg "a signer must name at least one condition it verified"
-          (not (null check.checksPassed))
-        -- A venue asserting a traded range must give a coherent one, and the mark
-        -- has to sit inside it. A venue whose own book never printed there is the
-        -- single most informative refusal in the protocol; letting it sign anyway
-        -- would discard exactly the signal the seat exists to produce.
-        case (check.observedLow, check.observedHigh) of
-          (Some lo, Some hi) -> do
-            assertMsg "observed range is inverted" (lo <= hi)
-            assertMsg "attested price sits outside the venue's observed range"
-              (price >= lo && price <= hi)
-          (None, None) -> pure ()
-          _ -> abort "an observed range needs both a low and a high"
+        checkEvidence price check   -- the venue rule, shared with a restatement
         create this with
           approvers    = member :: approvers
           attestations = Some (check :: optional [] identity attestations)
 
     -- FINALIZE — once the threshold of DISTINCT members has attested, promote the
-    -- proposal to an official `NavFixing` signed by all of them. Controlled by the
-    -- proposer (any approver would do, since all their authority is on this
-    -- contract). `publishTo` are the venues/desks the fix is disclosed to (e.g. the
-    -- auction operator that will print at it) — governance without leakage.
+    -- proposal to an official `NavFixing` signed by the administrator and all of
+    -- them. Any approver, or the administrator, may finalise: all of their authority
+    -- is already on this contract, and letting only the proposer do it would let one
+    -- party veto a fully-attested fixing by never acting (2.x). `publishTo` are the
+    -- venues/desks the fix is disclosed to — governance without leakage.
+    --
+    -- THE SERIES SLOT (3.0.0): the finalise consumes the benchmark's `FixingSeries`
+    -- and advances it to `asOfDate`, in this same transaction. A second fixing for
+    -- the same day cannot be published, because the slot it needs is gone.
     choice FinalizeFixing : ContractId NavFixing
       with
+        finalizer : Party
+        series    : ContractId FixingSeries
         publishTo : [Party]
-      controller proposer
+      controller finalizer
       do
+        assertMsg "only the administrator or an approver may finalise"
+          (finalizer == admin || finalizer `elem` approvers)
         assertMsg "not enough attestations to finalise the fix"
           (length approvers >= threshold)
+        sr <- fetch series
+        assertMsg "the series belongs to a different administrator" (sr.admin == admin)
+        assertMsg "the series is for a different instrument" (sr.instrumentId == instrumentId)
+        assertMsg "the series is for a different session" (sr.session == session)
+        _ <- exercise series Advance with asOfDate
         now <- getTime
         create NavFixing with
           attestors = approvers
-          admin; auditor; threshold
-          instrumentId; cashInstrument; session; price; rationale
+          admin; members; auditor; threshold
+          instrumentId; cashInstrument; session; price; rationale; asOfDate
           -- The accrual recipe carries through UNCHANGED from the proposal every
           -- member confirmed. Nothing about it is (re)decided here.
           ratePerAnnum; dayCount; accrualFrom
@@ -817,44 +975,60 @@ template RestatementProposal
     ratePerAnnum    : Decimal
     dayCount        : Text
     accrualFrom     : Time
+    asOfDate        : Date      -- the day the ORIGINAL described; a correction keeps it
     publishTo       : [Party]   -- carried from the original so disclosure survives
     approvers       : [Party]
-    -- Appended last and Optional, same upgrade rule as everywhere else. Carried off
-    -- the fixing being corrected so a restatement republishes the WHOLE record, not a
-    -- price with its wrapper mark silently dropped.
+    -- Carried off the fixing being corrected so a restatement republishes the WHOLE
+    -- record, not a price with its wrapper mark silently dropped.
     referencePrice  : Optional Decimal
     wrapperFactor   : Optional Decimal
     attestations    : Optional [SignerCheck]
     tier            : Optional Text
   where
-    signatory approvers
+    -- Same binding as a first-time proposal (3.0.0): the administrator signs, so a
+    -- correction can only be opened on the committee that struck the original.
+    signatory admin :: approvers
     observer (auditor :: members)
 
     ensure price > 0.0
         && length (dedup approvers) == length approvers
+        && all (`elem` members) approvers
+        && admin `notElem` approvers
+        && threshold >= 2
         && supportedDayCount dayCount
         && ratePerAnnum > -1.0
         && (dayCount /= "NONE" || ratePerAnnum == 0.0)
         -- A correction with no stated reason is indistinguishable from tampering.
         && reason /= ""
 
-    -- CONFIRM — another member attests the correction. Same accumulating multisig as
-    -- a first-time fixing: one new signature per transaction.
+    -- CONFIRM — another member attests the correction, WITH its evidence (3.0.0: a
+    -- correction is a new assertion about value and is held to the same standard as
+    -- the number it replaces). Same accumulating multisig: one signature per transaction.
     choice ConfirmRestatement : ContractId RestatementProposal
       with
         member : Party
+        check  : SignerCheck
       controller member
       do
         assertMsg "confirmer must be a committee member" (member `elem` members)
         assertMsg "member has already attested this restatement" (member `notElem` approvers)
-        create this with approvers = member :: approvers
+        assertMsg "the evidence must be signed by the confirming member"
+          (check.member == member)
+        checkEvidence price check
+        create this with
+          approvers    = member :: approvers
+          attestations = Some (check :: optional [] identity attestations)
 
     -- FINALIZE — with K distinct attestations, archive the superseded fixing and
     -- publish the replacement pointing back at it. One transaction: there is never an
     -- instant at which both numbers are live, nor one at which neither is.
     choice FinalizeRestatement : ContractId NavFixing
-      controller proposer
+      with
+        finalizer : Party
+      controller finalizer
       do
+        assertMsg "only the administrator or an approver may finalise"
+          (finalizer == admin || finalizer `elem` approvers)
         assertMsg "not enough attestations to finalise the restatement"
           (length approvers >= threshold)
         original <- fetch supersedes
@@ -886,8 +1060,8 @@ template RestatementProposal
         now <- getTime
         create NavFixing with
           attestors = approvers
-          admin; auditor; threshold
-          instrumentId; cashInstrument; session; price; rationale
+          admin; members; auditor; threshold
+          instrumentId; cashInstrument; session; price; rationale; asOfDate
           ratePerAnnum; dayCount; accrualFrom
           publishedTo = dedup publishTo
           finalizedAt = now
@@ -914,12 +1088,14 @@ template RestatementProposal
 template NavFixing
   with
     attestors      : [Party]  -- the members who signed (>= threshold of them)
-    admin          : Party
+    admin          : Party    -- the administrator — a SIGNATORY since 3.0.0, not a claim
+    members        : [Party]  -- the roster the attestors were drawn from (3.0.0)
     auditor        : Party
     threshold      : Int
     instrumentId   : Text
     cashInstrument : Text
     session        : Text     -- "Open" | "Close"
+    asOfDate       : Date     -- the calendar day this fixing describes (3.0.0)
     -- THE BASE, NOT THE ANSWER — the accrual analogue of the auction's demotion of
     -- `referencePrice` from "the price" to "the anchor". `price` is what one share was
     -- worth AT `accrualFrom`. What it is worth NOW is `navAt this now`, and every
@@ -963,15 +1139,24 @@ template NavFixing
     attestations   : Optional [SignerCheck]
     tier           : Optional Text   -- "auction" | "committee"; §3 waterfall provenance
   where
-    signatory attestors
-    -- The auditor and the published-to venues observe the official fix; the fix is
-    -- deliberately NOT world-readable — it reaches exactly the desks that consume it.
-    observer (auditor :: publishedTo)
+    -- 3.0.0: THE ADMINISTRATOR AND THE ATTESTORS SIGN. "K of N members of the
+    -- committee administered by X struck this price" is now provable from the
+    -- signatory set alone — X signed it, and X's `ensure` on the committee bounded
+    -- K and N. A fixing that names an administrator who did not sign it cannot exist.
+    signatory admin :: attestors
+    -- The auditor, the published-to venues and the committee members observe the
+    -- official fix — members so that one who did NOT sign can still open a
+    -- restatement of it (3.0.0 §6). Deliberately NOT world-readable: it reaches
+    -- exactly the desks that consume it.
+    observer (auditor :: publishedTo ++ members)
 
     ensure price > 0.0
-        && threshold > 0
+        && threshold >= 2
         && length attestors >= threshold          -- provably K-of-N attested
         && length (dedup attestors) == length attestors
+        && all (`elem` members) attestors
+        && admin `notElem` attestors
+        && admin `notElem` members
         && supportedDayCount dayCount
         && ratePerAnnum > -1.0
         && (dayCount /= "NONE" || ratePerAnnum == 0.0)
@@ -994,7 +1179,8 @@ template NavFixing
         venue    : Party
       controller attestor
       do
-        assertMsg "only an attestor may broaden publication" (attestor `elem` attestors)
+        assertMsg "only an attestor or the administrator may broaden publication"
+          (attestor == admin || attestor `elem` attestors)
         create this with publishedTo = venue :: filter (/= venue) publishedTo
 
 -- ---------------------------------------------------------------------------

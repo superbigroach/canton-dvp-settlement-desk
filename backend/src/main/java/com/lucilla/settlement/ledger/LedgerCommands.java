@@ -17,6 +17,7 @@ import com.lucilla.settlement.model.settlement.SettlementBatch;
 import com.lucilla.settlement.model.governance.OperatorCommittee;
 import com.lucilla.settlement.model.governance.FixingProposal;
 import com.lucilla.settlement.model.governance.NavFixing;
+import com.lucilla.settlement.model.governance.FixingSeries;
 import com.lucilla.settlement.model.basket.BasketDefinition;
 import com.lucilla.settlement.model.basket.Component;
 import com.lucilla.settlement.model.basket.CreationOrder;
@@ -38,6 +39,7 @@ import com.lucilla.settlement.model.perpetual.PositionSide;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 
@@ -542,12 +544,28 @@ public final class LedgerCommands {
         return new OperatorCommittee(admin, members, (long) threshold, auditor, label).create();
     }
 
-    /** A member proposes an official price fix (it becomes the first attestor). */
+    /**
+     * THE SERIES SLOT (package 3.0.0). One {@code FixingSeries} stands per
+     * (administrator, instrument, session); {@code FinalizeFixing} consumes and advances
+     * it, so the ledger — not a consumer convention — guarantees one fixing per day.
+     * {@code observers} are the committee members, so an approver can finalise.
+     */
+    public static Update<?> createFixingSeries(
+            String admin, String auditor, String instrumentId, String session, List<String> observers) {
+        return new FixingSeries(admin, auditor, instrumentId, session, observers, Optional.empty(), 0L).create();
+    }
+
+    /**
+     * The administrator or a member proposes an official price fix. A MEMBER that proposes
+     * is the first attestor; the ADMINISTRATOR that proposes is not — it opens the round
+     * and never counts toward K (3.0.0, signer protocol §2d). {@code asOfDate} is the
+     * calendar day the fixing describes, attested with the price.
+     */
     public static Update<?> proposeFixing(
             String committeeCid, String proposer, String instrumentId, String cashInstrument,
-            String session, BigDecimal price, String rationale) {
+            String session, BigDecimal price, String rationale, LocalDate asOfDate) {
         return new OperatorCommittee.ContractId(committeeCid)
-                .exerciseProposeFixing(proposer, instrumentId, cashInstrument, session, price, rationale);
+                .exerciseProposeFixing(proposer, instrumentId, cashInstrument, session, price, rationale, asOfDate);
     }
 
     /**
@@ -569,10 +587,10 @@ public final class LedgerCommands {
     public static Update<?> proposeAccruingFixing(
             String committeeCid, String proposer, String instrumentId, String cashInstrument,
             String session, BigDecimal price, String rationale,
-            BigDecimal ratePerAnnum, String dayCount, Instant accrualFrom) {
+            BigDecimal ratePerAnnum, String dayCount, Instant accrualFrom, LocalDate asOfDate) {
         return new OperatorCommittee.ContractId(committeeCid)
                 .exerciseProposeAccruingFixing(proposer, instrumentId, cashInstrument, session,
-                        price, rationale, ratePerAnnum, dayCount, accrualFrom);
+                        price, rationale, ratePerAnnum, dayCount, accrualFrom, asOfDate);
     }
 
     /**
@@ -587,16 +605,15 @@ public final class LedgerCommands {
      */
     public static Update<?> proposeWrappedFixing(
             String committeeCid, String proposer, String instrumentId, String cashInstrument,
-            String session, BigDecimal benchmarkPrice, BigDecimal parFactor, String rationale) {
+            String session, BigDecimal benchmarkPrice, BigDecimal parFactor, String rationale,
+            LocalDate asOfDate) {
         return new OperatorCommittee.ContractId(committeeCid)
                 .exerciseProposeWrappedFixing(proposer, instrumentId, cashInstrument, session,
-                        benchmarkPrice, parFactor, rationale);
+                        benchmarkPrice, parFactor, rationale, asOfDate);
     }
 
-    /** Another member adds its attestation (accumulating multisig). */
-    public static Update<?> confirmFixing(String proposalCid, String member) {
-        return new FixingProposal.ContractId(proposalCid).exerciseConfirm(member);
-    }
+    // (Plain `Confirm` — a signature with no evidence — was RETIRED in package 3.0.0.
+    // Every attestation goes through confirmFixingWithChecks.)
 
     /**
      * The same attestation, PLUS the protocol evidence — which named conditions this
@@ -617,9 +634,20 @@ public final class LedgerCommands {
         return new FixingProposal.ContractId(proposalCid).exerciseConfirmWithChecks(member, check);
     }
 
-    /** Promote a threshold-attested proposal to an official NavFixing. */
-    public static Update<?> finalizeFixing(String proposalCid, List<String> publishTo) {
-        return new FixingProposal.ContractId(proposalCid).exerciseFinalizeFixing(publishTo);
+    /**
+     * Promote a threshold-attested proposal to an official NavFixing. {@code finalizer} is
+     * the administrator or any approver (3.0.0: the proposer no longer holds a veto);
+     * {@code seriesCid} is the benchmark's {@code FixingSeries}, consumed and advanced in
+     * the same transaction so a second fixing for the same day cannot be published.
+     */
+    public static Update<?> finalizeFixing(String proposalCid, String finalizer, String seriesCid,
+                                           List<String> publishTo) {
+        return new FixingProposal.ContractId(proposalCid)
+                .exerciseFinalizeFixing(finalizer, new FixingSeries.ContractId(seriesCid), publishTo);
+    }
+
+    public static com.daml.ledger.javaapi.data.Identifier fixingSeriesTemplateId() {
+        return FixingSeries.TEMPLATE_ID;
     }
 
     /**

@@ -373,7 +373,8 @@ public final class Dtos {
             String cashInstrument,           // defaults to "USDC"
             String session,                  // Open | Close (defaults to Close)
             @NotNull @Positive BigDecimal price,
-            String rationale) {              // why (source / method)
+            String rationale,                // why (source / method)
+            String asOfDate) {               // ISO date the fixing describes; defaults to today, Europe/London
     }
 
     /**
@@ -401,7 +402,8 @@ public final class Dtos {
             String rationale,
             @NotNull BigDecimal ratePerAnnum,        // may be negative; > -1.0 (validated)
             @NotBlank String dayCount,               // ACT/360 | ACT/365F
-            String accrualFrom) {             // ISO-8601; defaults to now
+            String accrualFrom,               // ISO-8601; defaults to now
+            String asOfDate) {                // ISO date the fixing describes; defaults to today, Europe/London
     }
 
     /**
@@ -444,7 +446,8 @@ public final class Dtos {
             String session,                          // Open | Close (defaults to Close)
             @NotNull @Positive BigDecimal benchmarkPrice,  // e.g. the CME CF BRR print
             @NotNull @Positive BigDecimal parFactor,       // 1.0 = at par; < 1.0 = a discount
-            @NotBlank String rationale) {            // MUST cite the benchmark and its strike
+            @NotBlank String rationale,              // MUST cite the benchmark and its strike
+            String asOfDate) {                       // ISO date the fixing describes; defaults to today, Europe/London
     }
 
     /** The wrapped fix echoed back with the factor visible, not folded into the price. */

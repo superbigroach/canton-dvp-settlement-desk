@@ -138,6 +138,7 @@ import DA.Assert ((===))
 import DA.List (head)
 import DA.Optional (fromSome, isNone, isSome)
 import DA.Time (addRelTime, hours, days, seconds)
+import DA.Date (toDateUTC, addDays)
 
 import Instrument
 import Holding
@@ -189,6 +190,7 @@ data Parties = Parties
     auditor : Party   -- compliance observer of settlements (need-to-know)
     agent   : Party   -- Alice's authorised trading agent (the agentic angle)
     eve     : Party   -- OUTSIDER: party to nothing (the privacy control)
+    operator : Party  -- the benchmark ADMINISTRATOR (ETP Foundry): proposes, publishes, never attests
 
 setup : Script Parties
 setup = do
@@ -200,7 +202,39 @@ setup = do
   auditor <- allocatePartyByHint (PartyIdHint "Auditor")
   agent   <- allocatePartyByHint (PartyIdHint "Agent")
   eve     <- allocatePartyByHint (PartyIdHint "Eve")
-  pure (Parties issuer venue alice bob bank auditor agent eve)
+  operator <- allocatePartyByHint (PartyIdHint "Operator")
+  pure (Parties issuer venue alice bob bank auditor agent eve operator)
+
+-- ---------------------------------------------------------------------------
+-- GOVERNANCE HELPERS (3.0.0) — the shapes every committee test needs.
+-- ---------------------------------------------------------------------------
+-- Plain `Confirm` no longer exists: every attestation carries a `SignerCheck`.
+-- These are the minimal honest evidence each seat files in a test that is not
+-- itself about the evidence (Test 8c is).
+lenderCheck : Party -> SignerCheck
+lenderCheck p = SignerCheck with
+  member = p; role = "lender"; protocolRef = "SIGNER_PROTOCOL v2 lender"
+  checksPassed = ["book-acceptance"]; observedLow = None; observedHigh = None
+
+venueCheck : Party -> Decimal -> Decimal -> SignerCheck
+venueCheck p lo hi = SignerCheck with
+  member = p; role = "venue"; protocolRef = "SIGNER_PROTOCOL v2 venue"
+  checksPassed = ["traded-range"]; observedLow = Some lo; observedHigh = Some hi
+
+-- A member attests with lender-shaped evidence (no range).
+confirmAs : Party -> ContractId FixingProposal -> Script (ContractId FixingProposal)
+confirmAs p cid = submit p do
+  exerciseCmd cid ConfirmWithChecks with member = p; check = lenderCheck p
+
+-- The series slot a benchmark needs before its first fixing can be finalised.
+openSeries : Party -> Party -> [Party] -> Text -> Text -> Script (ContractId FixingSeries)
+openSeries admin auditor observers instrumentId session = submit admin do
+  createCmd FixingSeries with
+    admin; auditor; observers; instrumentId; session; lastAsOf = None; struck = 0
+
+-- Today, as the ledger clock sees it — the `asOfDate` a same-day fixing attests.
+today : Script Date
+today = toDateUTC <$> getTime
 
 -- ---------------------------------------------------------------------------
 -- submitOrder / submitMocOrder — lodge one sealed order and THREAD THE AUCTION
@@ -1941,12 +1975,14 @@ testThresholdAttestation = do
     createCmd OperatorCommittee with
       admin = issuer; members; threshold = 2; auditor
       label = "Lucilla NAV Committee"
+  asOf <- today
+  seriesCid <- openSeries issuer auditor [venue, bank, agent] ceth "Close"
 
   -- A member (venue) proposes the cETH close fix @ 2,400. It is the first attestor.
   propCid <- submit venue do
     exerciseCmd committeeCid ProposeFixing with
       proposer = venue; instrumentId = ceth; cashInstrument = usdc
-      session = "Close"; price = 2400.0; rationale = "uniform sealed-cross VWAP"
+      session = "Close"; price = 2400.0; rationale = "uniform sealed-cross VWAP"; asOfDate = asOf
 
   -- A NON-member cannot confirm; the proposer cannot confirm itself twice. AND SAY
   -- WHICH LINE PROVES WHICH THING, because they do not prove the same thing:
@@ -1954,20 +1990,20 @@ testThresholdAttestation = do
   --     `auditor :: members`, so a party outside the committee cannot see the
   --     proposal at all — this line would pass even if `Confirm` had no membership
   --     check, so it cannot be the evidence that one exists.
-  submitMustFail eve     do exerciseCmd propCid Confirm with member = eve
+  submitMustFail eve do exerciseCmd propCid ConfirmWithChecks with member = eve; check = lenderCheck eve
   --   * THE AUDITOR is the only party that OBSERVES the proposal and is NOT a
   --     member, so it is the only probe that reaches
   --     `member `elem` members` and fails on that assert itself.
-  submitMustFail auditor do exerciseCmd propCid Confirm with member = auditor
+  submitMustFail auditor do exerciseCmd propCid ConfirmWithChecks with member = auditor; check = lenderCheck auditor
   --   * The VENUE is a member and already an approver — this one fails on the
   --     one-signature-per-member rule, which is a third, distinct guard.
-  submitMustFail venue   do exerciseCmd propCid Confirm with member = venue
+  submitMustFail venue do exerciseCmd propCid ConfirmWithChecks with member = venue; check = lenderCheck venue
   -- ONE attestation (the proposer's) is below the 2-of-3 threshold — cannot finalise.
-  submitMustFail venue do exerciseCmd propCid FinalizeFixing with publishTo = [venue]
+  submitMustFail venue do exerciseCmd propCid FinalizeFixing with finalizer = venue; series = seriesCid; publishTo = [venue]
 
   -- A SECOND member (bank) confirms → two distinct attestors. Now it can finalise.
-  propCid2 <- submit bank do exerciseCmd propCid Confirm with member = bank
-  fixCid   <- submit venue do exerciseCmd propCid2 FinalizeFixing with publishTo = [venue]
+  propCid2 <- confirmAs bank propCid
+  fixCid   <- submit venue do exerciseCmd propCid2 FinalizeFixing with finalizer = venue; series = seriesCid; publishTo = [venue]
 
   -- The official fix carries >= threshold attestors, at the attested price.
   Some fix <- queryContractId venue fixCid
@@ -1979,6 +2015,166 @@ testThresholdAttestation = do
   assertMsg "auditor must see the official fix"  . isSome =<< queryContractId auditor fixCid
   assertMsg "outsider must NOT see the fix (governance without leakage)"
     . isNone =<< queryContractId eve fixCid
+
+-- ---------------------------------------------------------------------------
+-- TEST 8a' — 3.0.0: A FIXING CANNOT BE FORGED OUTSIDE ITS COMMITTEE.
+-- ---------------------------------------------------------------------------
+-- The 22 Sep 2026 audit: on 2.x a party could create a proposal naming the real
+-- administrator with `threshold = 1` and itself as sole approver, finalise it, and
+-- hold a "committee fixing". Every line below is one of those moves, and each one
+-- must FAIL AT THE LEDGER — not be filtered by a consumer afterwards.
+testFixingCannotBeForged : Script ()
+testFixingCannotBeForged = do
+  Parties{..} <- setup
+  setupInstruments issuer
+  asOf <- today
+  now <- getTime
+
+  -- (1) A single-signature "committee" cannot exist. Neither can one the
+  --     administrator sits on, nor one whose quorum exceeds its roster.
+  submitMustFail issuer do
+    createCmd OperatorCommittee with
+      admin = issuer; members = [venue, bank, agent]; threshold = 1; auditor; label = "K=1"
+  submitMustFail issuer do
+    createCmd OperatorCommittee with
+      admin = issuer; members = [issuer, bank, agent]; threshold = 2; auditor; label = "admin attests"
+  submitMustFail issuer do
+    createCmd OperatorCommittee with
+      admin = issuer; members = [venue, bank]; threshold = 3; auditor; label = "K>N"
+
+  -- (2) THE FORGERY ITSELF. Bank creates a proposal naming Issuer as administrator,
+  --     threshold 2, with itself and Agent as approvers — exactly the 2.x attack —
+  --     and Issuer has signed nothing. Even with BOTH forgers authorising, the
+  --     contract cannot be created: the administrator's signature is missing.
+  submitMultiMustFail [bank, agent] [] do
+    createCmd FixingProposal with
+      admin = issuer; members = [venue, bank, agent]; threshold = 2; auditor
+      proposer = bank; instrumentId = ceth; cashInstrument = usdc; session = "Close"
+      price = 1.0; rationale = "forged"; ratePerAnnum = 0.0; dayCount = "NONE"
+      accrualFrom = now; asOfDate = asOf; approvers = [bank, agent]
+      referencePrice = None; wrapperFactor = None; attestations = None; tier = Some "committee"
+  -- Nor a finished fixing, directly.
+  submitMultiMustFail [bank, agent] [] do
+    createCmd NavFixing with
+      attestors = [bank, agent]; admin = issuer; members = [venue, bank, agent]; auditor
+      threshold = 2; instrumentId = ceth; cashInstrument = usdc; session = "Close"
+      asOfDate = asOf; price = 1.0; rationale = "forged"; ratePerAnnum = 0.0
+      dayCount = "NONE"; accrualFrom = now; publishedTo = [venue]; finalizedAt = now
+      supersedes = None; restatementReason = None
+      referencePrice = None; wrapperFactor = None; attestations = None; tier = Some "committee"
+  -- A forger who administers its OWN committee gets a fixing that says so: `admin`
+  -- is now the party that signed, so a consumer checking for Issuer sees Eve.
+  eveCommittee <- submit eve do
+    createCmd OperatorCommittee with
+      admin = eve; members = [bank, agent]; threshold = 2; auditor; label = "eve's"
+  Some c <- queryContractId eve eveCommittee
+  c.admin === eve
+
+  -- (3) THE ADMINISTRATOR PROPOSES AND DOES NOT SIGN. Issuer opens the round; the
+  --     proposal has NO approvers yet; two members attest; Issuer finalises. The
+  --     published fixing carries exactly the two members, never the administrator.
+  committeeCid <- submit issuer do
+    createCmd OperatorCommittee with
+      admin = issuer; members = [venue, bank, agent]; threshold = 2; auditor; label = "NAV Committee"
+  seriesCid <- openSeries issuer auditor [venue, bank, agent] ceth "Close"
+  p0 <- submit issuer do
+    exerciseCmd committeeCid ProposeFixing with
+      proposer = issuer; instrumentId = ceth; cashInstrument = usdc
+      session = "Close"; price = 2400.0; rationale = "administrator opens the round"; asOfDate = asOf
+  Some open <- queryContractId auditor p0
+  open.approvers === []
+  -- One attestation is not a quorum, even with the administrator willing.
+  p1 <- confirmAs bank p0
+  submitMustFail issuer do
+    exerciseCmd p1 FinalizeFixing with finalizer = issuer; series = seriesCid; publishTo = [venue]
+  p2 <- submit agent do
+    exerciseCmd p1 ConfirmWithChecks with member = agent; check = venueCheck agent 2390.0 2410.0
+  -- An OUTSIDER holding the series id cannot finalise; a member or the admin can.
+  submitMustFail eve do
+    exerciseCmd p2 FinalizeFixing with finalizer = eve; series = seriesCid; publishTo = [venue]
+  fixCid <- submit issuer do
+    exerciseCmd p2 FinalizeFixing with finalizer = issuer; series = seriesCid; publishTo = [venue]
+  Some fix <- queryContractId venue fixCid
+  fix.attestors === [agent, bank]
+  fix.admin === issuer
+  fix.asOfDate === asOf
+  assertMsg "the administrator never appears among the attestors" (issuer `notElem` fix.attestors)
+  -- A member that did NOT sign can still see the fixing (to restate it).
+  assertMsg "a non-attesting member observes the fixing"
+    . isSome =<< queryContractId venue fixCid
+
+  -- (4) THE SLOT. The series advanced; a second fixing for the SAME day cannot be
+  --     published, and the next day can.
+  [(series2, sr)] <- query @FixingSeries issuer
+  sr.lastAsOf === Some asOf
+  sr.struck === 1
+  q0 <- submit issuer do
+    exerciseCmd committeeCid ProposeFixing with
+      proposer = issuer; instrumentId = ceth; cashInstrument = usdc
+      session = "Close"; price = 2401.0; rationale = "same day again"; asOfDate = asOf
+  q1 <- confirmAs bank q0
+  q2 <- submit agent do
+    exerciseCmd q1 ConfirmWithChecks with member = agent; check = venueCheck agent 2390.0 2410.0
+  submitMustFail issuer do
+    exerciseCmd q2 FinalizeFixing with finalizer = issuer; series = series2; publishTo = [venue]
+  -- The stale series id (already consumed) is refused too.
+  submitMustFail issuer do
+    exerciseCmd q2 FinalizeFixing with finalizer = issuer; series = seriesCid; publishTo = [venue]
+  r0 <- submit issuer do
+    exerciseCmd committeeCid ProposeFixing with
+      proposer = issuer; instrumentId = ceth; cashInstrument = usdc
+      session = "Close"; price = 2402.0; rationale = "next day"; asOfDate = addDays asOf 1
+  r1 <- confirmAs bank r0
+  r2 <- submit agent do
+    exerciseCmd r1 ConfirmWithChecks with member = agent; check = venueCheck agent 2390.0 2410.0
+  nextFix <- submit issuer do
+    exerciseCmd r2 FinalizeFixing with finalizer = issuer; series = series2; publishTo = [venue]
+  Some nf <- queryContractId venue nextFix
+  nf.asOfDate === addDays asOf 1
+  -- A series for a DIFFERENT instrument cannot be used to publish this one.
+  otherSeries <- openSeries issuer auditor [venue, bank, agent] "CBTC" "Close"
+  t0 <- submit issuer do
+    exerciseCmd committeeCid ProposeFixing with
+      proposer = issuer; instrumentId = ceth; cashInstrument = usdc
+      session = "Close"; price = 2403.0; rationale = "wrong series"; asOfDate = addDays asOf 2
+  t1 <- confirmAs bank t0
+  t2 <- submit agent do
+    exerciseCmd t1 ConfirmWithChecks with member = agent; check = venueCheck agent 2390.0 2410.0
+  submitMustFail issuer do
+    exerciseCmd t2 FinalizeFixing with finalizer = issuer; series = otherSeries; publishTo = [venue]
+
+  -- (5) THE VENUE RULE. A venue with no range must attest the ABSENCE of prints; an
+  --     issuer/lender may not file a range at all.
+  u0 <- submit issuer do
+    exerciseCmd committeeCid ProposeFixing with
+      proposer = issuer; instrumentId = ceth; cashInstrument = usdc
+      session = "Close"; price = 2404.0; rationale = "venue rule"; asOfDate = addDays asOf 3
+  submitMustFail agent do
+    exerciseCmd u0 ConfirmWithChecks with
+      member = agent
+      check = SignerCheck with
+        member = agent; role = "venue"; protocolRef = "SIGNER_PROTOCOL v2 venue"
+        checksPassed = ["spread-within-tolerance"]; observedLow = None; observedHigh = None
+  submitMustFail agent do
+    exerciseCmd u0 ConfirmWithChecks with
+      member = agent
+      check = SignerCheck with
+        member = agent; role = "venue"; protocolRef = "SIGNER_PROTOCOL v2 venue"
+        checksPassed = ["no-prints-attested", "traded-range"]; observedLow = None; observedHigh = None
+  submitMustFail bank do
+    exerciseCmd u0 ConfirmWithChecks with
+      member = bank
+      check = SignerCheck with
+        member = bank; role = "lender"; protocolRef = "SIGNER_PROTOCOL v2 lender"
+        checksPassed = ["book-acceptance"]; observedLow = Some 2390.0; observedHigh = Some 2410.0
+  u1 <- submit agent do
+    exerciseCmd u0 ConfirmWithChecks with
+      member = agent
+      check = SignerCheck with
+        member = agent; role = "venue"; protocolRef = "SIGNER_PROTOCOL v2 venue"
+        checksPassed = ["no-prints-attested"]; observedLow = None; observedHigh = None
+  Some u <- queryContractId auditor u1
+  u.approvers === [agent]
 
 -- ---------------------------------------------------------------------------
 -- TEST 8b — THE WRAPPER MARK: the judgement no benchmark administrator makes.
@@ -2000,6 +2196,8 @@ testWrapperMarkAttested = do
     createCmd OperatorCommittee with
       admin = issuer; members; threshold = 2; auditor
       label = "cBTC Wrapper Committee"
+  asOf <- today
+  seriesCid <- openSeries issuer auditor [venue, bank, agent] "CBTC" "Close"
 
   -- The benchmark prints 100,000. The committee is asked to attest cBTC at 0.998 of
   -- it — a 20bp discount to par, the kind a queued redemption justifies.
@@ -2007,10 +2205,10 @@ testWrapperMarkAttested = do
     exerciseCmd committeeCid ProposeWrappedFixing with
       proposer = venue; instrumentId = "CBTC"; cashInstrument = usdc
       session = "Close"; benchmarkPrice = 100000.0; parFactor = 0.998
-      rationale = "CME CF BRR 16:00 London; 20bp for a redemption queue over 24h"
+      rationale = "CME CF BRR 16:00 London; 20bp for a redemption queue over 24h"; asOfDate = asOf
 
-  propCid2 <- submit bank do exerciseCmd propCid Confirm with member = bank
-  fixCid   <- submit venue do exerciseCmd propCid2 FinalizeFixing with publishTo = [venue]
+  propCid2 <- confirmAs bank propCid
+  fixCid   <- submit venue do exerciseCmd propCid2 FinalizeFixing with finalizer = venue; series = seriesCid; publishTo = [venue]
 
   Some fix <- queryContractId venue fixCid
   -- The struck price IS the product. Not passed in, so it cannot contradict.
@@ -2025,19 +2223,19 @@ testWrapperMarkAttested = do
     exerciseCmd committeeCid ProposeWrappedFixing with
       proposer = venue; instrumentId = "CBTC"; cashInstrument = usdc
       session = "Close"; benchmarkPrice = 100000.0; parFactor = 0.0
-      rationale = "zero factor"
+      rationale = "zero factor"; asOfDate = asOf
   submitMustFail venue do
     exerciseCmd committeeCid ProposeWrappedFixing with
       proposer = venue; instrumentId = "CBTC"; cashInstrument = usdc
       session = "Close"; benchmarkPrice = 100000.0; parFactor = 2.5
-      rationale = "factor above the sanity bound"
+      rationale = "factor above the sanity bound"; asOfDate = asOf
   -- A rationale that cites nothing is refused: "because I said so" is the one thing
   -- a wrapper mark may never be.
   submitMustFail venue do
     exerciseCmd committeeCid ProposeWrappedFixing with
       proposer = venue; instrumentId = "CBTC"; cashInstrument = usdc
       session = "Close"; benchmarkPrice = 100000.0; parFactor = 0.998
-      rationale = ""
+      rationale = ""; asOfDate = asOf
 
 -- ---------------------------------------------------------------------------
 -- TEST 8c — THE SIGNER PROTOCOL: evidence, and a venue that cannot rubber-stamp.
@@ -2056,12 +2254,14 @@ testSignerProtocolEvidence = do
     createCmd OperatorCommittee with
       admin = issuer; members; threshold = 2; auditor
       label = "cBTC Wrapper Committee"
+  asOf <- today
+  seriesCid <- openSeries issuer auditor [venue, bank, agent] "CBTC" "Close"
 
   propCid <- submit venue do
     exerciseCmd committeeCid ProposeWrappedFixing with
       proposer = venue; instrumentId = "CBTC"; cashInstrument = usdc
       session = "Close"; benchmarkPrice = 100000.0; parFactor = 1.0
-      rationale = "CME CF BRR 16:00 London; attested at par"
+      rationale = "CME CF BRR 16:00 London; attested at par"; asOfDate = asOf
 
   -- A signer must name at least one condition it verified. An empty list is a vote,
   -- and a vote is exactly what this choice exists to stop being sufficient.
@@ -2130,7 +2330,7 @@ testSignerProtocolEvidence = do
         protocolRef = "SIGNER_PROTOCOL v1 venue"
         checksPassed = ["traded-range", "spread-within-tolerance"]
         observedLow = Some 99500.0; observedHigh = Some 100500.0
-  fixCid <- submit venue do exerciseCmd propCid3 FinalizeFixing with publishTo = [venue]
+  fixCid <- submit venue do exerciseCmd propCid3 FinalizeFixing with finalizer = venue; series = seriesCid; publishTo = [venue]
 
   Some fix <- queryContractId venue fixCid
   -- THE OVERSIGHT RECORD SURVIVES FINALISATION. This is the difference between a
@@ -2234,13 +2434,15 @@ testFixingCarriesItsTier = do
     createCmd OperatorCommittee with
       admin = issuer; members; threshold = 2; auditor
       label = "Lucilla NAV Committee"
+  asOf <- today
+  seriesCid <- openSeries issuer auditor [venue, bank, agent] ceth "Close"
 
   propCid <- submit venue do
     exerciseCmd committeeCid ProposeFixing with
       proposer = venue; instrumentId = ceth; cashInstrument = usdc
-      session = "Close"; price = 2400.0; rationale = "uniform sealed-cross VWAP"
-  propCid2 <- submit bank do exerciseCmd propCid Confirm with member = bank
-  fixCid <- submit venue do exerciseCmd propCid2 FinalizeFixing with publishTo = [venue]
+      session = "Close"; price = 2400.0; rationale = "uniform sealed-cross VWAP"; asOfDate = asOf
+  propCid2 <- confirmAs bank propCid
+  fixCid <- submit venue do exerciseCmd propCid2 FinalizeFixing with finalizer = venue; series = seriesCid; publishTo = [venue]
 
   Some fix <- queryContractId venue fixCid
   -- Anything finalised through Governance is a committee attestation by definition.
@@ -2274,12 +2476,14 @@ testCommitteeAttestedClose = do
   committeeCid <- submit issuer do
     createCmd OperatorCommittee with
       admin = issuer; members; threshold = 2; auditor; label = "NAV Committee"
+  asOf <- today
+  seriesCid <- openSeries issuer auditor [venue, bank, agent] ceth "Close"
   propCid  <- submit venue do
     exerciseCmd committeeCid ProposeFixing with
       proposer = venue; instrumentId = ceth; cashInstrument = usdc
-      session = "Close"; price = 2400.0; rationale = "cross VWAP"
-  propCid2 <- submit bank do exerciseCmd propCid Confirm with member = bank
-  fixCid   <- submit venue do exerciseCmd propCid2 FinalizeFixing with publishTo = [venue]
+      session = "Close"; price = 2400.0; rationale = "cross VWAP"; asOfDate = asOf
+  propCid2 <- confirmAs bank propCid
+  fixCid   <- submit venue do exerciseCmd propCid2 FinalizeFixing with finalizer = venue; series = seriesCid; publishTo = [venue]
 
   -- (1) The venue opens a close BOUND to the committee fix (fixingRef = Some fix),
   -- anchored on the attested 2,400. Bob offers at 2,350, Alice bids 2,500 — the
@@ -2371,8 +2575,9 @@ testCommitteeAttestedClose = do
 -- fund's value between marks is arithmetic; this is the test that treats it as such.
 accrualFixture : Party -> Party -> Decimal -> Decimal -> Text -> Time -> NavFixing
 accrualFixture admin auditor base rate dayCount from = NavFixing with
-  attestors = [admin]; admin; auditor; threshold = 1
+  attestors = [auditor]; admin; members = [auditor]; auditor; threshold = 2
   instrumentId = ceth; cashInstrument = usdc; session = "Close"
+  asOfDate = toDateUTC from
   price = base; rationale = "accrual unit fixture"
   ratePerAnnum = rate; dayCount; accrualFrom = from
   publishedTo = []; finalizedAt = from
@@ -2542,14 +2747,16 @@ testAccruedAnchorBindsTheClose = do
   committeeCid <- submit issuer do
     createCmd OperatorCommittee with
       admin = issuer; members; threshold = 2; auditor; label = "Treasury NAV Committee"
+  asOf <- today
+  seriesCid <- openSeries issuer auditor [venue, bank, agent] ceth "Close"
   propCid <- submit venue do
     exerciseCmd committeeCid ProposeAccruingFixing with
       proposer = venue; instrumentId = ceth; cashInstrument = usdc
       session = "Close"; price = 2400.0
       rationale = "tokenised T-bill fund: 3.6% money-market yield, ACT/360"
-      ratePerAnnum = 0.036; dayCount = "ACT/360"; accrualFrom = t0
-  propCid2 <- submit bank  do exerciseCmd propCid Confirm with member = bank
-  fixCid   <- submit venue do exerciseCmd propCid2 FinalizeFixing with publishTo = [venue]
+      ratePerAnnum = 0.036; dayCount = "ACT/360"; accrualFrom = t0; asOfDate = asOf
+  propCid2 <- confirmAs bank propCid
+  fixCid   <- submit venue do exerciseCmd propCid2 FinalizeFixing with finalizer = venue; series = seriesCid; publishTo = [venue]
 
   -- What K-of-N actually signed is the RECIPE, not just the number.
   Some fix <- queryContractId venue fixCid
@@ -2657,17 +2864,18 @@ testAccrualBackwardsTimeIsSafe = do
   committeeCid <- submit issuer do
     createCmd OperatorCommittee with
       admin = issuer; members; threshold = 2; auditor; label = "NAV Committee"
+  asOf <- today
   submitMustFail venue do
     exerciseCmd committeeCid ProposeAccruingFixing with
       proposer = venue; instrumentId = ceth; cashInstrument = usdc
       session = "Close"; price = 2400.0; rationale = "bond convention on a bill fund"
-      ratePerAnnum = 0.036; dayCount = "30/360"; accrualFrom = t0
+      ratePerAnnum = 0.036; dayCount = "30/360"; accrualFrom = t0; asOfDate = asOf
   -- A rate at or below -100%/yr is a typo, not a money market.
   submitMustFail venue do
     exerciseCmd committeeCid ProposeAccruingFixing with
       proposer = venue; instrumentId = ceth; cashInstrument = usdc
       session = "Close"; price = 2400.0; rationale = "typo"
-      ratePerAnnum = -1.5; dayCount = "ACT/360"; accrualFrom = t0
+      ratePerAnnum = -1.5; dayCount = "ACT/360"; accrualFrom = t0; asOfDate = asOf
   -- And an unrecognised convention accrues NOTHING if one ever reached the pure
   -- function directly, rather than guessing a year length.
   accruedAmount 100.0 0.036 "30/360" 86400000000 === 0.0
@@ -5814,14 +6022,16 @@ testPublishedFixingCanBeRestatedOnlyByQuorum = do
     createCmd OperatorCommittee with
       admin = issuer; members; threshold = 2; auditor
       label = "Lucilla NAV Committee"
+  asOf <- today
+  seriesCid <- openSeries issuer auditor [venue, bank, agent] ceth "Close"
 
   -- Strike and publish a fixing at 2,400, disclosed to the venue.
   p0 <- submit venue do
     exerciseCmd committeeCid ProposeFixing with
       proposer = venue; instrumentId = ceth; cashInstrument = usdc
-      session = "Close"; price = 2400.0; rationale = "uniform sealed-cross VWAP"
-  p1 <- submit bank do exerciseCmd p0 Confirm with member = bank
-  wrongFix <- submit venue do exerciseCmd p1 FinalizeFixing with publishTo = [venue]
+      session = "Close"; price = 2400.0; rationale = "uniform sealed-cross VWAP"; asOfDate = asOf
+  p1 <- confirmAs bank p0
+  wrongFix <- submit venue do exerciseCmd p1 FinalizeFixing with finalizer = venue; series = seriesCid; publishTo = [venue]
 
   Some published <- queryContractId auditor wrongFix
   published.price === 2400.0
@@ -5860,18 +6070,18 @@ testPublishedFixingCanBeRestatedOnlyByQuorum = do
       ratePerAnnum = 0.0; dayCount = "NONE"; accrualFrom = now
 
   -- ONE attestation is below 2-of-3. A single signer cannot correct the record.
-  submitMustFail venue do exerciseCmd r0 FinalizeRestatement
+  submitMustFail venue do exerciseCmd r0 FinalizeRestatement with finalizer = venue
 
   -- The proposer cannot manufacture a quorum by confirming itself.
-  submitMustFail venue do exerciseCmd r0 ConfirmRestatement with member = venue
+  submitMustFail venue do exerciseCmd r0 ConfirmRestatement with member = venue; check = lenderCheck venue
   -- Nor can a non-member. (The auditor observes it and is not a member, so this is
   -- the probe that reaches the membership assert itself rather than failing on
   -- visibility the way `eve` would.)
-  submitMustFail auditor do exerciseCmd r0 ConfirmRestatement with member = auditor
+  submitMustFail auditor do exerciseCmd r0 ConfirmRestatement with member = auditor; check = lenderCheck auditor
 
   -- A second member confirms → quorum. Now it finalises.
-  r1 <- submit agent do exerciseCmd r0 ConfirmRestatement with member = agent
-  restated <- submit venue do exerciseCmd r1 FinalizeRestatement
+  r1 <- submit agent do exerciseCmd r0 ConfirmRestatement with member = agent; check = lenderCheck agent
+  restated <- submit venue do exerciseCmd r1 FinalizeRestatement with finalizer = venue
 
   -- THE ORIGINAL SURVIVES. It was published and desks may have acted on it, so a
   -- restatement supersedes rather than erases — the wrong number stays provably on the

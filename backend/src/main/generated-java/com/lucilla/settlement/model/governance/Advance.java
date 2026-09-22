@@ -1,7 +1,8 @@
-package com.lucilla.settlement.model.continuousbook;
+package com.lucilla.settlement.model.governance;
 
 import static com.daml.ledger.javaapi.data.codegen.json.JsonLfEncoders.apply;
 
+import com.daml.ledger.javaapi.data.Date;
 import com.daml.ledger.javaapi.data.Value;
 import com.daml.ledger.javaapi.data.codegen.DamlRecord;
 import com.daml.ledger.javaapi.data.codegen.PrimitiveValueDecoders;
@@ -15,54 +16,54 @@ import java.lang.IllegalArgumentException;
 import java.lang.Object;
 import java.lang.Override;
 import java.lang.String;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
-public class KillOrder extends DamlRecord<KillOrder> {
+public class Advance extends DamlRecord<Advance> {
   public static final String _packageId = "9f697598fdc5fee1bf367e5acd6ca4eb84c7368c987ce1093f58227384f3d0f8";
 
-  public final RestingOrder.ContractId orderCid;
+  public final LocalDate asOfDate;
 
-  public KillOrder(RestingOrder.ContractId orderCid) {
-    this.orderCid = orderCid;
+  public Advance(LocalDate asOfDate) {
+    this.asOfDate = asOfDate;
   }
 
-  public static ValueDecoder<KillOrder> valueDecoder() throws IllegalArgumentException {
+  public static ValueDecoder<Advance> valueDecoder() throws IllegalArgumentException {
     return value$ -> {
       Value recordValue$ = value$;
       List<com.daml.ledger.javaapi.data.DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(1,0,
           recordValue$);
-      RestingOrder.ContractId orderCid =
-          new RestingOrder.ContractId(fields$.get(0).getValue().asContractId().orElseThrow(() -> new IllegalArgumentException("Expected orderCid to be of type com.daml.ledger.javaapi.data.ContractId")).getValue());
-      return new KillOrder(orderCid);
+      LocalDate asOfDate = PrimitiveValueDecoders.fromDate.decode(fields$.get(0).getValue());
+      return new Advance(asOfDate);
     } ;
   }
 
   public com.daml.ledger.javaapi.data.DamlRecord toValue() {
     ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field> fields = new ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field>(1);
-    fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("orderCid", this.orderCid.toValue()));
+    fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("asOfDate", new Date((int) this.asOfDate.toEpochDay())));
     return new com.daml.ledger.javaapi.data.DamlRecord(fields);
   }
 
-  public static JsonLfDecoder<KillOrder> jsonDecoder() {
-    return JsonLfDecoders.record(Arrays.asList("orderCid"), name -> {
+  public static JsonLfDecoder<Advance> jsonDecoder() {
+    return JsonLfDecoders.record(Arrays.asList("asOfDate"), name -> {
           switch (name) {
-            case "orderCid": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.contractId(com.lucilla.settlement.model.continuousbook.RestingOrder.ContractId::new));
+            case "asOfDate": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.date);
             default: return null;
           }
         }
-        , (Object[] args) -> new KillOrder(JsonLfDecoders.cast(args[0])));
+        , (Object[] args) -> new Advance(JsonLfDecoders.cast(args[0])));
   }
 
-  public static KillOrder fromJson(String json) throws JsonLfDecoder.Error {
+  public static Advance fromJson(String json) throws JsonLfDecoder.Error {
     return jsonDecoder().decode(new JsonLfReader(json));
   }
 
   public JsonLfEncoder jsonEncoder() {
     return JsonLfEncoders.record(
-        JsonLfEncoders.Field.of("orderCid", apply(JsonLfEncoders::contractId, orderCid)));
+        JsonLfEncoders.Field.of("asOfDate", apply(JsonLfEncoders::date, asOfDate)));
   }
 
   @Override
@@ -73,29 +74,28 @@ public class KillOrder extends DamlRecord<KillOrder> {
     if (object == null) {
       return false;
     }
-    if (!(object instanceof KillOrder)) {
+    if (!(object instanceof Advance)) {
       return false;
     }
-    KillOrder other = (KillOrder) object;
-    return Objects.equals(this.orderCid, other.orderCid);
+    Advance other = (Advance) object;
+    return Objects.equals(this.asOfDate, other.asOfDate);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(this.orderCid);
+    return Objects.hash(this.asOfDate);
   }
 
   @Override
   public String toString() {
-    return String.format("com.lucilla.settlement.model.continuousbook.KillOrder(%s)",
-        this.orderCid);
+    return String.format("com.lucilla.settlement.model.governance.Advance(%s)", this.asOfDate);
   }
 
   /**
    * Proxies the jsonDecoder(...) static method, to provide an alternative calling synatx, which avoids some cases in generated code where javac gets confused
    */
   public static class JsonDecoder$ {
-    public JsonLfDecoder<KillOrder> get() {
+    public JsonLfDecoder<Advance> get() {
       return jsonDecoder();
     }
   }

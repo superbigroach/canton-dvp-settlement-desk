@@ -214,3 +214,36 @@ etpfoundry.com was the hosting catch-all's landing page, not the roster. Correct
 `cashIssuer` pin; signer-service v2. Docs updated: `ARCHITECTURE.md` (security posture),
 `SIGNER_PROTOCOL.md` (§8 what the ledger does not enforce), `README.md`, `STATUS_AND_ROADMAP.md`
 §6 tasks 10–13, `PRODUCTION_CHECKLIST.md` §13.
+
+## 2026-09-22 (later) — Package 3.0.0: the fixing is bound to the committee on-ledger
+
+**Built.** `Governance.daml` 3.0.0: `signatory admin :: approvers` on `FixingProposal`,
+`RestatementProposal` and `NavFixing`; committee `ensure threshold >= 2 && threshold <= N &&
+admin notElem members`; the administrator proposes without attesting; plain `Confirm`
+retired; the venue must supply a range the price sits inside or attest `no-prints-attested`,
+and no other seat may supply a range (`checkEvidence`, shared with restatements); every
+proposal/fixing carries an attested `asOfDate`; a `FixingSeries` contract per
+(administrator, instrument, session) is consumed and advanced by every finalise, so the
+ledger guarantees one fixing per day; any approver or the admin finalises; members observe
+fixings. New `Operator` party in `Test:setup` so the hosted demo's administrator is not a
+seat. Backend: bindings regenerated, `createFixingSeries`, `finalizeFixing(finalizer,
+series)`, `asOfDate` on every propose DTO (defaults to today, Europe/London), plain
+`/fixing/{cid}/confirm` → 410, `DemoSeed` administers as Operator, `StrikeService` matches
+the committee by administrator, `SeriesDerivation` dates rows by `asOfDate`.
+
+**Proven.** `daml test`: 75 scripts green. `Test:testFixingCannotBeForged` runs the audit's
+exact attack — two colluding members create a proposal and a fixing naming the real
+administrator — and both fail at the ledger; also K=1, admin-as-member, K>N committees
+refused; same-day second fixing refused, next day accepted, wrong-instrument series refused;
+venue with neither range nor `no-prints-attested` refused; lender with a range refused.
+
+**Learned.** A `fetch` inside a choice needs the contract visible to the *submitting* party,
+not just authorised by the signatories present — the series had to be observed by the
+members or only the administrator could finalise (`testThresholdAttestation` caught it).
+And 2.x carried the original's per-signer evidence onto a restatement, which a
+differently-composed quorum could never publish (`NavFixing.ensure` refused it once the
+test used real evidence) — a latent bug the plain-`Confirm` tests had hidden.
+
+**Not done.** `backend-devnet/` (the shared HackCanton node's desk) stays on 2.1.0; the ops
+desk's plain-confirm button gets a 410 (its checked path works); `role` on a `SignerCheck`
+is still free text on-ledger (the backend binds it to the roster).

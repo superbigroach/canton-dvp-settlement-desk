@@ -51,7 +51,7 @@ credential.
 
 | Artifact | What they do with it |
 |---|---|
-| **The DAR** (`crossdesk-2.1.0.dar`) | Upload to *their own* Canton participant |
+| **The DAR** (`crossdesk-3.0.0.dar`) | Upload to *their own* Canton participant |
 | **A backend container image** | Run it — Helm chart at `deploy/helm/canton-dvp-desk/`, or `docker compose`, or any container host |
 | **The frontend bundle** | Static files behind their own ingress |
 | **Configuration** | Ledger host/port/TLS, a JWT or refresh token, party ids, and any registrar entries (`docs/ASSET_ONBOARDING.md`) |
@@ -76,12 +76,12 @@ convenience.
 | `daml test` | **125 scripts, 0 failures** |
 | `backend-devnet` tests | **92, 0 failures** |
 | `backend` tests | **103, 0 failures** |
-| Upgrade check (`--upgrades=crossdesk-2.0.0.dar`) | **0 errors** — 2.1.0 legally upgrades 2.0.0 |
+| Upgrade check | **not applicable** — 3.0.0 changes signatories and is a NEW package, not an upgrade of 2.x (see `Governance.daml` header). 2.1.0 legally upgraded 2.0.0 |
 | Frontend | builds clean, TypeScript passes |
 
 ```
-DAR     .daml/dist/crossdesk-2.1.0.dar
-sha256  4510677a30030c25d04d7adbd67dfe58a848945898d8c5aaebd0b7ddab77c7df
+DAR     .daml/dist/crossdesk-3.0.0.dar
+sha256  dcafdbb55490c69d84c6e49144b4329d774098ac6f4b90bcb11b4952fa28f3db
 ```
 
 **Every new field added in 2.1.0 is `Optional` and appended at the end of its record.** That is what
@@ -138,7 +138,7 @@ on BitSafe's templates, and that is a separate holding. The demo fund's own cBTC
 | 7b | **Operator as a Decentralized Party** — closes "one party, one key" on the venue itself. No template changes; the open question is what threshold coordination does to write latency. See `ECOSYSTEM_ALIGNMENT.md` §3 | **task 2** | design done |
 | 8 | **Minimum-quality flag on the published fixing** — record *which tier* produced it and whether it was carried forward (methodology §3, §10) | nothing | hours |
 | 9 | **Cessation process** (methodology §8) — a notice period, not code | nothing | policy |
-| **10** | **Package 3.0.0 — bind the fixing to the committee on-ledger.** `signatory admin :: approvers` on `FixingProposal`/`NavFixing`; `ensure threshold >= 2 && threshold < N && admin notElem members`; venue range mandatory; retire plain `Confirm`; `asOfDate` slot; members observe `NavFixing`. Breaks SCU compatibility → new package, nothing to migrate | **a decision** | a day + tests |
+| ~~10~~ | ~~Package 3.0.0 — bind the fixing to the committee on-ledger~~ — ✅ **done 22 Sep 2026**: `signatory admin :: approvers`; `ensure threshold >= 2 && threshold <= N && admin notElem members`; venue range or `no-prints-attested` mandatory; plain `Confirm` retired; `asOfDate` + `FixingSeries` slot; members observe `NavFixing`; any approver or the admin finalises. 75 scripts green incl. `testFixingCannotBeForged`. Java bindings, desk and hosted demo on 3.0.0. `backend-devnet/` (HackCanton node) left on 2.1.0 | — | done |
 | 11 | **Fee leg issuer pin** — `Basket.daml` `chargeFee` does not check the cash issuer; an AP can pay the fee in self-minted "USDC". Appended `Optional cashIssuer`, upgrade-safe | nothing | hours |
 | 12 | **Signer-service v2** — still hardcodes the 3-seat / 10-condition protocol; cannot run custodian/transfer-agent, never sends `?instrument=`, halts instead of attesting no prints. Degrades safely (halts, never confirms wrongly) | nothing | a day |
 | 13 | Act-as refused on confirm/refuse routes; tolerance caps (≤ 500 bp); BigDecimal scale bound; webhook-URL SSRF guard; `/api/diag` behind admin; hosting catch-all → `404.html`; bind `signer.freshness-hours` per instrument | nothing | a day total |

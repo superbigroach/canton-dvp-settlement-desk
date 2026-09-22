@@ -2,6 +2,7 @@ package com.lucilla.settlement.model.governance;
 
 import static com.daml.ledger.javaapi.data.codegen.json.JsonLfEncoders.apply;
 
+import com.daml.ledger.javaapi.data.Date;
 import com.daml.ledger.javaapi.data.Numeric;
 import com.daml.ledger.javaapi.data.Party;
 import com.daml.ledger.javaapi.data.Text;
@@ -19,13 +20,14 @@ import java.lang.Object;
 import java.lang.Override;
 import java.lang.String;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
 public class ProposeWrappedFixing extends DamlRecord<ProposeWrappedFixing> {
-  public static final String _packageId = "f442ed0a18dad43b70c730775e6991c2bb8ee6bf01385f7c5325552559cafa9b";
+  public static final String _packageId = "9f697598fdc5fee1bf367e5acd6ca4eb84c7368c987ce1093f58227384f3d0f8";
 
   public final String proposer;
 
@@ -41,8 +43,11 @@ public class ProposeWrappedFixing extends DamlRecord<ProposeWrappedFixing> {
 
   public final String rationale;
 
+  public final LocalDate asOfDate;
+
   public ProposeWrappedFixing(String proposer, String instrumentId, String cashInstrument,
-      String session, BigDecimal benchmarkPrice, BigDecimal parFactor, String rationale) {
+      String session, BigDecimal benchmarkPrice, BigDecimal parFactor, String rationale,
+      LocalDate asOfDate) {
     this.proposer = proposer;
     this.instrumentId = instrumentId;
     this.cashInstrument = cashInstrument;
@@ -50,12 +55,13 @@ public class ProposeWrappedFixing extends DamlRecord<ProposeWrappedFixing> {
     this.benchmarkPrice = benchmarkPrice;
     this.parFactor = parFactor;
     this.rationale = rationale;
+    this.asOfDate = asOfDate;
   }
 
   public static ValueDecoder<ProposeWrappedFixing> valueDecoder() throws IllegalArgumentException {
     return value$ -> {
       Value recordValue$ = value$;
-      List<com.daml.ledger.javaapi.data.DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(7,0,
+      List<com.daml.ledger.javaapi.data.DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(8,0,
           recordValue$);
       String proposer = PrimitiveValueDecoders.fromParty.decode(fields$.get(0).getValue());
       String instrumentId = PrimitiveValueDecoders.fromText.decode(fields$.get(1).getValue());
@@ -65,13 +71,14 @@ public class ProposeWrappedFixing extends DamlRecord<ProposeWrappedFixing> {
           .decode(fields$.get(4).getValue());
       BigDecimal parFactor = PrimitiveValueDecoders.fromNumeric.decode(fields$.get(5).getValue());
       String rationale = PrimitiveValueDecoders.fromText.decode(fields$.get(6).getValue());
+      LocalDate asOfDate = PrimitiveValueDecoders.fromDate.decode(fields$.get(7).getValue());
       return new ProposeWrappedFixing(proposer, instrumentId, cashInstrument, session,
-          benchmarkPrice, parFactor, rationale);
+          benchmarkPrice, parFactor, rationale, asOfDate);
     } ;
   }
 
   public com.daml.ledger.javaapi.data.DamlRecord toValue() {
-    ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field> fields = new ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field>(7);
+    ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field> fields = new ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field>(8);
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("proposer", new Party(this.proposer)));
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("instrumentId", new Text(this.instrumentId)));
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("cashInstrument", new Text(this.cashInstrument)));
@@ -79,11 +86,12 @@ public class ProposeWrappedFixing extends DamlRecord<ProposeWrappedFixing> {
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("benchmarkPrice", new Numeric(this.benchmarkPrice)));
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("parFactor", new Numeric(this.parFactor)));
     fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("rationale", new Text(this.rationale)));
+    fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("asOfDate", new Date((int) this.asOfDate.toEpochDay())));
     return new com.daml.ledger.javaapi.data.DamlRecord(fields);
   }
 
   public static JsonLfDecoder<ProposeWrappedFixing> jsonDecoder() {
-    return JsonLfDecoders.record(Arrays.asList("proposer", "instrumentId", "cashInstrument", "session", "benchmarkPrice", "parFactor", "rationale"), name -> {
+    return JsonLfDecoders.record(Arrays.asList("proposer", "instrumentId", "cashInstrument", "session", "benchmarkPrice", "parFactor", "rationale", "asOfDate"), name -> {
           switch (name) {
             case "proposer": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
             case "instrumentId": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(1, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text);
@@ -92,10 +100,11 @@ public class ProposeWrappedFixing extends DamlRecord<ProposeWrappedFixing> {
             case "benchmarkPrice": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(4, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10));
             case "parFactor": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(5, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.numeric(10));
             case "rationale": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(6, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.text);
+            case "asOfDate": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(7, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.date);
             default: return null;
           }
         }
-        , (Object[] args) -> new ProposeWrappedFixing(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6])));
+        , (Object[] args) -> new ProposeWrappedFixing(JsonLfDecoders.cast(args[0]), JsonLfDecoders.cast(args[1]), JsonLfDecoders.cast(args[2]), JsonLfDecoders.cast(args[3]), JsonLfDecoders.cast(args[4]), JsonLfDecoders.cast(args[5]), JsonLfDecoders.cast(args[6]), JsonLfDecoders.cast(args[7])));
   }
 
   public static ProposeWrappedFixing fromJson(String json) throws JsonLfDecoder.Error {
@@ -110,7 +119,8 @@ public class ProposeWrappedFixing extends DamlRecord<ProposeWrappedFixing> {
         JsonLfEncoders.Field.of("session", apply(JsonLfEncoders::text, session)),
         JsonLfEncoders.Field.of("benchmarkPrice", apply(JsonLfEncoders::numeric, benchmarkPrice)),
         JsonLfEncoders.Field.of("parFactor", apply(JsonLfEncoders::numeric, parFactor)),
-        JsonLfEncoders.Field.of("rationale", apply(JsonLfEncoders::text, rationale)));
+        JsonLfEncoders.Field.of("rationale", apply(JsonLfEncoders::text, rationale)),
+        JsonLfEncoders.Field.of("asOfDate", apply(JsonLfEncoders::date, asOfDate)));
   }
 
   @Override
@@ -131,20 +141,21 @@ public class ProposeWrappedFixing extends DamlRecord<ProposeWrappedFixing> {
         Objects.equals(this.session, other.session) &&
         Objects.equals(this.benchmarkPrice, other.benchmarkPrice) &&
         Objects.equals(this.parFactor, other.parFactor) &&
-        Objects.equals(this.rationale, other.rationale);
+        Objects.equals(this.rationale, other.rationale) &&
+        Objects.equals(this.asOfDate, other.asOfDate);
   }
 
   @Override
   public int hashCode() {
     return Objects.hash(this.proposer, this.instrumentId, this.cashInstrument, this.session,
-        this.benchmarkPrice, this.parFactor, this.rationale);
+        this.benchmarkPrice, this.parFactor, this.rationale, this.asOfDate);
   }
 
   @Override
   public String toString() {
-    return String.format("com.lucilla.settlement.model.governance.ProposeWrappedFixing(%s, %s, %s, %s, %s, %s, %s)",
+    return String.format("com.lucilla.settlement.model.governance.ProposeWrappedFixing(%s, %s, %s, %s, %s, %s, %s, %s)",
         this.proposer, this.instrumentId, this.cashInstrument, this.session, this.benchmarkPrice,
-        this.parFactor, this.rationale);
+        this.parFactor, this.rationale, this.asOfDate);
   }
 
   /**

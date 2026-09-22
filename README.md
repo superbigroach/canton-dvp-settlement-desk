@@ -331,10 +331,9 @@ consumes it — all atomically settled on one engine.**
   that re-executes the transaction (`MarketOnClose.daml`, Flow 2).
 - **A committee-struck anchor.** The number the auction runs against only exists
   once a **threshold K of N** independent members have attested it — provable from
-  the contract's own signature set (`Governance.daml`, Flow 3). ⚠️ On the 2.x
-  package K and N are fields the proposer chooses, not facts bound to the
-  committee; the published series filters for that, the ledger does not yet —
-  see `docs/SIGNER_PROTOCOL.md` §8 and the 3.0.0 change it describes.
+  the contract's own signature set (`Governance.daml`, Flow 3). Since package
+  3.0.0 the administrator signs too, so *which* committee and *which* K are
+  ledger facts, not fields — `docs/SIGNER_PROTOCOL.md` §8.
 - **An in-kind primary market.** A basket (e.g. `LX1 = 0.10 cETH + 0.01 CBTC` per
   share) is an ordinary tokenised instrument; an authorised participant delivers
   the exact underlyings and receives freshly-minted shares, or the reverse, in
@@ -744,14 +743,15 @@ way, as an accumulating multisignature:
    **signatory set *is* the attestors**. The fix cannot exist without K genuine
    signatures — provable from the contract itself.
 
-⚠️ **Audit finding, 22 Sep 2026 — read before repeating the paragraph above.** The
-K signatures are genuine, but *which* K and *which* committee are not bound: `admin`,
-`threshold` and the approver list are plain fields, so any party can propose with
-`threshold = 1` naming the real administrator and finalise alone. The backend now
-publishes only fixings a real `OperatorCommittee` could have produced
-(`SeriesService.recognised`); closing it on-ledger is package 3.0.0
-(`signatory admin :: approvers`, threshold bounds on the committee). Details:
-`docs/SIGNER_PROTOCOL.md` §8.
+**Package 3.0.0 (22 Sep 2026) closed the gap the audit found in this design.** On 2.x
+the K signatures were genuine but `admin`, `threshold` and the roster were plain
+fields, so any party could propose with `threshold = 1` naming the real administrator
+and finalise alone. Now the administrator is a signatory of every proposal and
+fixing, the committee's `ensure` bounds K and N and excludes the administrator from
+the roster, plain `Confirm` is gone, every fixing carries an attested `asOfDate`, and
+a `FixingSeries` slot guarantees one fixing per series per day.
+`Test:testFixingCannotBeForged` attempts the 2.x attack and fails at the ledger.
+Details: `docs/SIGNER_PROTOCOL.md` §8.
 
 ### What binding an auction to a fix means now
 

@@ -21,48 +21,48 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
-public class Confirm extends DamlRecord<Confirm> {
-  public static final String _packageId = "f442ed0a18dad43b70c730775e6991c2bb8ee6bf01385f7c5325552559cafa9b";
+public class DiscloseSeries extends DamlRecord<DiscloseSeries> {
+  public static final String _packageId = "9f697598fdc5fee1bf367e5acd6ca4eb84c7368c987ce1093f58227384f3d0f8";
 
-  public final String member;
+  public final String party;
 
-  public Confirm(String member) {
-    this.member = member;
+  public DiscloseSeries(String party) {
+    this.party = party;
   }
 
-  public static ValueDecoder<Confirm> valueDecoder() throws IllegalArgumentException {
+  public static ValueDecoder<DiscloseSeries> valueDecoder() throws IllegalArgumentException {
     return value$ -> {
       Value recordValue$ = value$;
       List<com.daml.ledger.javaapi.data.DamlRecord.Field> fields$ = PrimitiveValueDecoders.recordCheck(1,0,
           recordValue$);
-      String member = PrimitiveValueDecoders.fromParty.decode(fields$.get(0).getValue());
-      return new Confirm(member);
+      String party = PrimitiveValueDecoders.fromParty.decode(fields$.get(0).getValue());
+      return new DiscloseSeries(party);
     } ;
   }
 
   public com.daml.ledger.javaapi.data.DamlRecord toValue() {
     ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field> fields = new ArrayList<com.daml.ledger.javaapi.data.DamlRecord.Field>(1);
-    fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("member", new Party(this.member)));
+    fields.add(new com.daml.ledger.javaapi.data.DamlRecord.Field("party", new Party(this.party)));
     return new com.daml.ledger.javaapi.data.DamlRecord(fields);
   }
 
-  public static JsonLfDecoder<Confirm> jsonDecoder() {
-    return JsonLfDecoders.record(Arrays.asList("member"), name -> {
+  public static JsonLfDecoder<DiscloseSeries> jsonDecoder() {
+    return JsonLfDecoders.record(Arrays.asList("party"), name -> {
           switch (name) {
-            case "member": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
+            case "party": return com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.JavaArg.at(0, com.daml.ledger.javaapi.data.codegen.json.JsonLfDecoders.party);
             default: return null;
           }
         }
-        , (Object[] args) -> new Confirm(JsonLfDecoders.cast(args[0])));
+        , (Object[] args) -> new DiscloseSeries(JsonLfDecoders.cast(args[0])));
   }
 
-  public static Confirm fromJson(String json) throws JsonLfDecoder.Error {
+  public static DiscloseSeries fromJson(String json) throws JsonLfDecoder.Error {
     return jsonDecoder().decode(new JsonLfReader(json));
   }
 
   public JsonLfEncoder jsonEncoder() {
     return JsonLfEncoders.record(
-        JsonLfEncoders.Field.of("member", apply(JsonLfEncoders::party, member)));
+        JsonLfEncoders.Field.of("party", apply(JsonLfEncoders::party, party)));
   }
 
   @Override
@@ -73,28 +73,28 @@ public class Confirm extends DamlRecord<Confirm> {
     if (object == null) {
       return false;
     }
-    if (!(object instanceof Confirm)) {
+    if (!(object instanceof DiscloseSeries)) {
       return false;
     }
-    Confirm other = (Confirm) object;
-    return Objects.equals(this.member, other.member);
+    DiscloseSeries other = (DiscloseSeries) object;
+    return Objects.equals(this.party, other.party);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(this.member);
+    return Objects.hash(this.party);
   }
 
   @Override
   public String toString() {
-    return String.format("com.lucilla.settlement.model.governance.Confirm(%s)", this.member);
+    return String.format("com.lucilla.settlement.model.governance.DiscloseSeries(%s)", this.party);
   }
 
   /**
    * Proxies the jsonDecoder(...) static method, to provide an alternative calling synatx, which avoids some cases in generated code where javac gets confused
    */
   public static class JsonDecoder$ {
-    public JsonLfDecoder<Confirm> get() {
+    public JsonLfDecoder<DiscloseSeries> get() {
       return jsonDecoder();
     }
   }

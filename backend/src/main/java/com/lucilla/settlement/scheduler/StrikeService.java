@@ -351,8 +351,8 @@ public class StrikeService {
             }
             return committeeFor(operator);
         }).orElseThrow(() ->
-                new IllegalStateException("no OperatorCommittee has " + LedgerService.labelOf(operator)
-                        + " as a member — stand one up (POST /api/committee) before striking"));
+                new IllegalStateException("no OperatorCommittee is administered by " + LedgerService.labelOf(operator)
+                        + " — stand one up (POST /api/committee) before striking"));
         String id = s.getInstrumentId();
         // ONE OPEN PROPOSAL PER INSTRUMENT, SESSION AND DAY. Two "strike now" clicks sixteen
         // seconds apart produced two open proposals on 2 Sep 2026, and the seats signed
@@ -365,6 +365,10 @@ public class StrikeService {
                     + " signatures) — let the seats act on it, or refuse it, before striking again");
         });
         Map<String, Object> inputs = new LinkedHashMap<>();
+        // THE DAY THIS FIXING DESCRIBES: the strike date on the schedule's own calendar.
+        // Attested with the price (3.0.0), and what the series slot advances to.
+        String asOf = s.dateOf(Instant.now()).toString();
+        inputs.put("asOfDate", asOf);
         String proposalCid;
         BigDecimal price;
         if (s.isFund()) {
@@ -374,7 +378,7 @@ public class StrikeService {
                     + s.getStrikeAt() + " " + s.getTimezone() + " strike (" + actor + ")";
             inputs.put("navPerShare", price);
             var resp = desk.proposeFixing(committee.contractId(), new Dtos.ProposeFixingRequest(
-                    operator, id, "USDC", s.getSession(), price, rationale));
+                    operator, id, "USDC", s.getSession(), price, rationale, asOf));
             proposalCid = resp.getBody() == null ? null : resp.getBody().contractId();
         } else {
             MarketData.LiveMark mark = marketData.liveMarkOf(id).orElseThrow(() -> new IllegalStateException(
@@ -391,7 +395,7 @@ public class StrikeService {
             inputs.put("parFactor", factor);
             price = mark.price().multiply(factor);
             var resp = desk.proposeWrappedFixing(committee.contractId(), new Dtos.ProposeWrappedFixingRequest(
-                    operator, id, "USDC", s.getSession(), mark.price(), factor, rationale));
+                    operator, id, "USDC", s.getSession(), mark.price(), factor, rationale, asOf));
             proposalCid = resp.getBody() == null ? null : resp.getBody().contractId();
         }
         Map<String, Object> d = new LinkedHashMap<>(inputs);
@@ -538,8 +542,12 @@ public class StrikeService {
 
     Optional<LedgerService.CommitteeView> committeeFor(String operator) {
         String label = LedgerService.labelOf(operator);
+        // 3.0.0: the operator ADMINISTERS the committee and is never a member (it proposes
+        // and publishes; it does not attest). Match on the administrator first; a member
+        // match is kept for a desk that runs a seat's own scheduler.
         return ledger.committeesVisibleTo(operator).stream()
-                .filter(c -> c.members().stream().map(LedgerService::labelOf).anyMatch(label::equals))
+                .filter(c -> label.equals(LedgerService.labelOf(c.admin()))
+                        || c.members().stream().map(LedgerService::labelOf).anyMatch(label::equals))
                 .sorted(Comparator.comparing((LedgerService.CommitteeView c) ->
                         c.label() != null && c.label().toLowerCase().contains("crossdesk") ? 0 : 1))
                 .findFirst();

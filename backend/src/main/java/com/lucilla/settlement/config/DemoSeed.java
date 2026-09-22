@@ -47,7 +47,7 @@ public class DemoSeed {
     private static final long PAUSE_MS = 5_000;
 
     /** The committee the signer portal signs against on a fresh sandbox. */
-    public static final String COMMITTEE_LABEL = "CrossDesk NAV Committee";
+    public static final String COMMITTEE_LABEL = "ETP Foundry NAV Committee";
 
     private final LedgerService ledger;
     private final boolean enabled;
@@ -111,24 +111,28 @@ public class DemoSeed {
 
     /**
      * A 2-of-3 committee of Issuer, Bank and Venue — the issuer, lender and venue seats
-     * of docs/SIGNER_PROTOCOL.md §2 — administered by Issuer, observed by the Auditor.
-     * The scheduler proposes into it and the signer portal signs against it. Idempotent
-     * on the label, so a committee the operator desk stood up by hand is left alone
-     * and a second boot does not mint a second roster.
+     * of docs/SIGNER_PROTOCOL.md §2 — ADMINISTERED BY OPERATOR (the benchmark
+     * administrator's own party, allocated by {@code Test:initialize}), observed by the
+     * Auditor. Since package 3.0.0 the administrator cannot be a member: it proposes and
+     * publishes, it never attests. The scheduler proposes into it as Operator and the
+     * signer portal signs against it. Idempotent on the label, so a committee the
+     * operator desk stood up by hand is left alone and a second boot does not mint a
+     * second roster.
      */
     public synchronized void seedCommitteeOnce() {
-        String issuer = ledger.resolveParty("Issuer");
-        boolean exists = ledger.committeesVisibleTo(issuer).stream()
+        String operator = ledger.resolveParty("Operator");
+        boolean exists = ledger.committeesVisibleTo(operator).stream()
                 .anyMatch(c -> COMMITTEE_LABEL.equals(c.label()));
         if (exists) {
             log.info("demo committee '{}' already stands — nothing to seed", COMMITTEE_LABEL);
             return;
         }
-        List<String> members = List.of(issuer, ledger.resolveParty("Bank"), ledger.resolveParty("Venue"));
-        String cid = ledger.submitForCreated(issuer,
-                LedgerCommands.createCommittee(issuer, members, 2, ledger.resolveParty("Auditor"), COMMITTEE_LABEL),
+        List<String> members = List.of(ledger.resolveParty("Issuer"), ledger.resolveParty("Bank"),
+                ledger.resolveParty("Venue"));
+        String cid = ledger.submitForCreated(operator,
+                LedgerCommands.createCommittee(operator, members, 2, ledger.resolveParty("Auditor"), COMMITTEE_LABEL),
                 LedgerCommands.operatorCommitteeTemplateId());
-        log.info("demo committee '{}' seeded ({}): Issuer, Bank, Venue; K=2", COMMITTEE_LABEL, cid);
+        log.info("demo committee '{}' seeded ({}): admin Operator; Issuer, Bank, Venue; K=2", COMMITTEE_LABEL, cid);
     }
 
     void seedFund() {

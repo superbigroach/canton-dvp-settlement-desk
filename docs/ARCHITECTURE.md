@@ -89,19 +89,19 @@ Spring Boot  AuthFilter            identity: Firebase ID token (email-verified o
         │                          auditor has the same admin, declares the same threshold, that threshold is
         │                          met, and every attestor is a member — else dropped + logged as possible forgery
 Ledger API (JWT actAs/readAs)      the operator backend holds actAs for every hosted (L1) seat — see trust ladder
-Daml  Governance.daml              FixingProposal `signatory approvers`; NavFixing `signatory attestors`;
-                                   ConfirmWithChecks enforces low ≤ price ≤ high WHEN the venue supplies a range
+Daml  Governance.daml (3.0.0)      FixingProposal / NavFixing `signatory admin :: approvers|attestors`;
+                                   committee ensure K ≥ 2, K ≤ N, admin ∉ members; plain Confirm retired;
+                                   venue range or no-prints mandatory; asOfDate + FixingSeries slot = one
+                                   fixing per series per day; any approver or the admin finalises
 ```
 
-**What the ledger does NOT yet enforce (needs the 3.0.0 package — a signatory change breaks
-upgrade compatibility, so it is a new package, not a patch):** `admin`, `threshold` and the member
-list on a proposal/fixing are plain fields with no link to an `OperatorCommittee`. A single party
-can mint a "committee fixing" with `threshold = 1` and itself as sole approver. Today the backend
-filter above is the only thing keeping such a fixing off the published series. The fix is
-`signatory admin :: approvers`, `ensure threshold >= 2 && threshold < length members && admin
-notElem members`, venue range mandatory, plain `Confirm` retired, one fixing per (instrument,
-session, asOfDate). Decision pending; no fixing is published and no committee is convened, so
-there is nothing to migrate.
+**What the ledger enforces since package 3.0.0 (22 Sep 2026).** A fixing can only be born from
+a proposal the administrator signed, inside a committee the administrator signed, whose `ensure`
+bounded K and N and excluded the administrator from the roster. The 2.x forgery (a proposal
+naming the real administrator with `threshold = 1` and the forger as sole approver) is
+unconstructible — `Test:testFixingCannotBeForged` attempts it and fails at the ledger. A
+signatory change is not a compatible upgrade, so this is a new package; nothing needed
+migrating because no fixing existed on any shared ledger.
 
 **Trust ladder (who can forge what).** L1 hosted party — the operator's backend signs for the
 seat, so K-of-N collapses to the operator's key; suitable for evaluation only, never for a fixing
@@ -110,8 +110,10 @@ its own API key; the operator still submits the ledger command. L3 own participa
 hosts its party and signs on its own node; the operator cannot forge it. Disclosed in the rulebook
 §6.7 and `SIGNER_PROTOCOL.md` §5.
 
-**Open, in the order they matter** (all in the audit file): creation/redemption fee payable in
-counterfeit cash (`Basket.daml` `chargeFee` does not check the cash issuer — appended
+**Open, in the order they matter** (all in the audit file): `backend-devnet/` (the shared
+HackCanton node's desk) still targets 2.1.0 — not a benchmark surface, but it should not be
+started against a 3.0.0 ledger; the ops desk's plain-confirm button now gets a 410 (its
+checked path works); creation/redemption fee payable in counterfeit cash (`Basket.daml` `chargeFee` does not check the cash issuer — appended
 `Optional cashIssuer`, upgrade-safe); signer-service still on the 3-seat protocol v1 (halts, never
 confirms wrongly); admin act-as can confirm as a seat; tolerance caps; BigDecimal scale bound;
 webhook-URL SSRF; `/api/diag` detail public; hosting catch-all serves the landing page as 200 for
