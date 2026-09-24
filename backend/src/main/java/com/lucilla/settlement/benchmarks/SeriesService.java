@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
@@ -127,6 +128,7 @@ public class SeriesService {
         }
         List<LedgerService.NavFixingView> out = new ArrayList<>();
         for (var f : fixings) {
+            if (futureDated(f)) continue;
             boolean ok = false;
             for (var c : committees) {
                 if (f.admin() == null || !f.admin().equals(c.admin())) continue;
@@ -146,6 +148,34 @@ public class SeriesService {
             }
         }
         return out;
+    }
+
+    /**
+     * Is this fixing dated after today, in the instrument's own zone?
+     *
+     * <p>WHY THIS EXISTS. A {@code NavFixing} carries the date it claims to observe, and the
+     * ledger enforces one per instrument, session and date — but it cannot know what day it is,
+     * so nothing on-chain stops a fixing dated years ahead. On 24 Sep 2026 a test script whose
+     * date expression advanced a day per minute struck a REAL attested fixing dated 2039-02-03
+     * on DevNet. It is signed, valid and permanent; it simply describes a day that has not
+     * happened. Publishing it would put a 2039 row in a public benchmark history and, being the
+     * newest row, make it the quoted value.
+     *
+     * <p>So it is dropped here, at the one gate every published surface passes through, and
+     * logged loudly: a fixing about the future is an anomaly somebody must see, not something
+     * to hide. {@link com.lucilla.settlement.web.SettlementController#asOfOrToday} stops new
+     * ones being created; this stops the ones already on the ledger being quoted. The desk's
+     * own authenticated views still show it, because an operator investigating needs to.
+     */
+    private boolean futureDated(LedgerService.NavFixingView f) {
+        if (f.asOfDate() == null) return false;
+        ZoneId zone = schedules.byInstrument(f.instrumentId())
+                .map(StrikeSchedule::zone).orElse(ZoneId.of("Europe/London"));
+        if (!f.asOfDate().isAfter(LocalDate.now(zone))) return false;
+        log.warn("FIXING {} for {} NOT PUBLISHED: as-of date {} is in the future (today is {} {}); "
+                + "the attestation is valid but describes a day that has not happened",
+                f.contractId(), f.instrumentId(), f.asOfDate(), LocalDate.now(zone), zone);
+        return true;
     }
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(SeriesService.class);

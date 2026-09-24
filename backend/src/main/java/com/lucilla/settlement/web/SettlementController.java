@@ -1555,14 +1555,29 @@ public class SettlementController {
 
     /** The ISO date the caller attests the fixing describes, or today at the methodology's home clock. */
     static java.time.LocalDate asOfOrToday(String iso) {
+        java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Europe/London"));
         if (iso == null || iso.isBlank()) {
-            return java.time.LocalDate.now(java.time.ZoneId.of("Europe/London"));
+            return today;
         }
+        java.time.LocalDate d;
         try {
-            return java.time.LocalDate.parse(iso.trim());
+            d = java.time.LocalDate.parse(iso.trim());
         } catch (java.time.format.DateTimeParseException e) {
             throw new IllegalArgumentException("asOfDate must be an ISO date (YYYY-MM-DD): " + iso);
         }
+        // WHY A CEILING. `asOfDate` is the slot a fixing occupies: one per instrument, session
+        // and date, enforced on-ledger since package 3.0.0. A date in the future is therefore
+        // not a harmless label — it consumes a slot that cannot be reused when that day comes,
+        // and the value is published as though it were that day's mark. On 24 Sep 2026 a test
+        // script with a bad date expression struck a real attested fixing dated 2039-02-03 on
+        // DevNet; it could not be deleted, only filtered out of the published series. One day
+        // of tolerance covers a strike either side of midnight in the instrument's own zone.
+        if (d.isAfter(today.plusDays(1))) {
+            throw new IllegalArgumentException("asOfDate " + d + " is in the future; a fixing is dated "
+                    + "the day it observes (today is " + today + " Europe/London). A future date "
+                    + "consumes a slot that day cannot reuse.");
+        }
+        return d;
     }
 
     /**

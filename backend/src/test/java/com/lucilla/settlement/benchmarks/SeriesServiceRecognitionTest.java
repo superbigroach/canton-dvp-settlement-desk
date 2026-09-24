@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -38,6 +39,38 @@ class SeriesServiceRecognitionTest {
         return new LedgerService.NavFixingView(cid, attestors, threshold, "CBTC", "USDC", "Close",
                 new BigDecimal("65000"), "r", BigDecimal.ZERO, "NONE", AT, List.of(), AT.plusSeconds(60),
                 "committee", null, null, null, null, admin, LocalDate.of(2026, 9, 22), attestors);
+    }
+
+    static LedgerService.NavFixingView dated(String cid, LocalDate asOf) {
+        List<String> attestors = List.of("Issuer::1", "Bank::1");
+        return new LedgerService.NavFixingView(cid, attestors, 2, "CBTC", "USDC", "Close",
+                new BigDecimal("65000"), "r", BigDecimal.ZERO, "NONE", AT, List.of(), AT.plusSeconds(60),
+                "committee", null, null, null, null, "Issuer::1", asOf, attestors);
+    }
+
+    @Test
+    @DisplayName("a fixing dated after today is never published, however well it is attested")
+    void futureDatedIsDropped() {
+        LocalDate today = LocalDate.now(ZoneId.of("Europe/London"));
+        // The DevNet case, 24 Sep 2026: a real 2-of-3 attestation dated 2039-02-03.
+        assertThat(service.recognised(List.of(dated("far", LocalDate.of(2039, 2, 3))))).isEmpty();
+        assertThat(service.recognised(List.of(dated("tomorrow", today.plusDays(1))))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("today, yesterday and an undated fixing are kept — the boundary is today, not before it")
+    void todayAndEarlierAreKept() {
+        LocalDate today = LocalDate.now(ZoneId.of("Europe/London"));
+        var now = dated("today", today);
+        var before = dated("yesterday", today.minusDays(1));
+        var undated = dated("undated", null);
+        assertThat(service.recognised(List.of(now, before, undated))).containsExactly(now, before, undated);
+    }
+
+    @Test
+    @DisplayName("a future-dated fixing cannot become the published value even when it is the only one")
+    void futureDatedNeverBecomesTheMark() {
+        assertThat(service.recognised(List.of(dated("only", LocalDate.of(2039, 2, 3))))).isEmpty();
     }
 
     @BeforeEach

@@ -175,8 +175,14 @@ cm="$(post /committee '{"admin":"Operator","members":["Bank","Issuer","Venue"],"
 cc="$(echo "$cm" | field "d.get('contractId','')")"
 # 3.0.0 FixingSeries: one fixing per (instrument, session, asOfDate). Each run attests a later
 # date (one day per minute since the 2026-09-22 epoch), so reruns never collide with the slot.
-asof="$(date -u -d "2026-09-22 +$(( ( $(date +%s) - 1790000000 ) / 60 )) days" +%F)"
-p1="$(post "/committee/$cc/propose" "{\"proposer\":\"Operator\",\"instrumentId\":\"CBTC\",\"cashInstrument\":\"USDC\",\"session\":\"Close\",\"price\":65000,\"rationale\":\"E2E: committee-attested mark\",\"asOfDate\":\"$asof\"}")"
+# A fixing is dated the day it observes, and the ledger allows ONE per (instrument, session,
+# as-of date). Reruns must therefore vary the SESSION, never the date: an earlier version of
+# this line advanced the date a day per minute and struck a real attested fixing dated
+# 2039-02-03 on DevNet, which is permanent and had to be filtered out of the published series.
+# A per-run session also keeps test fixings out of the published Close series entirely.
+asof="$(date -u +%F)"
+e2e_session="E2E-$(date -u +%H%M%S)"
+p1="$(post "/committee/$cc/propose" "{\"proposer\":\"Operator\",\"instrumentId\":\"CBTC\",\"cashInstrument\":\"USDC\",\"session\":\"$e2e_session\",\"price\":65000,\"rationale\":\"E2E: committee-attested mark\",\"asOfDate\":\"$asof\"}")"
 pc="$(echo "$p1" | field "d.get('contractId','')")"
 # 3.0.0: the administrator (Operator) proposes and never attests; members attest WITH evidence
 # (plain /confirm is retired → 410). Venue signs its traded range; Issuer signs one condition with numbers.
