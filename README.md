@@ -32,6 +32,7 @@ sandbox reseeds on every restart. Nothing here is a regulated benchmark, and the
 | Surface | URL | Who |
 |---|---|---|
 | Site: benchmarks, methodology, governance, documents, licensing, regulatory | https://etpfoundry.com (crossdesk-devnet-app.web.app still resolves) | public |
+| Site, added 24 Sep 2026: **Join a committee** (`/committee` — the five seats, eligibility, the trust ladder, how to start), publication calendar (`/calendar`), live status (`/status`), fee schedule (`/licensing#fees`), per-benchmark document bundle (`/benchmarks/<id>#bundle`) | same host | prospective committee members, licensees |
 | Public API: `GET /api/benchmarks`, `/api/benchmarks/{id}`, `/api/series/{id}` (+`.csv`), `/api/methodology`, `/api/signer-protocol`, `/api/fixing-schedule` | same host | licensees, anyone |
 | App: sign in, role portals | https://etpfoundry.com/desk/login | signers, APs, fund admins, auditors, admin |
 | Operator desk (the original one-page desk) | `/desk/ops` | admin |
