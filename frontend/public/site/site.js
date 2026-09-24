@@ -317,6 +317,8 @@
       }
       var csv = $('[data-csv]', root); if (csv) csv.href = '/api/series/' + encodeURIComponent(bm.id) + '.csv';
       var json = $('[data-json]', root); if (json) json.href = '/api/benchmarks/' + encodeURIComponent(bm.id);
+    var csv2 = $('[data-csv2]', root); if (csv2) csv2.href = '/api/series/' + encodeURIComponent(bm.id) + '.csv';
+    var json2 = $('[data-json2]', root); if (json2) json2.href = '/api/benchmarks/' + encodeURIComponent(bm.id);
     };
     paint(b);
     var state = $('[data-api-state]', root);

@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Publication calendar — ETP Foundry</title>
+<meta name="description" content="When each ETP Foundry benchmark is struck (16:00 Europe/London, every day), what a holiday changes, and the notice periods for methodology changes, restatements and cessation.">
+<link rel="canonical" href="https://etpfoundry.com/calendar">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="ETP Foundry">
+<meta property="og:title" content="Publication calendar — ETP Foundry">
+<meta property="og:description" content="When each ETP Foundry benchmark is struck (16:00 Europe/London, every day), what a holiday changes, and the notice periods for methodology changes, restatements and cessation.">
+<meta property="og:url" content="https://etpfoundry.com/calendar">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#0A0B0F">
+<link rel="stylesheet" href="/site/site.css?v=9">
+<script defer src="/site/site.js?v=9"></script>
+<link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32.png">
+<link rel="apple-touch-icon" href="/brand/apple-touch-icon.png">
+<meta property="og:image" content="https://etpfoundry.com/brand/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:image" content="https://etpfoundry.com/brand/og.png">
+<meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="/" aria-label="ETP Foundry home">ETP<span>Foundry</span></a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <a href="/benchmarks/">Benchmarks</a>
+      <a href="/methodology">Methodology</a>
+      <a href="/governance">Governance</a>
+      <a href="/licensing">Licensing</a>
+      <a href="/regulatory">Regulatory</a>
+      <a href="/documents">Documents</a>
+      <a href="/calendar">Calendar</a>
+      <a href="/status">Status</a>
+      <a href="/news">News</a>
+      <a href="/about">About</a>
+      <a href="/desk/login">Sign in</a>
+      <a href="/desk/" class="btn">Open the desk</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+<section class="section hero" aria-labelledby="h">
+  <div class="wrap">
+    <div class="kicker"><span>Publication calendar</span> <span class="rule"></span></div>
+    <h1 id="h">When each number is struck, and when it is not.</h1>
+    <p class="lede">A tokenised asset trades every day, so its official close is struck every day —
+      weekends and holidays included. What changes on a holiday is not whether we publish, but which
+      tier can be reached, and the calendar says so in advance.</p>
+    <p class="api-state" data-cal-state>Loading schedule…</p>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap">
+    <h2>Strike schedule</h2>
+    <table class="docs" data-cal-table>
+      <thead><tr><th>Benchmark</th><th>Session</th><th>Strike</th><th>Days</th><th>Next strike</th></tr></thead>
+      <tbody data-cal-rows><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+    </table>
+    <p class="src">Official closes are struck at <strong>16:00 Europe/London</strong> every calendar day. London observes
+      British Summer Time: the strike stays at 16:00 local — <strong>15:00 UTC until 25 Oct 2026, 16:00 UTC from
+      26 Oct 2026 to 27 Mar 2027, then 15:00 UTC again</strong>. Indicative values are published at 00:00, 08:00 and
+      16:00 UTC every day (rulebook §5.3, 24/7 methodology).</p>
+  </div>
+</section>
+
+<section class="band alt">
+  <div class="wrap">
+    <h2>What a holiday changes</h2>
+    <table class="docs">
+      <thead><tr><th>Day</th><th>Underlying reference (e.g. CME CF BRR)</th><th>What we publish</th></tr></thead>
+      <tbody>
+        <tr><td>Weekday, venues open</td><td>published</td><td>Tier 1 committee fixing, or tier 3 (reference × last factor) if the committee does not reach K</td></tr>
+        <tr><td>Weekend</td><td>published (the CF rates are daily)</td><td>same as a weekday; venue seat may attest <em>no prints</em> if its book was empty (rulebook §5.3a)</td></tr>
+        <tr><td>Reference administrator holiday</td><td>not published</td><td>tier 3 unavailable; tier 4 carries the prior fixing, flagged; tier 5 publishes a gap if nothing can be carried</td></tr>
+        <tr><td>Underlying market closed (tokenised equities)</td><td>closed</td><td>the chain-event policy applies: last official close carried and flagged until the underlying reopens</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap">
+    <h2>Notice periods you can plan around</h2>
+    <ul>
+      <li><strong>Methodology change:</strong> 5 business days' notice; <strong>30 calendar days</strong> and written notice to every licensee for a material change. Never retroactive.</li>
+      <li><strong>Restatement:</strong> only if the error is found the same day <em>and</em> exceeds 0.10 %; otherwise the value stands and the error is listed in the quarterly error table.</li>
+      <li><strong>Cessation:</strong> 60 calendar days' notice, enforced on-ledger (<code>CessationNotice</code>).</li>
+      <li><strong>Oversight committee:</strong> quarterly; summary minutes published within 10 business days.</li>
+      <li><strong>Quarterly error table:</strong> published within 15 business days of quarter end, from the first quarter with a published fixing.</li>
+    </ul>
+    <p class="src">Times are shown in Europe/London unless stated. The authoritative schedule is the one served by
+      <code>/api/benchmarks</code> (<code>publishTime</code>, <code>timezone</code>); this page reads it on load.</p>
+  </div>
+</section>
+<script>
+(function(){
+  function nextStrike(hhmm, tz){
+    // next occurrence of hh:mm in tz, computed from local parts
+    var now=new Date(); var parts=hhmm.split(':'); var h=+parts[0], m=+parts[1];
+    for (var d=0; d<3; d++){
+      var t=new Date(now.getTime()+d*86400000);
+      var f=new Intl.DateTimeFormat('en-GB',{timeZone:tz,hour12:false,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}).formatToParts(t);
+      var g={}; f.forEach(function(p){g[p.type]=p.value});
+      var localNow=+g.hour*60+ +g.minute; var target=h*60+m;
+      if (d>0 || localNow < target){
+        return g.day+'/'+g.month+'/'+g.year+' '+hhmm+' '+tz;
+      }
+    }
+    return '—';
+  }
+  fetch('/api/benchmarks',{headers:{Accept:'application/json'}}).then(function(r){return r.json()}).then(function(list){
+    var tb=document.querySelector('[data-cal-rows]'); tb.innerHTML='';
+    list.forEach(function(b){
+      var tr=document.createElement('tr');
+      var cells=[ '<a href="/benchmarks/'+encodeURIComponent(b.id)+'">'+b.name+'</a>', 'Close', (b.publishTime||'16:00')+' '+(b.timezone||'Europe/London'), 'every day', nextStrike(b.publishTime||'16:00', b.timezone||'Europe/London') ];
+      cells.forEach(function(c){var td=document.createElement('td'); td.innerHTML=c; tr.appendChild(td)});
+      tb.appendChild(tr);
+    });
+    var s=document.querySelector('[data-cal-state]'); if(s){s.textContent='Schedule read from /api/benchmarks on load.'; s.className='api-state';}
+  }).catch(function(){ var s=document.querySelector('[data-cal-state]'); if(s){s.textContent='The schedule API is not reachable right now; the static schedule above still applies.';} });
+})();
+</script>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="cols">
+      <div><h3>Benchmarks</h3><ul>
+        <li><a href="/benchmarks/CBTC">CBTC Close</a></li>
+        <li><a href="/benchmarks/cETH">cETH Close</a></li>
+        <li><a href="/benchmarks/LX1">LX1 NAV</a></li>
+        <li><a href="/benchmarks/">All benchmarks</a></li>
+      </ul></div>
+      <div><h3>Documents</h3><ul>
+        <li><a href="/methodology">Methodology</a></li>
+        <li><a href="/governance">Governance</a></li>
+        <li><a href="/licensing">Licensing</a></li>
+        <li><a href="/regulatory">Regulatory</a></li>
+        <li><a href="/documents">Documents</a></li>
+      </ul></div>
+      <div><h3>ETP Foundry</h3><ul>
+        <li><a href="/about">About</a></li>
+        <li><a href="/news">News</a></li>
+        <li><a href="/showcase/">Showcase</a></li>
+        <li><a href="/pitch/">Pitch</a></li>
+        <li><a href="https://github.com/superbigroach/canton-dvp-settlement-desk" rel="noopener">Source</a></li>
+      </ul></div>
+      <div><h3>Desk</h3><ul>
+        <li><a href="/desk/">Open the desk</a></li>
+        <li><a href="/desk/login">Sign in</a></li>
+      </ul></div>
+    </div>
+    <div class="disclosure">
+      <p><strong>Sandbox disclosure.</strong> The values on this site come from a hosted sandbox: an
+        in-process Canton ledger running the CrossDesk Daml packages, seeded with a demonstration book.
+        It is not a Canton Network participant and it is not connected to DevNet, TestNet or MainNet.
+        No fixing has been published for commercial use, and no committee has been convened.
+        Instruments in the demonstration basket are issued for demonstration.</p>
+      <p>ETP Foundry is not an authorised or registered benchmark administrator in any jurisdiction.
+        Nothing on this site is a price, a valuation, a benchmark for regulatory purposes, investment
+        advice, or an offer of any financial product or service. See <a href="/regulatory">Regulatory</a>.</p>
+    </div>
+    <p><strong>ETP Foundry</strong> — attested fixings and atomic creation and redemption for tokenised
+      funds. Built on the <a href="https://www.canton.network" rel="noopener">Canton Network</a>.</p>
+    <p class="formerly" style="margin-top:12px;opacity:.85">ETP Foundry was formerly <strong>CrossDesk</strong> &mdash; winner of <a href="/news">Best Financial Application, HackCanton Season 2</a> (Grand Final, 5 August 2026). Same team, same code, new name.</p>
+    <p style="margin-top:16px">
+      <a href="mailto:s.borjas@lucilla.ca">s.borjas@lucilla.ca</a>
+      &nbsp;·&nbsp;
+      <a href="https://t.me/sb_lucilla" rel="noopener">@sb_lucilla</a>
+      &nbsp;·&nbsp;
+      <a href="https://www.linkedin.com/in/sborjasto/" rel="noopener">LinkedIn</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

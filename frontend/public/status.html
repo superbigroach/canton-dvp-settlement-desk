@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Status — ETP Foundry</title>
+<meta name="description" content="Live status of the ETP Foundry public API, ledger connection and each benchmark's last published value, plus the incident log.">
+<link rel="canonical" href="https://etpfoundry.com/status">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="ETP Foundry">
+<meta property="og:title" content="Status — ETP Foundry">
+<meta property="og:description" content="Live status of the ETP Foundry public API, ledger connection and each benchmark's last published value, plus the incident log.">
+<meta property="og:url" content="https://etpfoundry.com/status">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#0A0B0F">
+<link rel="stylesheet" href="/site/site.css?v=9">
+<script defer src="/site/site.js?v=9"></script>
+<link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32.png">
+<link rel="apple-touch-icon" href="/brand/apple-touch-icon.png">
+<meta property="og:image" content="https://etpfoundry.com/brand/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:image" content="https://etpfoundry.com/brand/og.png">
+<meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="/" aria-label="ETP Foundry home">ETP<span>Foundry</span></a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <a href="/benchmarks/">Benchmarks</a>
+      <a href="/methodology">Methodology</a>
+      <a href="/governance">Governance</a>
+      <a href="/licensing">Licensing</a>
+      <a href="/regulatory">Regulatory</a>
+      <a href="/documents">Documents</a>
+      <a href="/calendar">Calendar</a>
+      <a href="/status">Status</a>
+      <a href="/news">News</a>
+      <a href="/about">About</a>
+      <a href="/desk/login">Sign in</a>
+      <a href="/desk/" class="btn">Open the desk</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+<section class="section hero" aria-labelledby="h">
+  <div class="wrap">
+    <div class="kicker"><span>Status</span> <span class="rule"></span></div>
+    <h1 id="h">Is the number being produced right now?</h1>
+    <p class="lede">Live checks against the public API, read on load. A benchmark administrator that cannot
+      say whether it is up is not one you can settle against. This page will show a strike that is
+      late before we do.</p>
+    <p class="api-state" data-st-state>Checking…</p>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap">
+    <h2>Components</h2>
+    <table class="docs">
+      <thead><tr><th>Component</th><th>Check</th><th>State</th><th>Detail</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Public API</strong></td><td><code>/api/health</code></td><td data-st-api>—</td><td data-st-api-d class="muted">—</td></tr>
+        <tr><td><strong>Ledger (participant)</strong></td><td><code>/api/diag</code> · ledger reachable, package registered</td><td data-st-ledger>—</td><td data-st-ledger-d class="muted">—</td></tr>
+        <tr><td><strong>Signer protocol</strong></td><td><code>/api/signer-protocol</code></td><td data-st-proto>—</td><td data-st-proto-d class="muted">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="band alt">
+  <div class="wrap">
+    <h2>Benchmarks — last published value</h2>
+    <table class="docs">
+      <thead><tr><th>Benchmark</th><th>Last value</th><th>As of</th><th>Age</th><th>Attestation</th></tr></thead>
+      <tbody data-st-rows><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+    </table>
+    <p class="src">A value older than two strike periods is marked <strong>stale</strong>. "Seed" and "awaiting committee"
+      are not attestations — see the <a href="/methodology">methodology</a> tiers.</p>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap">
+    <h2>Incidents</h2>
+    <p>No incidents recorded. Log opened <strong>24 September 2026</strong>. Every missed or late strike,
+      restatement, and outage will be listed here with cause, duration and the tier that was published
+      meanwhile — the same information the quarterly error table carries.</p>
+    <h2>Environments</h2>
+    <table class="docs">
+      <thead><tr><th>Environment</th><th>Ledger</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>Public site (this API)</td><td>hosted evaluation ledger (in-process Canton sandbox)</td><td>live</td></tr>
+        <tr><td>DevNet</td><td>ETP Foundry's own Canton validator, approved 23 Sep 2026, live 24 Sep 2026</td><td>live — real-transaction suite green; pilots run here</td></tr>
+        <tr><td>TestNet / MainNet</td><td>—</td><td>MainNet allocation pending (weekly queue)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+<script>
+(function(){
+  function get(u){ return fetch(u,{headers:{Accept:'application/json'}}).then(function(r){ if(!r.ok) throw new Error(r.status); return r.json(); }); }
+  function set(sel, ok, text){ var e=document.querySelector(sel); if(!e) return; e.textContent = ok===null?'unknown':(ok?'operational':'degraded'); e.className = ok?'status ok':'status bad'; }
+  function det(sel, t){ var e=document.querySelector(sel); if(e) e.textContent=t; }
+  function age(iso){ if(!iso) return null; return Math.max(0,(Date.now()-new Date(iso).getTime())/1000); }
+  function fmtAge(s){ if(s==null) return '—'; if(s<3600) return Math.round(s/60)+' min'; if(s<86400*2) return Math.round(s/3600)+' h'; return Math.round(s/86400)+' d'; }
+  var overall=[];
+  get('/api/health').then(function(h){ set('[data-st-api]', h.status==='UP'); det('[data-st-api-d]', 'auth '+(h.auth||'—')+' · ledger '+(h.ledgerHost||'—')); overall.push(h.status==='UP'); })
+    .catch(function(){ set('[data-st-api]', false); overall.push(false); });
+  get('/api/diag').then(function(d){ var ok=d.ledger&&d.ledger.reachable===true; set('[data-st-ledger]', ok); det('[data-st-ledger-d]', (d.package? 'package '+d.package.packageName+' '+d.package.packageVersion+' '+(d.package.statusOnParticipant||''):'')+(d.ledger&&d.ledger.ledgerEnd!=null?' · ledger end '+d.ledger.ledgerEnd:'')); overall.push(!!ok); })
+    .catch(function(){ set('[data-st-ledger]', null); det('[data-st-ledger-d]','diagnostics are admin-only on this host'); });
+  get('/api/signer-protocol').then(function(p){ set('[data-st-proto]', true); det('[data-st-proto-d]', p.version||''); })
+    .catch(function(){ set('[data-st-proto]', false); });
+  get('/api/benchmarks').then(function(list){
+    var tb=document.querySelector('[data-st-rows]'); tb.innerHTML='';
+    list.forEach(function(b){
+      var last=b.last||{}; var a=age(last.asOf); var stale=a!=null && a>86400*2;
+      var tr=document.createElement('tr');
+      [ '<a href="/benchmarks/'+encodeURIComponent(b.id)+'">'+b.name+'</a>', last.price!=null? Number(last.price).toLocaleString('en-GB',{maximumFractionDigits:4}):'—', last.asOf? new Date(last.asOf).toUTCString().replace(' GMT',' UTC'):'—', (stale?'<span class="status bad">stale · </span>':'')+fmtAge(a), (last.displayLabel||last.tierLabel||'—') ]
+        .forEach(function(c){var td=document.createElement('td'); td.innerHTML=c; tr.appendChild(td)});
+      tb.appendChild(tr);
+    });
+    var s=document.querySelector('[data-st-state]'); if(s){ s.textContent='Checked at '+new Date().toUTCString().replace(' GMT',' UTC')+'.'; s.className='api-state'; }
+  }).catch(function(){ var s=document.querySelector('[data-st-state]'); if(s){ s.textContent='The public API did not answer. Treat the service as degraded.'; } });
+})();
+</script>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="cols">
+      <div><h3>Benchmarks</h3><ul>
+        <li><a href="/benchmarks/CBTC">CBTC Close</a></li>
+        <li><a href="/benchmarks/cETH">cETH Close</a></li>
+        <li><a href="/benchmarks/LX1">LX1 NAV</a></li>
+        <li><a href="/benchmarks/">All benchmarks</a></li>
+      </ul></div>
+      <div><h3>Documents</h3><ul>
+        <li><a href="/methodology">Methodology</a></li>
+        <li><a href="/governance">Governance</a></li>
+        <li><a href="/licensing">Licensing</a></li>
+        <li><a href="/regulatory">Regulatory</a></li>
+        <li><a href="/documents">Documents</a></li>
+      </ul></div>
+      <div><h3>ETP Foundry</h3><ul>
+        <li><a href="/about">About</a></li>
+        <li><a href="/news">News</a></li>
+        <li><a href="/showcase/">Showcase</a></li>
+        <li><a href="/pitch/">Pitch</a></li>
+        <li><a href="https://github.com/superbigroach/canton-dvp-settlement-desk" rel="noopener">Source</a></li>
+      </ul></div>
+      <div><h3>Desk</h3><ul>
+        <li><a href="/desk/">Open the desk</a></li>
+        <li><a href="/desk/login">Sign in</a></li>
+      </ul></div>
+    </div>
+    <div class="disclosure">
+      <p><strong>Sandbox disclosure.</strong> The values on this site come from a hosted sandbox: an
+        in-process Canton ledger running the CrossDesk Daml packages, seeded with a demonstration book.
+        It is not a Canton Network participant and it is not connected to DevNet, TestNet or MainNet.
+        No fixing has been published for commercial use, and no committee has been convened.
+        Instruments in the demonstration basket are issued for demonstration.</p>
+      <p>ETP Foundry is not an authorised or registered benchmark administrator in any jurisdiction.
+        Nothing on this site is a price, a valuation, a benchmark for regulatory purposes, investment
+        advice, or an offer of any financial product or service. See <a href="/regulatory">Regulatory</a>.</p>
+    </div>
+    <p><strong>ETP Foundry</strong> — attested fixings and atomic creation and redemption for tokenised
+      funds. Built on the <a href="https://www.canton.network" rel="noopener">Canton Network</a>.</p>
+    <p class="formerly" style="margin-top:12px;opacity:.85">ETP Foundry was formerly <strong>CrossDesk</strong> &mdash; winner of <a href="/news">Best Financial Application, HackCanton Season 2</a> (Grand Final, 5 August 2026). Same team, same code, new name.</p>
+    <p style="margin-top:16px">
+      <a href="mailto:s.borjas@lucilla.ca">s.borjas@lucilla.ca</a>
+      &nbsp;·&nbsp;
+      <a href="https://t.me/sb_lucilla" rel="noopener">@sb_lucilla</a>
+      &nbsp;·&nbsp;
+      <a href="https://www.linkedin.com/in/sborjasto/" rel="noopener">LinkedIn</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
