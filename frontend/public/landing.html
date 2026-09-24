@@ -61,7 +61,7 @@
       <a class="btn big" href="/desk/">Open the desk →</a>
       <a class="btn ghost" href="/desk/login">Sign in</a>
     </div>
-    <p class="cta-note">The desk is a public sandbox, no login. Sign in is for committee signers, authorised participants and fund administrators.</p>
+    <p class="cta-note">The desk runs on our own Canton DevNet validator. Sign in is for committee signers, authorised participants and fund administrators, by invitation to a named e-mail.</p>
     <div class="for-row" aria-label="Who it is for">
       <span class="for-label">Built for</span>
       <a href="#for">Fund &amp; ETP issuers</a>
@@ -84,8 +84,9 @@
       else is painted plain.</p>
     <div class="tiles" data-benchmark-tiles aria-live="polite" aria-busy="true"></div>
     <p class="api-state" data-tiles-state>Loading live values…</p>
-    <p class="src" style="margin-top:14px">Values shown come from the hosted sandbox, not from a production
-      committee. See <a href="/benchmarks/">all benchmarks</a> and the <a href="/methodology">methodology</a>.</p>
+    <p class="src" style="margin-top:14px">Values come from ETP Foundry's own Canton DevNet validator.
+      No third-party committee has been seated yet, so they are not attested fixings.
+      See <a href="/benchmarks/">all benchmarks</a> and the <a href="/methodology">methodology</a>.</p>
   </div>
 </section>
 
@@ -229,11 +230,16 @@
       </ul></div>
     </div>
     <div class="disclosure">
-      <p><strong>Sandbox disclosure.</strong> The values on this site come from a hosted sandbox: an
-        in-process Canton ledger running the CrossDesk Daml packages, seeded with a demonstration book.
-        It is not a Canton Network participant and it is not connected to DevNet, TestNet or MainNet.
-        No fixing has been published for commercial use, and no committee has been convened.
-        Instruments in the demonstration basket are issued for demonstration.</p>
+      <p><strong>What this site is running on.</strong> Since 24 September 2026 the values and the
+        public API come from ETP Foundry's own Canton <strong>DevNet validator</strong>, running the
+        published Daml packages — not from a demonstration sandbox. The participant was approved by
+        the Canton Foundation on 23 September 2026 and holds real registry assets. It is DevNet:
+        it is not TestNet or MainNet, and nothing here settles a real obligation.</p>
+      <p><strong>What has not happened yet.</strong> <strong>No committee of third parties has been
+        seated, and no fixing has been attested by one.</strong> Values shown as "seed" are the
+        instrument's own reference mark and are not attestations. Where a value is attested by seats
+        ETP Foundry itself operates, it is labelled as a pilot on the value. No fixing has been
+        published for commercial use.</p>
       <p>ETP Foundry is not an authorised or registered benchmark administrator in any jurisdiction.
         Nothing on this site is a price, a valuation, a benchmark for regulatory purposes, investment
         advice, or an offer of any financial product or service. See <a href="/regulatory">Regulatory</a>.</p>

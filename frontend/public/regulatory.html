@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Regulatory — ETP Foundry</title>
-<meta name="description" content="ETP Foundry is not a regulated benchmark administrator. Benchmark administration is a licensed activity in the UK and EU. A factual mapping of the ETP Foundry methodology to the IOSCO Principles for Financial Benchmarks, what recognition would require, and the sandbox disclosure.">
+<meta name="description" content="ETP Foundry is not a regulated benchmark administrator. Benchmark administration is a licensed activity in the UK and EU. A factual mapping of the ETP Foundry methodology to the IOSCO Principles for Financial Benchmarks, what recognition would require, and what the published numbers are.">
 <link rel="canonical" href="https://etpfoundry.com/regulatory">
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="ETP Foundry">
@@ -139,19 +139,28 @@
 
 <section class="section" aria-labelledby="sandbox-h">
   <div class="wrap">
-    <div class="kicker"><span>Sandbox disclosure</span> <span class="rule"></span></div>
+    <div class="kicker"><span>Disclosure</span> <span class="rule"></span></div>
     <h2 id="sandbox-h">What the numbers on this site are.</h2>
     <div class="callout warn">
       <span class="dot"></span>
-      <p>The values shown on this site come from a <strong>hosted sandbox</strong>: an in-process Canton
-        ledger running the CrossDesk Daml packages, seeded with a demonstration book, that resets when
-        the hosting instance recycles. It is <strong>not a Canton Network participant</strong> and is not
-        connected to DevNet, TestNet or MainNet. It proves the software, not the network integration.</p>
-      <p class="qual">No fixing has been published for commercial use. No committee has been convened; the
-        seats shown on benchmark pages describe the protocol, not occupants. Instruments in the
-        demonstration basket are issued for demonstration and are not the production tokens. A separate,
-        earlier claim of 4.16 cBTC through a CIP-56 registry flow was made on a shared hackathon
-        participant that is no longer online; it is not what the sandbox holds today.</p>
+      <p>Since <strong>24 September 2026</strong> the values and the public API on this site come from
+        <strong>ETP Foundry's own Canton DevNet validator</strong>, running the published Daml packages
+        (<code>crossdesk 3.0.0</code>). The participant was approved by the Canton Foundation on
+        23 September 2026. It is <strong>DevNet</strong>: it is not TestNet or MainNet, and nothing
+        published here settles a real obligation. Before that date this site ran on an in-process
+        sandbox, and said so.</p>
+      <p class="qual"><strong>No committee of third parties has been seated, and no fixing has been
+        attested by one.</strong> A value labelled "seed" is the instrument's own reference mark, not an
+        attestation. Where a value is attested by seats ETP Foundry itself operates, the value says so:
+        at trust level L1 the administrator holds the key for those seats and could have produced the
+        signatures, which is honest for a pilot and is disclosed on every such value. No fixing has been
+        published for commercial use.</p>
+      <p class="qual"><strong>On assets.</strong> An earlier claim of 4.16 cBTC was made on a shared
+        hackathon participant that is no longer online, and does not describe anything held today. What
+        is held today, on our own participant and verified on 24 September 2026: <strong>1.0 cBTC</strong>
+        as a token-standard holding issued by the cBTC registry (<code>Utility.Registry.Holding</code>,
+        registrar <code>cbtc-network</code>), claimed through the CIP-56 transfer flow. It is a real
+        registry asset on DevNet, not a self-issued stand-in.</p>
     </div>
     <p>Figures cited on the <a href="/licensing">licensing</a> page carry their sources. The repository is
       source-available under a proprietary licence whose terms state that nothing in it is a price, a
@@ -190,11 +199,16 @@
       </ul></div>
     </div>
     <div class="disclosure">
-      <p><strong>Sandbox disclosure.</strong> The values on this site come from a hosted sandbox: an
-        in-process Canton ledger running the CrossDesk Daml packages, seeded with a demonstration book.
-        It is not a Canton Network participant and it is not connected to DevNet, TestNet or MainNet.
-        No fixing has been published for commercial use, and no committee has been convened.
-        Instruments in the demonstration basket are issued for demonstration.</p>
+      <p><strong>What this site is running on.</strong> Since 24 September 2026 the values and the
+        public API come from ETP Foundry's own Canton <strong>DevNet validator</strong>, running the
+        published Daml packages — not from a demonstration sandbox. The participant was approved by
+        the Canton Foundation on 23 September 2026 and holds real registry assets. It is DevNet:
+        it is not TestNet or MainNet, and nothing here settles a real obligation.</p>
+      <p><strong>What has not happened yet.</strong> <strong>No committee of third parties has been
+        seated, and no fixing has been attested by one.</strong> Values shown as "seed" are the
+        instrument's own reference mark and are not attestations. Where a value is attested by seats
+        ETP Foundry itself operates, it is labelled as a pilot on the value. No fixing has been
+        published for commercial use.</p>
       <p>ETP Foundry is not an authorised or registered benchmark administrator in any jurisdiction.
         Nothing on this site is a price, a valuation, a benchmark for regulatory purposes, investment
         advice, or an offer of any financial product or service. See <a href="/regulatory">Regulatory</a>.</p>
