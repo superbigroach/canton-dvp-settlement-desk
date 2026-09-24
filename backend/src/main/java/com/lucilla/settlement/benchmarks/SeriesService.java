@@ -151,6 +151,38 @@ public class SeriesService {
     }
 
     /**
+     * Could the administrator have produced every one of these signatures itself?
+     *
+     * <p>WHY THIS IS PUBLISHED. At trust level L1 the signer's party lives on the
+     * administrator's participant and the administrator exercises the choice on its behalf
+     * (rulebook §6.7, SIGNER_PROTOCOL §4a). That is honest for a pilot and dishonest as a
+     * destination, and the rulebook requires the pilot configuration to be printed on every
+     * value. A page that says "attested, 2 of 3" while all three seats are operated by the
+     * administrator tells a reader something untrue by omission, so the label says it.
+     *
+     * <p>The test is exact rather than rhetorical: a signer is administrator-operated when its
+     * party is one this desk is configured to act as. A seat held on the signer's own
+     * participant (L3) is not in that list, so the disclosure disappears by itself the day a
+     * real counterparty signs — nobody has to remember to remove it.
+     */
+    public boolean allSeatsAdministratorOperated(List<String> signerLabels) {
+        if (signerLabels == null || signerLabels.isEmpty()) return false;
+        List<LedgerService.PartyView> ours;
+        try {
+            ours = ledger.listParties();
+        } catch (RuntimeException e) {
+            return false;   // cannot prove it; say nothing rather than claim independence
+        }
+        for (String label : signerLabels) {
+            boolean mine = ours.stream().anyMatch(p ->
+                    p.label().equalsIgnoreCase(label) || p.party().equals(label)
+                            || p.party().startsWith(label + "::"));
+            if (!mine) return false;
+        }
+        return true;
+    }
+
+    /**
      * Is this fixing dated after today, in the instrument's own zone?
      *
      * <p>WHY THIS EXISTS. A {@code NavFixing} carries the date it claims to observe, and the

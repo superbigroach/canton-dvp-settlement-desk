@@ -119,8 +119,8 @@ public class PublicBenchmarkController {
             List<SeriesRow> rows = series.series(p.id());
             // `last` is the newest PUBLISHED VALUE (a tier-5 gap has no price to show);
             // `latest` is the newest row of any kind, so a missed strike is still visible.
-            last = rows.stream().filter(r -> r.price() != null).findFirst().map(PublicBenchmarkController::lastView).orElse(null);
-            latest = rows.stream().findFirst().map(PublicBenchmarkController::lastView).orElse(null);
+            last = rows.stream().filter(r -> r.price() != null).findFirst().map(this::view).orElse(null);
+            latest = rows.stream().findFirst().map(this::view).orElse(null);
         } catch (RuntimeException e) {
             out.put("error", "the ledger did not answer: " + e.getMessage());
         }
@@ -134,13 +134,25 @@ public class PublicBenchmarkController {
         return out;
     }
 
+    /** The published view of a row, with the pilot disclosure the rulebook requires on it. */
+    private Map<String, Object> view(SeriesRow r) {
+        boolean adminOperated = series.allSeatsAdministratorOperated(r.signers());
+        Map<String, Object> out = lastView(r, adminOperated);
+        out.put("seatsOperatedByAdministrator", adminOperated);
+        return out;
+    }
+
     static Map<String, Object> lastView(SeriesRow r) {
+        return lastView(r, false);
+    }
+
+    static Map<String, Object> lastView(SeriesRow r, boolean administratorOperated) {
         Map<String, Object> last = new LinkedHashMap<>();
         last.put("price", r.price());
         last.put("asOf", r.asOf());
         last.put("tier", r.tier());
         last.put("tierLabel", r.tierLabel());
-        last.put("displayLabel", displayLabel(r));
+        last.put("displayLabel", displayLabel(r, administratorOperated));
         last.put("k", r.k());
         last.put("n", r.n());
         last.put("signers", r.signers());
@@ -161,7 +173,20 @@ public class PublicBenchmarkController {
      * and in the series API, because the data model must not be bent to flatter the UI.
      */
     static String displayLabel(SeriesRow r) {
+        return displayLabel(r, false);
+    }
+
+    /**
+     * @param administratorOperated every signer's party is one the administrator can act as
+     *        (trust level L1). The rulebook requires the pilot configuration on every value,
+     *        so an attested row says so instead of reading as an independent committee.
+     */
+    static String displayLabel(SeriesRow r, boolean administratorOperated) {
         if (r.tier() == 5 && r.n() == 0) return "awaiting committee";
+        if (administratorOperated && ("attested".equals(r.tierLabel())
+                || "alternate-seats".equals(r.tierLabel()))) {
+            return "attested — pilot: every seat is operated by the administrator (L1)";
+        }
         return switch (r.tierLabel()) {
             case "attested" -> "attested";
             case "alternate-seats" -> "attested (alternate seats)";
