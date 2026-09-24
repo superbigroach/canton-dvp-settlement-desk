@@ -46,18 +46,26 @@ public class BenchmarkCatalog {
         }
         for (StrikeSchedule s : schedules.all()) {
             var inst = instruments.get(s.getInstrumentId());
+            // A SCHEDULE IS A PROMISE, AN INSTRUMENT IS A FACT. A product is published only
+            // when both exist: the schedule says a strike is declared for it, the instrument
+            // says this ledger actually carries it. Listing a scheduled product the ledger has
+            // never heard of advertises a benchmark that cannot be struck — on 24 Sep 2026 the
+            // site, newly pointed at the DevNet node, showed a fund with a null value for
+            // exactly that reason. When the ledger is still coming up `instruments` is empty and
+            // nothing is dropped, because an empty catalogue during a restart is the worse error.
+            if (inst == null && !instruments.isEmpty()) continue;
             String desc = inst == null ? "" : inst.description();
             out.put(s.getInstrumentId(), new Product(s.getInstrumentId(),
                     nameFor(s.getInstrumentId(), s.isFund(), s.getSession()),
                     s.isFund() ? "nav" : "wrapped",
                     s.getStrikeAt(), s.getTimezone(), desc, s.getSession()));
         }
-        for (var i : instruments.values()) {
-            if (LedgerCommands.FUND_KIND.equals(i.kind()) && !out.containsKey(i.id())) {
-                out.put(i.id(), new Product(i.id(), nameFor(i.id(), true, "Close"), "nav",
-                        "16:00", "Europe/London", i.description(), "Close"));
-            }
-        }
+        // WHY NO AUTO-PUBLISH. Every fund on the ledger used to become a public benchmark on
+        // sight, which is convenient on a seeded sandbox and wrong on a real network: the
+        // end-to-end suite creates a fund per run, and on 24 Sep 2026 one of them ("E2E173047")
+        // appeared on the public site the moment it was pointed at the DevNet node. Publishing
+        // is now a deliberate act — declare a strike schedule (operations runbook §2) and the
+        // fund appears; until then it is a fund, not a benchmark.
         return new ArrayList<>(out.values());
     }
 
