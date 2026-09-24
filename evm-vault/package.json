@@ -1,0 +1,28 @@
+{
+  "name": "etp-foundry-evm-vault",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ETP Foundry basket-as-a-service vault: in-kind create/redeem of a fixed basket of tokenised stocks with a K-of-N attested NAV posted on-chain by signature.",
+  "license": "MIT",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "clean": "hardhat clean",
+    "deploy:base-sepolia": "hardhat run scripts/deploy.ts --network baseSepolia",
+    "deploy:arc-testnet": "hardhat run scripts/deploy.ts --network arcTestnet",
+    "deploy:robinhood-testnet": "hardhat run scripts/deploy.ts --network robinhoodTestnet",
+    "post-nav:base-sepolia": "hardhat run scripts/post-nav.ts --network baseSepolia",
+    "post-nav:arc-testnet": "hardhat run scripts/post-nav.ts --network arcTestnet",
+    "post-nav:robinhood-testnet": "hardhat run scripts/post-nav.ts --network robinhoodTestnet"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@openzeppelin/contracts": "^5.0.2",
+    "@types/node": "^20.11.30",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.13.2",
+    "hardhat": "^2.22.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  }
+}
