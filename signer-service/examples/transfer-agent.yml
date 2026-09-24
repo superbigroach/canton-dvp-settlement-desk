@@ -1,0 +1,43 @@
+# ETP Foundry signer - ADMINISTRATOR / TRANSFER AGENT seat (docs/SIGNER_PROTOCOL.md §2f, v2).
+# Asserts: the share register - how many shares the NAV is divided by, and that the fees
+# deducted are the ones the fund's published schedule requires. You already do the fund's
+# accounting and are liable for it; the signature says the count you attest is the count
+# you carry. The transfer agent's conditions do not vary with the instrument's reserve model.
+#
+#   CROSSDESK_SANDBOX_USER=transfer-agent@sandbox.crossdesk node dist/index.js --config examples/transfer-agent.yml --check
+# (the sandbox roster may not seat a transfer agent; in production use CROSSDESK_API_KEY from the portal)
+
+crossdesk:
+  baseUrl: https://crossdesk-devnet-app.web.app
+  apiKey: ${CROSSDESK_API_KEY}
+  sandboxUser: ${CROSSDESK_SANDBOX_USER}
+  webhookSecret: ${CROSSDESK_WEBHOOK_SECRET}
+  poll:
+    enabled: true
+    intervalSeconds: 20
+
+server:
+  port: ${PORT:-8792}
+
+state:
+  file: ${SIGNER_STATE:-./signer-state.transfer-agent.json}
+
+seat: transfer-agent
+instruments: [CBTC]                            # the fund / ETP whose register you keep
+
+# No tolerances apply to this seat: reconciliation is exact, and fees only need to be non-negative.
+
+# Evidence mapping (backend field names, sent as-is):
+#   shares-outstanding-reconciled  { registerShares, ledgerShares }  registerShares == ledgerShares (exact)
+#   fees-accrued                   { accruedFees }                   accruedFees >= 0
+conditions:
+  shares-outstanding-reconciled:
+    # registerShares comes from YOUR register; ledgerShares from your own read of the
+    # ledger at the strike instant (a participant query, an indexer) - not from CrossDesk.
+    #   registerShares: { kind: command, command: "ta-cli shares-outstanding {instrument} --json", pointer: /shares }
+    #   ledgerShares:   { kind: http, url: https://indexer.example.com/supply/{instrument}, bearer: ${INDEXER_TOKEN}, pointer: /outstanding }
+    registerShares: 2500000
+    ledgerShares: 2500000
+  fees-accrued:
+    #   accruedFees: { kind: command, command: "ta-cli accruals {instrument} --asof strike --json", pointer: /total }
+    accruedFees: 1834.22

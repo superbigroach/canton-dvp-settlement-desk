@@ -1,6 +1,7 @@
 import { exec } from 'node:child_process';
 import { resolvePointer } from './jsonpointer';
 import type { SourceSpec } from './config';
+import { redact } from './log';
 
 /** What a source may reference in its url / command / headers. */
 export interface SourceContext {
@@ -38,12 +39,18 @@ export interface Runner {
 
 export const defaultFetcher: Fetcher = (url, init) => fetch(url, init);
 
+/**
+ * Runs the command. On failure the error carries the exit code and a redacted slice of
+ * stderr - NEVER `err.message`, because Node's exec puts the full substituted command line
+ * into it, and a command line can carry an inline credential.
+ */
 export const defaultRunner: Runner = (command, timeoutMs) =>
   new Promise((resolve, reject) => {
     exec(command, { timeout: timeoutMs, maxBuffer: 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
       if (err) {
-        const why = String(stderr || err.message).trim();
-        reject(new Error(`command failed (${err.code ?? 'signal ' + err.signal}): ${why}`));
+        const how = err.killed || err.signal ? `killed by ${err.signal ?? 'timeout'}` : `exit ${err.code ?? '?'}`;
+        const why = redact(String(stderr ?? '').trim().slice(0, 300));
+        reject(new Error(`command failed (${how})${why ? ': ' + why : ''}`));
         return;
       }
       resolve(String(stdout));
@@ -59,7 +66,7 @@ function parseBody(text: string, parse: 'json' | 'text' | undefined): unknown {
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error(`stdout/body is not JSON: ${text.slice(0, 120).replace(/\s+/g, ' ')}`);
+    throw new Error(`stdout/body is not JSON: ${redact(text.slice(0, 120).replace(/\s+/g, ' '))}`);
   }
 }
 
@@ -112,25 +119,33 @@ export class SourceResolver {
       signal: AbortSignal.timeout(spec.timeoutMs ?? 10000),
     });
     const text = await res.text();
-    if (!res.ok) throw new Error(`${spec.method ?? 'GET'} ${redact(url)} -> HTTP ${res.status}: ${text.slice(0, 160)}`);
+    if (!res.ok) throw new Error(`${spec.method ?? 'GET'} ${redactUrl(url)} -> HTTP ${res.status}: ${redact(text.slice(0, 160))}`);
     return parseBody(text, spec.parse);
   }
 
   private async command(spec: SourceSpec): Promise<unknown> {
     const cmd = interpolate(spec.command!, this.ctx);
-    const out = await this.runner(cmd, spec.timeoutMs ?? 10000);
+    let out: string;
+    try {
+      out = await this.runner(cmd, spec.timeoutMs ?? 10000);
+    } catch (e) {
+      // Name the source by its config path, never by its command line.
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(`${spec.label ?? 'command source'}: ${redact(msg)}`);
+    }
     return parseBody(out, spec.parse);
   }
 }
 
-function redact(url: string): string {
+function redactUrl(url: string): string {
   try {
     const u = new URL(url);
     for (const k of Array.from(u.searchParams.keys())) {
-      if (/key|token|secret|sig/i.test(k)) u.searchParams.set(k, '***');
+      if (/key|token|secret|sig|pass/i.test(k)) u.searchParams.set(k, '***');
     }
+    if (u.password) u.password = '***';
     return u.toString();
   } catch {
-    return url;
+    return redact(url);
   }
 }

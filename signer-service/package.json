@@ -1,7 +1,7 @@
 {
   "name": "@crossdesk/signer",
-  "version": "0.1.0",
-  "description": "CrossDesk reference signer service: evaluates a seat's named conditions from your own systems and confirms or refuses fixings with evidence.",
+  "version": "0.2.0",
+  "description": "ETP Foundry (CrossDesk) reference signer service, SIGNER_PROTOCOL v2: evaluates a seat's named conditions from your own systems and confirms or refuses fixings with evidence.",
   "license": "Apache-2.0",
   "private": true,
   "main": "dist/index.js",

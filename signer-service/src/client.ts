@@ -3,17 +3,19 @@
 export interface ProtocolCondition {
   name: string;
   passesWhen?: string;
-  /** Added by the backend alongside this service: the evidence fields the confirm must carry. */
+  /** The evidence schema: { required, verifiedBy, rule?, fields: [{ name, type, description }] }. */
   evidence?: unknown;
 }
 
 export interface ProtocolRole {
   key: string;
   title?: string;
+  uniquelyKnows?: string;
   conditions: ProtocolCondition[];
   requiresObservedRange?: boolean;
 }
 
+/** `GET /api/signer-protocol[?instrument=]` - the roles as they apply to that instrument's reserve model. */
 export interface SignerProtocol {
   version: string;
   roles: ProtocolRole[];
@@ -38,6 +40,7 @@ export interface Proposal {
   wrapperFactor?: number | string | null;
   status?: string;
   deadline?: string;
+  /** The seat's conditions as the ROW lists them - the strict profile. The per-instrument protocol lookup is authoritative. */
   conditions?: string[];
   requiresObservedRange?: boolean;
   my?: { seat?: string; action?: string; canConfirm?: boolean };
@@ -48,6 +51,8 @@ export interface HttpResult<T = unknown> {
   status: number;
   ok: boolean;
   body: T;
+  /** A 2xx whose body was not JSON. Never `ok`: a login page or a proxy error with a 200 is a failure, not data. */
+  nonJson?: boolean;
 }
 
 export class ApiError extends Error {
@@ -62,6 +67,10 @@ export interface ClientOptions {
   sandboxUser?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+}
+
+function snippet(text: unknown, n = 80): string {
+  return String(text ?? '').replace(/\s+/g, ' ').slice(0, n);
 }
 
 export class CrossDeskClient {
@@ -95,50 +104,83 @@ export class CrossDeskClient {
     });
     const text = await res.text();
     let parsed: unknown = text;
+    let isJson = false;
     try {
-      parsed = text ? JSON.parse(text) : null;
+      parsed = text.trim() ? JSON.parse(text) : null;
+      isJson = text.trim() !== '';
     } catch {
-      /* keep the text */
+      /* keep the text; the caller decides what a non-JSON body means */
+    }
+    if (res.ok && !isJson) {
+      // A 2xx that is not JSON is not a success. It is a captive portal, a proxy page, an
+      // empty reply from the wrong host - and iterating a string as a proposal list, or
+      // recording a confirm as done, would be acting on nothing (audit 2026-09-22, #15).
+      return { status: res.status, ok: false, body: parsed as T, nonJson: true };
     }
     return { status: res.status, ok: res.ok, body: parsed as T };
   }
 
   private async must<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
     const r = await this.request<T>(method, path, body);
+    if (r.nonJson) {
+      throw new ApiError(r.status, r.body, `${method} ${path} -> HTTP ${r.status} but the body is not JSON: '${snippet(r.body)}'`);
+    }
     if (!r.ok) {
       const b = r.body as unknown;
       const msg = typeof b === 'object' && b !== null && 'message' in b
         ? String((b as { message: unknown }).message)
-        : String(b).slice(0, 200);
+        : snippet(b, 200);
       throw new ApiError(r.status, r.body, `${method} ${path} -> HTTP ${r.status}: ${msg}`);
     }
     return r.body;
   }
 
-  signerProtocol(): Promise<SignerProtocol> {
-    return this.must<SignerProtocol>('GET', '/api/signer-protocol');
+  /**
+   * The protocol, with the ISSUER seat as the instrument's reserve model defines it when an
+   * instrument is given; the strict (attested) profile otherwise.
+   */
+  async signerProtocol(instrument?: string): Promise<SignerProtocol> {
+    const path = instrument ? `/api/signer-protocol?instrument=${encodeURIComponent(instrument)}` : '/api/signer-protocol';
+    const p = await this.must<SignerProtocol>('GET', path);
+    if (!p || typeof p !== 'object' || typeof p.version !== 'string' || !Array.isArray(p.roles)) {
+      throw new ApiError(200, p, `GET ${path} -> a JSON body that is not a signer protocol ({version, roles[]})`);
+    }
+    return p;
   }
 
   me(): Promise<Me> {
     return this.must<Me>('GET', '/api/me');
   }
 
+  private async proposalList(path: string): Promise<Proposal[]> {
+    const list = await this.must<unknown>('GET', path);
+    if (!Array.isArray(list)) {
+      throw new ApiError(200, list, `GET ${path} -> a JSON body that is not a list of proposals: '${snippet(JSON.stringify(list))}'`);
+    }
+    return list as Proposal[];
+  }
+
   openProposals(): Promise<Proposal[]> {
-    return this.must<Proposal[]>('GET', '/api/proposals?status=open&mine=true');
+    return this.proposalList('/api/proposals?status=open&mine=true');
   }
 
   allProposals(): Promise<Proposal[]> {
-    return this.must<Proposal[]>('GET', '/api/proposals?status=all&mine=true');
+    return this.proposalList('/api/proposals?status=all&mine=true');
   }
 
-  proposal(cid: string): Promise<Proposal> {
-    return this.must<Proposal>('GET', `/api/proposals/${encodeURIComponent(cid)}`);
+  async proposal(cid: string): Promise<Proposal> {
+    const p = await this.must<Proposal>('GET', `/api/proposals/${encodeURIComponent(cid)}`);
+    if (!p || typeof p !== 'object' || typeof p.cid !== 'string') {
+      throw new ApiError(200, p, `GET /api/proposals/${cid} -> a JSON body that is not a proposal`);
+    }
+    return p;
   }
 
   /**
    * Confirm-with-checks. `evidence` is keyed by condition - { "<condition>": { field: value } } -
-   * which the backend verifies for the issuer and lender seats; for the venue the traded
-   * range is also present at the top level as {low, high}, the shape the ledger enforces.
+   * which the backend verifies for every seat but the venue; for the venue the traded range
+   * is also present at the top level as {low, high}, the shape the ledger enforces, or is
+   * absent when the venue attests `no-prints-attested`.
    */
   confirm(cid: string, checks: string[], evidence: Record<string, unknown>): Promise<HttpResult> {
     return this.request('POST', `/api/proposals/${encodeURIComponent(cid)}/confirm`, { checks, evidence });

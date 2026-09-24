@@ -1,5 +1,14 @@
-# CrossDesk signer - VENUE seat (docs/SIGNER_PROTOCOL.md §2c).
-# Asserts: the mark sits where the asset traded. The traded range is enforced on-ledger.
+# ETP Foundry signer - VENUE seat (docs/SIGNER_PROTOCOL.md §2c and §2c-bis, v2).
+# Asserts: the mark sits where the asset traded - OR that nothing traded, and where the
+# book stood. The tape decides which claim the service makes on each proposal:
+#
+#   prints in the window   -> checks: traded-range + spread-within-tolerance + sufficient-volume
+#                             evidence: { low, high } (enforced on-ledger), spread, volume
+#   an EMPTY tape ([])     -> checks: no-prints-attested only
+#                             evidence: { bestBid, bestAsk }; no range is sent
+#
+# Never both. A null / missing tape is a source problem and HALTS (an absence of trades
+# and an absence of data are different facts).
 #
 # Try it now against the hosted sandbox, no account needed:
 #   CROSSDESK_SANDBOX_USER=venue@sandbox.crossdesk node dist/index.js --config examples/venue.yml
@@ -25,14 +34,22 @@ state:
 seat: venue
 instruments: [CBTC, cETH]
 
+venue:
+  attestNoPrints: true       # false = v1 behaviour: an empty window halts the seat instead
+
 tolerances:
   maxSpreadBps: 50       # spread-within-tolerance: best bid/ask at the strike, in bp of mid
   minVolume: 1           # sufficient-volume: units traded in the window
 
+# Evidence mapping (backend field names, sent as-is):
+#   traded-range             { prints } or { low, high }   low <= price <= high; the ledger refuses otherwise
+#   spread-within-tolerance  { spreadBps } or { bid, ask } spread (bp of mid) <= maxSpreadBps
+#   sufficient-volume        { volume }                    volume >= minVolume and > 0
+#   no-prints-attested       { bestBid, bestAsk }          0 = no quote on that side; when both are quoted,
+#                                                          bestBid <= price <= bestAsk, else refuse
 conditions:
   # The service computes low/high from the prints (numbers, or objects with price/px/p),
-  # or you may return {low, high} directly. The confirm carries {low, high} and the ledger
-  # refuses it if the proposed price is outside, inverted, or half-specified.
+  # or you may return {low, high} directly. An empty list means "nothing traded".
   traded-range:
     prints:
       # Sandbox stand-in: CBTC is seeded at 65000 and cETH at 2400. A real venue points
@@ -40,7 +57,7 @@ conditions:
       #   kind: http
       #   url: https://book.example.com/v1/trades?symbol={instrument}&window=strike
       #   bearer: ${BOOK_TOKEN}
-      #   pointer: /trades          # -> [{ price, size, ts }, ...]
+      #   pointer: /trades          # -> [{ price, size, ts }, ...]  ([] when nothing traded)
       kind: command
       command: node -e "const p=Number('{price}');console.log(JSON.stringify([p*0.999,p*1.0004,p*1.0012,p*0.9996]))"
       # ^ the sandbox has no venue book, so this synthesises four prints around the proposal.
@@ -59,3 +76,16 @@ conditions:
     volume:
       kind: static
       value: 12.5
+  no-prints-attested:
+    # Used only when the tape is empty. Same book snapshot as the spread; a side with no
+    # resting order reports 0.
+    #   bestBid: { kind: http, url: https://book.example.com/v1/book?symbol={instrument}, bearer: ${BOOK_TOKEN}, pointer: /bids/0/price }
+    #   bestAsk: { kind: http, url: https://book.example.com/v1/book?symbol={instrument}, bearer: ${BOOK_TOKEN}, pointer: /asks/0/price }
+    bestBid:
+      kind: command
+      command: node -e "const p=Number('{price}');console.log(JSON.stringify({bid:p*0.9995,ask:p*1.0005}))"
+      pointer: /bid
+    bestAsk:
+      kind: command
+      command: node -e "const p=Number('{price}');console.log(JSON.stringify({bid:p*0.9995,ask:p*1.0005}))"
+      pointer: /ask

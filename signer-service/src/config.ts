@@ -2,11 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 
-export type Seat = 'issuer' | 'lender' | 'venue';
-export const SEATS: Seat[] = ['issuer', 'lender', 'venue'];
+/** The five committee seats of SIGNER_PROTOCOL v2 (docs/SIGNER_PROTOCOL.md §2, §2e, §2f). */
+export type Seat = 'issuer' | 'lender' | 'venue' | 'custodian' | 'transfer-agent';
+export const SEATS: Seat[] = ['issuer', 'lender', 'venue', 'custodian', 'transfer-agent'];
 
 export interface SourceSpec {
   kind: 'static' | 'http' | 'command';
+  /** Where in the config this source was declared (`conditions.<condition>.<field>`) - for logs, never the command line. */
+  label?: string;
   /** static */
   value?: unknown;
   /** http */
@@ -34,12 +37,20 @@ export interface Config {
     webhookSecret?: string;
     poll: { enabled: boolean; intervalSeconds: number };
     timeoutMs: number;
+    /** How long a per-instrument `GET /api/signer-protocol?instrument=` answer is reused. */
+    protocolCacheSeconds: number;
   };
   server: { port: number; host: string; webhookPath: string };
   state: { file: string };
   seat: Seat;
   instruments: string[];
   tolerances: Record<string, number>;
+  /**
+   * Venue only. When the trade tape for the window is EMPTY, attest that fact with
+   * `no-prints-attested` + best bid/ask (protocol v2 §2c-bis) instead of halting.
+   * `attestNoPrints: false` restores the v1 behaviour: an empty window halts the seat.
+   */
+  venue: { attestNoPrints: boolean };
   conditions: ConditionSources;
 }
 
@@ -54,7 +65,16 @@ export const DEFAULT_TOLERANCES: Record<string, number> = {
   // venue
   maxSpreadBps: 50,
   minVolume: 0,
+  // custodian
+  holdingsMaxAgeHours: 24,
 };
+
+/**
+ * Evidence fields that ARE tolerances. They come from `tolerances:` and nowhere else - a
+ * data source may never supply them, or a checker could be widened from the outside by
+ * whatever answers the URL (audit 2026-09-22, medium #15).
+ */
+export const TOLERANCE_ONLY_FIELDS = new Set(['maxQueueDepth']);
 
 /**
  * ${VAR} and ${VAR:-default} in any string value are replaced from the environment.
@@ -130,6 +150,12 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env):
     }
     const out: Record<string, SourceSpec> = {};
     for (const [fname, spec] of Object.entries(fields as Record<string, unknown>)) {
+      if (TOLERANCE_ONLY_FIELDS.has(fname)) {
+        throw new Error(
+          `conditions.${cname}.${fname}: '${fname}' is a tolerance and comes from tolerances.${fname} only - `
+          + 'a data source may not set it (the protocol forbids a checker whose tolerances can be widened from outside)',
+        );
+      }
       out[fname] = parseSource(`conditions.${cname}.${fname}`, spec);
     }
     conditions[cname] = out;
@@ -143,6 +169,7 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env):
 
   const server = doc.server ?? {};
   const state = doc.state ?? {};
+  const venue = doc.venue ?? {};
   return {
     crossdesk: {
       baseUrl,
@@ -154,6 +181,7 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env):
         intervalSeconds: num(poll.intervalSeconds, 30),
       },
       timeoutMs: num(cd.timeoutMs, 15000),
+      protocolCacheSeconds: num(cd.protocolCacheSeconds, 300),
     },
     server: {
       port: num(server.port ?? env.PORT, 8787),
@@ -164,6 +192,7 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env):
     seat,
     instruments,
     tolerances,
+    venue: { attestNoPrints: bool(venue.attestNoPrints, true) },
     conditions,
   };
 }
@@ -171,12 +200,12 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env):
 function parseSource(where: string, spec: unknown): SourceSpec {
   // A bare scalar (or list) is shorthand for a static value.
   if (spec === null || typeof spec !== 'object' || Array.isArray(spec)) {
-    return { kind: 'static', value: spec };
+    return { kind: 'static', label: where, value: spec };
   }
   const s = spec as Record<string, unknown>;
   const kind = str(s.kind);
   if (kind === 'static' || (kind === undefined && 'value' in s)) {
-    return { kind: 'static', value: s.value };
+    return { kind: 'static', label: where, value: s.value };
   }
   if (kind === 'http') {
     const url = str(s.url);
@@ -185,6 +214,7 @@ function parseSource(where: string, spec: unknown): SourceSpec {
     for (const [k, v] of Object.entries((s.headers ?? {}) as Record<string, unknown>)) headers[k] = String(v);
     return {
       kind: 'http',
+      label: where,
       url,
       method: str(s.method)?.toUpperCase() === 'POST' ? 'POST' : 'GET',
       bearer: str(s.bearer),
@@ -199,6 +229,7 @@ function parseSource(where: string, spec: unknown): SourceSpec {
     if (!command) throw new Error(`${where}: command source needs command`);
     return {
       kind: 'command',
+      label: where,
       command,
       parse: str(s.parse) === 'text' ? 'text' : 'json',
       pointer: str(s.pointer),
@@ -206,6 +237,24 @@ function parseSource(where: string, spec: unknown): SourceSpec {
     };
   }
   throw new Error(`${where}: source kind must be static | http | command (got '${kind ?? 'none'}')`);
+}
+
+/**
+ * Every value in the config that must never appear in a log line: the CrossDesk key and
+ * webhook secret, and every bearer / header value a source carries. Registered with the
+ * logger at start so they are masked wherever they might surface (a stderr echo, an error).
+ */
+export function secretsOf(config: Config): string[] {
+  const out = new Set<string>();
+  if (config.crossdesk.apiKey) out.add(config.crossdesk.apiKey);
+  if (config.crossdesk.webhookSecret) out.add(config.crossdesk.webhookSecret);
+  for (const fields of Object.values(config.conditions)) {
+    for (const src of Object.values(fields)) {
+      if (src.bearer) out.add(src.bearer);
+      for (const v of Object.values(src.headers ?? {})) out.add(v);
+    }
+  }
+  return Array.from(out).filter((s) => s.length >= 8);
 }
 
 export function loadConfig(file: string, env: NodeJS.ProcessEnv = process.env): Config {

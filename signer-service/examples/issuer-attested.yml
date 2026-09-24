@@ -1,0 +1,66 @@
+# ETP Foundry signer - ISSUER seat, reserve model ATTESTED (docs/SIGNER_PROTOCOL.md §2a, v2).
+# For an asset whose reserve sits under an attestor set with a periodic proof-of-reserve
+# (cBTC / BitSafe). The service asks GET /api/signer-protocol?instrument=<id> per proposal
+# and evaluates exactly the conditions the issuer seat has under that instrument's model:
+#
+#   attested            attestor-quorum · reserves-current · reserves-cover-supply · redemption-queue-clear
+#   onchain-verifiable                    reserves-current · reserves-cover-supply · redemption-queue-clear
+#   custodial                             reserves-current · reserves-cover-supply · redemption-queue-clear
+#
+# One issuer config may list instruments of different models: configure the union of the
+# conditions, and the service applies each instrument's subset (attestor-quorum sources are
+# simply never resolved for a cETH proposal).
+#
+# Try it against the hosted sandbox:
+#   CROSSDESK_SANDBOX_USER=issuer@sandbox.crossdesk node dist/index.js --config examples/issuer-attested.yml --check
+# Production: CROSSDESK_API_KEY=ck_... (from the signer portal, shown once) and drop sandboxUser.
+
+crossdesk:
+  baseUrl: https://crossdesk-devnet-app.web.app
+  apiKey: ${CROSSDESK_API_KEY}
+  sandboxUser: ${CROSSDESK_SANDBOX_USER}       # issuer@sandbox.crossdesk
+  webhookSecret: ${CROSSDESK_WEBHOOK_SECRET}
+  poll:
+    enabled: true
+    intervalSeconds: 20
+  protocolCacheSeconds: 300                    # how long a per-instrument protocol answer is reused
+
+server:
+  port: ${PORT:-8789}
+
+state:
+  file: ${SIGNER_STATE:-./signer-state.issuer.json}
+
+seat: issuer
+instruments: [CBTC]                            # attested. cETH is onchain-verifiable: see issuer-onchain.yml
+
+tolerances:
+  reservesMaxAgeHours: 24   # reserves-current: max age of the proof-of-reserve (the portal's freshnessHours)
+  maxQueueDepth: 0          # redemption-queue-clear: requests unfilled beyond window that are tolerated.
+                            # A TOLERANCE: it comes from here only. A data source that sets
+                            # maxQueueDepth is refused at config load.
+
+# Evidence mapping - field names are the backend's (SignerEvidence.java) and are sent as-is:
+#   attestor-quorum         { quorumSigners, quorumThreshold }   passes when signers >= threshold
+#   reserves-current        { reservesAsOf }                     passes when age <= reservesMaxAgeHours
+#   reserves-cover-supply   { reserves, supply }                 passes when reserves >= supply
+#   redemption-queue-clear  { queueDepth } (+ maxQueueDepth from tolerances)  passes when depth <= max
+conditions:
+  attestor-quorum:
+    # One http source, two pointers: the service fetches the URL once per evaluation.
+    #   quorumSigners:   { kind: http, url: https://attest.example.com/status, bearer: ${ATTEST_TOKEN}, pointer: /online }
+    #   quorumThreshold: { kind: http, url: https://attest.example.com/status, bearer: ${ATTEST_TOKEN}, pointer: /threshold }
+    quorumSigners: 8
+    quorumThreshold: 7
+  reserves-current:
+    # The timestamp of the latest proof-of-reserve attestation (ISO 8601 or epoch seconds).
+    #   reservesAsOf: { kind: command, command: "psql -At -c \"select max(attested_at) from por\"", parse: text }
+    reservesAsOf:
+      kind: command
+      command: node -e "console.log(new Date().toISOString())"
+      parse: text
+  reserves-cover-supply:
+    reserves: 1250.75      # attested reserves, in units of the underlying
+    supply: 1200.00        # circulating supply of the wrapped token
+  redemption-queue-clear:
+    queueDepth: 0          # requests unfilled beyond their stated window

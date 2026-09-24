@@ -14,6 +14,8 @@ export interface Health {
   poll: { enabled: boolean; intervalSeconds: number; lastAt: string | null; lastOk: boolean | null; lastError: string | null };
   acted: number;
   protocolVersion: string | null;
+  /** instrument -> reserve model, as inferred from `GET /api/signer-protocol?instrument=` at preflight. */
+  reserveModels: Record<string, string>;
   startedAt: string;
 }
 
@@ -29,6 +31,8 @@ export function createApp(config: Config, client: CrossDeskClient, rt: Runtime):
   app.get('/health', (_req: Request, res: Response) => {
     const h = rt.health;
     h.acted = rt.deps.state.size();
+    // Red whenever the last poll did not yield a proposal list - a 5xx, a timeout, or a
+    // 2xx whose body was not JSON. The poller reports all three the same way.
     h.status = h.poll.enabled && h.poll.lastOk === false ? 'degraded' : 'ok';
     res.status(h.status === 'ok' ? 200 : 503).json(h);
   });

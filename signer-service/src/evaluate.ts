@@ -1,10 +1,14 @@
 /**
- * The seat rules - docs/SIGNER_PROTOCOL.md §2 as code.
+ * The seat rules - docs/SIGNER_PROTOCOL.md §2 (v2) as code, one rule per named condition.
  *
  * Every rule takes the evidence fields its sources produced and the proposal, and returns
  * pass/fail with the numbers that decided it. A rule never widens a tolerance and never
- * passes on missing evidence: a field that did not resolve is a HALT (escalate, retry),
- * not a refusal - a refusal is a statement about the numbers, and there are none.
+ * passes on missing evidence: a field that did not resolve, or resolved to something the
+ * rule cannot read, is a HALT (escalate, retry), not a refusal - a refusal is a statement
+ * about the numbers, and there are none.
+ *
+ * The field names are the backend's (SignerEvidence.java): what a rule puts in `evidence`
+ * is exactly the block CrossDesk verifies server-side before it submits the confirm.
  */
 import type { Seat } from './config';
 
@@ -48,6 +52,13 @@ function asNumber(condition: string, field: string, v: unknown): number {
   return n;
 }
 
+/** A number that cannot be negative by definition (a count, a holding). Negative = unreadable data, not a failed rule. */
+function asNonNegative(condition: string, field: string, v: unknown): number {
+  const n = asNumber(condition, field, v);
+  if (n < 0) throw new MissingEvidence(condition, field, `'${field}' cannot be negative: ${n}`);
+  return n;
+}
+
 function asDate(condition: string, field: string, v: unknown): Date {
   if (v === undefined || v === null || v === '') throw new MissingEvidence(condition, field, `no value for '${field}'`);
   const d = typeof v === 'number' ? new Date(v < 1e12 ? v * 1000 : v) : new Date(String(v));
@@ -76,6 +87,15 @@ export function tidy<T extends Record<string, unknown>>(o: T): T {
   return out as T;
 }
 
+/**
+ * Is this what a venue's tape looks like when NOTHING traded in the window? Only an
+ * explicit empty list says so. `null`, a missing field or garbage is a source problem,
+ * which halts - an absence of trades and an absence of data are different facts.
+ */
+export function isEmptyTape(prints: unknown): boolean {
+  return Array.isArray(prints) && prints.length === 0;
+}
+
 /** A list of prints: numbers, or objects with price / px / p, or {low, high}. */
 function rangeOf(condition: string, prints: unknown): { low: number; high: number; count: number } {
   if (prints !== null && typeof prints === 'object' && !Array.isArray(prints)) {
@@ -99,15 +119,33 @@ function rangeOf(condition: string, prints: unknown): { low: number; high: numbe
   return { low: ledgerNumber(low), high: ledgerNumber(high), count: prints.length };
 }
 
+/** A statement / attestation timestamp against a max age in hours. Shared by the issuer's and the custodian's freshness rules. */
+function freshness(condition: string, field: string, v: unknown, ctx: EvalContext, toleranceKey: string, what: string): RuleResult {
+  const asOf = asDate(condition, field, v);
+  const ageHours = (ctx.now.getTime() - asOf.getTime()) / 3_600_000;
+  const maxAge = ctx.tolerances[toleranceKey];
+  const pass = ageHours >= -0.25 && ageHours <= maxAge;
+  return {
+    pass,
+    values: { [field]: asOf.toISOString(), ageHours: round(ageHours, 2), maxAgeHours: maxAge },
+    evidence: { [field]: asOf.toISOString() },
+    reason: `${what} as of ${asOf.toISOString()} is ${round(ageHours, 1)}h old (max ${maxAge}h)`,
+  };
+}
+
 export const RULES: Record<Seat, Record<string, RuleSpec>> = {
+  // §2a - redemption integrity. Which of these apply depends on the instrument's reserve
+  // model (GET /api/signer-protocol?instrument=): attested = all four; onchain-verifiable
+  // and custodial = the last three. The handler evaluates exactly what the protocol lists.
   issuer: {
     'attestor-quorum': {
       needs: [['quorumSigners', 'quorumThreshold']],
       rule: (f) => {
         const c = 'attestor-quorum';
-        const quorumSigners = asNumber(c, 'quorumSigners', f.quorumSigners);
+        const quorumSigners = asNonNegative(c, 'quorumSigners', f.quorumSigners);
         const quorumThreshold = asNumber(c, 'quorumThreshold', f.quorumThreshold);
-        const pass = quorumSigners >= quorumThreshold && quorumThreshold > 0;
+        if (quorumThreshold <= 0) throw new MissingEvidence(c, 'quorumThreshold', `quorumThreshold must be positive: ${quorumThreshold}`);
+        const pass = quorumSigners >= quorumThreshold;
         return {
           pass,
           values: { quorumSigners, quorumThreshold },
@@ -118,27 +156,15 @@ export const RULES: Record<Seat, Record<string, RuleSpec>> = {
     },
     'reserves-current': {
       needs: [['reservesAsOf']],
-      rule: (f, ctx) => {
-        const c = 'reserves-current';
-        const asOf = asDate(c, 'reservesAsOf', f.reservesAsOf);
-        const ageHours = (ctx.now.getTime() - asOf.getTime()) / 3_600_000;
-        const maxAge = ctx.tolerances.reservesMaxAgeHours;
-        const pass = ageHours >= -0.25 && ageHours <= maxAge;
-        return {
-          pass,
-          values: { reservesAsOf: asOf.toISOString(), ageHours: round(ageHours, 2), maxAgeHours: maxAge },
-          evidence: { reservesAsOf: asOf.toISOString() },
-          reason: `proof of reserve as of ${asOf.toISOString()} is ${round(ageHours, 1)}h old (max ${maxAge}h)`,
-        };
-      },
+      rule: (f, ctx) => freshness('reserves-current', 'reservesAsOf', f.reservesAsOf, ctx, 'reservesMaxAgeHours', 'proof of reserve'),
     },
     'reserves-cover-supply': {
       needs: [['reserves', 'supply']],
       rule: (f) => {
         const c = 'reserves-cover-supply';
-        const reserves = asNumber(c, 'reserves', f.reserves);
-        const supply = asNumber(c, 'supply', f.supply);
-        const pass = reserves >= supply && supply >= 0;
+        const reserves = asNonNegative(c, 'reserves', f.reserves);
+        const supply = asNonNegative(c, 'supply', f.supply);
+        const pass = reserves >= supply;
         const coverage = supply > 0 ? round(reserves / supply, 6) : null;
         return {
           pass,
@@ -152,8 +178,10 @@ export const RULES: Record<Seat, Record<string, RuleSpec>> = {
       needs: [['queueDepth']],
       rule: (f, ctx) => {
         const c = 'redemption-queue-clear';
-        const queueDepth = asNumber(c, 'queueDepth', f.queueDepth);
-        const maxQueueDepth = f.maxQueueDepth === undefined ? ctx.tolerances.maxQueueDepth : asNumber(c, 'maxQueueDepth', f.maxQueueDepth);
+        const queueDepth = asNonNegative(c, 'queueDepth', f.queueDepth);
+        // The tolerance is CONFIG. A source-supplied maxQueueDepth is refused at config
+        // load (TOLERANCE_ONLY_FIELDS) and ignored here even if one slips through.
+        const maxQueueDepth = ctx.tolerances.maxQueueDepth;
         const pass = queueDepth <= maxQueueDepth;
         return {
           pass,
@@ -165,6 +193,7 @@ export const RULES: Record<Seat, Record<string, RuleSpec>> = {
     },
   },
 
+  // §2b - the mark is safe to lend against.
   lender: {
     'independent-mark-within-tolerance': {
       needs: [['independentMark']],
@@ -187,7 +216,7 @@ export const RULES: Record<Seat, Record<string, RuleSpec>> = {
       needs: [['liquidationsToday', 'worstDeviationBps']],
       rule: (f, ctx) => {
         const c = 'liquidations-consistent';
-        const liquidationsToday = asNumber(c, 'liquidationsToday', f.liquidationsToday);
+        const liquidationsToday = asNonNegative(c, 'liquidationsToday', f.liquidationsToday);
         const worstDeviationBps = liquidationsToday === 0 && (f.worstDeviationBps === undefined || f.worstDeviationBps === null)
           ? 0
           : asNumber(c, 'worstDeviationBps', f.worstDeviationBps);
@@ -207,13 +236,20 @@ export const RULES: Record<Seat, Record<string, RuleSpec>> = {
       needs: [['acceptedAt']],
       rule: (f, ctx) => {
         const c = 'book-acceptance';
-        if (f.acceptedAt === false || f.acceptedAt === null || f.acceptedAt === undefined) {
+        // An explicit `false` is the book SAYING no: a refusal with a reason. A null or
+        // missing stamp is the book saying nothing - that is unevaluable and halts
+        // (audit 2026-09-22, medium #15: it used to refuse, which put a "no" on the
+        // record that nobody had actually given).
+        if (f.acceptedAt === false) {
           return {
             pass: false,
-            values: { acceptedAt: null },
+            values: { acceptedAt: false, price: ctx.price },
             evidence: {},
             reason: `book did not accept ${ctx.price} for ${ctx.instrument}`,
           };
+        }
+        if (f.acceptedAt === null || f.acceptedAt === undefined || f.acceptedAt === '') {
+          throw new MissingEvidence(c, 'acceptedAt', 'the book returned no acceptance stamp (null) - neither accepted nor declined');
         }
         const acceptedAt = asDate(c, 'acceptedAt', f.acceptedAt);
         const ageMin = (ctx.now.getTime() - acceptedAt.getTime()) / 60_000;
@@ -231,6 +267,9 @@ export const RULES: Record<Seat, Record<string, RuleSpec>> = {
     },
   },
 
+  // §2c - the mark sits where the asset traded; §2c-bis - or nothing traded, and the
+  // venue says so. The handler picks the mode from the tape: prints -> traded-range +
+  // spread + volume; an empty tape -> no-prints-attested alone. Never both.
   venue: {
     'traded-range': {
       needs: [['prints'], ['low', 'high']],
@@ -276,7 +315,7 @@ export const RULES: Record<Seat, Record<string, RuleSpec>> = {
       needs: [['volume']],
       rule: (f, ctx) => {
         const c = 'sufficient-volume';
-        const volume = asNumber(c, 'volume', f.volume);
+        const volume = asNonNegative(c, 'volume', f.volume);
         const min = ctx.tolerances.minVolume;
         const pass = volume >= min && volume > 0;
         return {
@@ -284,6 +323,100 @@ export const RULES: Record<Seat, Record<string, RuleSpec>> = {
           values: { volume, minVolume: min },
           evidence: { volume },
           reason: `traded volume ${volume} in window (minimum ${min})`,
+        };
+      },
+    },
+    'no-prints-attested': {
+      needs: [['bestBid', 'bestAsk']],
+      rule: (f, ctx) => {
+        const c = 'no-prints-attested';
+        // 0 on either side means the book had no quote there. Both zero is an empty
+        // book: a weaker but true statement, and the backend accepts it (SignerEvidence).
+        const bestBid = asNonNegative(c, 'bestBid', f.bestBid);
+        const bestAsk = asNonNegative(c, 'bestAsk', f.bestAsk);
+        const quoted = bestBid > 0 && bestAsk > 0;
+        if (quoted && bestBid > bestAsk) throw new MissingEvidence(c, 'bestBid', `crossed quote: bestBid ${bestBid} > bestAsk ${bestAsk}`);
+        const pass = !quoted || (bestBid <= ctx.price && ctx.price <= bestAsk);
+        return {
+          pass,
+          values: { bestBid, bestAsk, quoted, proposed: ctx.price },
+          evidence: { bestBid, bestAsk },
+          reason: !quoted
+            ? `no prints in the window and no two-sided quote (bid ${bestBid}, ask ${bestAsk}); the proposal is not contradicted`
+            : `no prints in the window; proposed ${ctx.price} ${pass ? 'inside' : 'outside'} best bid/ask ${bestBid}/${bestAsk}`,
+        };
+      },
+    },
+  },
+
+  // §2e - what is actually in the account.
+  custodian: {
+    'holdings-current': {
+      needs: [['statementAsOf']],
+      rule: (f, ctx) => freshness('holdings-current', 'statementAsOf', f.statementAsOf, ctx, 'holdingsMaxAgeHours', 'holdings statement'),
+    },
+    'holdings-cover-supply': {
+      needs: [['holdings', 'supply']],
+      rule: (f) => {
+        const c = 'holdings-cover-supply';
+        const holdings = asNonNegative(c, 'holdings', f.holdings);
+        const supply = asNonNegative(c, 'supply', f.supply);
+        const pass = holdings >= supply;
+        const coverage = supply > 0 ? round(holdings / supply, 6) : null;
+        return {
+          pass,
+          values: { holdings, supply, coverage },
+          evidence: { holdings, supply },
+          reason: `holdings in custody ${holdings} vs issued supply ${supply}${coverage !== null ? ` (coverage ${coverage}x)` : ''}`,
+        };
+      },
+    },
+    'no-encumbrance': {
+      needs: [['encumbered']],
+      rule: (f) => {
+        const c = 'no-encumbrance';
+        const encumbered = asNonNegative(c, 'encumbered', f.encumbered);
+        const pass = encumbered === 0;
+        return {
+          pass,
+          values: { encumbered },
+          evidence: { encumbered },
+          reason: pass ? 'holdings are unencumbered' : `${encumbered} unit(s) pledged, lent or otherwise encumbered`,
+        };
+      },
+    },
+  },
+
+  // §2f - the share register the NAV is divided by.
+  'transfer-agent': {
+    'shares-outstanding-reconciled': {
+      needs: [['registerShares', 'ledgerShares']],
+      rule: (f) => {
+        const c = 'shares-outstanding-reconciled';
+        const registerShares = asNonNegative(c, 'registerShares', f.registerShares);
+        const ledgerShares = asNonNegative(c, 'ledgerShares', f.ledgerShares);
+        const pass = registerShares === ledgerShares;
+        return {
+          pass,
+          values: { registerShares, ledgerShares, difference: ledgerNumber(registerShares - ledgerShares) },
+          evidence: { registerShares, ledgerShares },
+          reason: pass
+            ? `register and ledger agree at ${registerShares} shares outstanding`
+            : `register shows ${registerShares} shares but the ledger shows ${ledgerShares}`,
+        };
+      },
+    },
+    'fees-accrued': {
+      needs: [['accruedFees']],
+      rule: (f) => {
+        const c = 'fees-accrued';
+        const accruedFees = asNumber(c, 'accruedFees', f.accruedFees);
+        const pass = accruedFees >= 0;
+        return {
+          pass,
+          values: { accruedFees },
+          evidence: { accruedFees },
+          reason: pass ? `accrued fees and liabilities ${accruedFees} to the strike` : `accrued fees are negative (${accruedFees})`,
         };
       },
     },

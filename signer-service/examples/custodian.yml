@@ -1,0 +1,51 @@
+# ETP Foundry signer - CUSTODIAN / reserve holder seat (docs/SIGNER_PROTOCOL.md §2e, v2).
+# Asserts: what is actually in the account. You are the only party who can see the
+# holdings, so nothing here is derivable from the proposal - point every source at your
+# custody ledger. The custodian's conditions do not vary with the instrument's reserve model.
+#
+#   CROSSDESK_SANDBOX_USER=custodian@sandbox.crossdesk node dist/index.js --config examples/custodian.yml --check
+# (the sandbox roster may not seat a custodian; in production use CROSSDESK_API_KEY from the portal)
+
+crossdesk:
+  baseUrl: https://crossdesk-devnet-app.web.app
+  apiKey: ${CROSSDESK_API_KEY}
+  sandboxUser: ${CROSSDESK_SANDBOX_USER}
+  webhookSecret: ${CROSSDESK_WEBHOOK_SECRET}
+  poll:
+    enabled: true
+    intervalSeconds: 20
+
+server:
+  port: ${PORT:-8791}
+
+state:
+  file: ${SIGNER_STATE:-./signer-state.custodian.json}
+
+seat: custodian
+instruments: [CBTC]
+
+tolerances:
+  holdingsMaxAgeHours: 24   # holdings-current: max age of your latest holdings statement.
+                            # Match the freshnessHours declared for the asset in your portal
+                            # settings; CrossDesk re-checks the statement age against that.
+
+# Evidence mapping (backend field names, sent as-is):
+#   holdings-current       { statementAsOf }       age <= holdingsMaxAgeHours
+#   holdings-cover-supply  { holdings, supply }    holdings >= supply
+#   no-encumbrance         { encumbered }          encumbered == 0 (pledged, lent or rehypothecated units)
+conditions:
+  holdings-current:
+    # e.g. statementAsOf: { kind: http, url: https://custody.example.com/accounts/{instrument}/statement, bearer: ${CUSTODY_TOKEN}, pointer: /asOf }
+    statementAsOf:
+      kind: command
+      command: node -e "console.log(new Date().toISOString())"
+      parse: text
+  holdings-cover-supply:
+    # One statement read can serve all three numbers (same url -> one fetch per evaluation):
+    #   holdings: { kind: http, url: https://custody.example.com/accounts/{instrument}/statement, bearer: ${CUSTODY_TOKEN}, pointer: /balance }
+    #   supply:   { kind: http, url: https://registry.example.com/tokens/{instrument}, bearer: ${REGISTRY_TOKEN}, pointer: /issued }
+    holdings: 1000000
+    supply: 1000000
+  no-encumbrance:
+    #   encumbered: { kind: http, url: https://custody.example.com/accounts/{instrument}/statement, bearer: ${CUSTODY_TOKEN}, pointer: /encumbered }
+    encumbered: 0

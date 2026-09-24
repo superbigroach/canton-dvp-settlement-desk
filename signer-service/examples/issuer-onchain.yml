@@ -1,0 +1,53 @@
+# ETP Foundry signer - ISSUER seat, reserve model ONCHAIN-VERIFIABLE (docs/SIGNER_PROTOCOL.md §2a, v2).
+# For an asset whose reserve is locked in protocol-controlled contracts, verifiable at any
+# block (cETH / onRails). There is NO attestor set, so the protocol does not ask for
+# attestor-quorum - GET /api/signer-protocol?instrument=cETH lists three issuer conditions,
+# and reserves-current means "your own on-chain read of the lock is fresh".
+#
+# The service evaluates exactly those three. Configuring attestor-quorum here would be
+# refused at preflight ("not an issuer condition for any configured instrument").
+#
+#   CROSSDESK_SANDBOX_USER=issuer@sandbox.crossdesk node dist/index.js --config examples/issuer-onchain.yml --check
+
+crossdesk:
+  baseUrl: https://crossdesk-devnet-app.web.app
+  apiKey: ${CROSSDESK_API_KEY}
+  sandboxUser: ${CROSSDESK_SANDBOX_USER}       # issuer@sandbox.crossdesk
+  webhookSecret: ${CROSSDESK_WEBHOOK_SECRET}
+  poll:
+    enabled: true
+    intervalSeconds: 20
+
+server:
+  port: ${PORT:-8790}
+
+state:
+  file: ${SIGNER_STATE:-./signer-state.issuer-onchain.json}
+
+seat: issuer
+instruments: [cETH]                            # onchain-verifiable on the sandbox (RESERVE_MODEL_CETH)
+
+tolerances:
+  reservesMaxAgeHours: 24   # reserves-current: max age of YOUR last on-chain verification of the lock
+  maxQueueDepth: 0          # redemption-queue-clear (tolerance; never from a data source)
+
+# Evidence mapping (backend field names, sent as-is):
+#   reserves-current        { reservesAsOf }      the time you last read the lock on-chain; age <= reservesMaxAgeHours
+#   reserves-cover-supply   { reserves, supply }  locked reserve >= circulating supply
+#   redemption-queue-clear  { queueDepth }        + maxQueueDepth from tolerances
+conditions:
+  reserves-current:
+    # Point this at whatever records your last on-chain read, e.g. an indexer:
+    #   reservesAsOf: { kind: http, url: https://indexer.example.com/lock/{instrument}, bearer: ${INDEXER_TOKEN}, pointer: /verifiedAt }
+    reservesAsOf:
+      kind: command
+      command: node -e "console.log(new Date().toISOString())"
+      parse: text
+  reserves-cover-supply:
+    # One read of the lock contract can serve both fields (same url -> one fetch):
+    #   reserves: { kind: http, url: https://indexer.example.com/lock/{instrument}, bearer: ${INDEXER_TOKEN}, pointer: /locked }
+    #   supply:   { kind: http, url: https://indexer.example.com/lock/{instrument}, bearer: ${INDEXER_TOKEN}, pointer: /minted }
+    reserves: 40210.5
+    supply: 40000.0
+  redemption-queue-clear:
+    queueDepth: 0

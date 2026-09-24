@@ -1,6 +1,7 @@
-# CrossDesk signer - LENDER seat (docs/SIGNER_PROTOCOL.md §2b).
+# ETP Foundry signer - LENDER seat (docs/SIGNER_PROTOCOL.md §2b, v2).
 # Asserts: the mark is safe to lend against. book-acceptance is the one that carries weight -
 # it says you will mark your own collateral here. Wire it to the system that actually does.
+# The lender's conditions do not vary with the instrument's reserve model.
 #
 #   CROSSDESK_SANDBOX_USER=lender@sandbox.crossdesk node dist/index.js --config examples/lender.yml
 
@@ -23,10 +24,17 @@ seat: lender
 instruments: [CBTC, cETH]
 
 tolerances:
-  markToleranceBps: 25            # independent-mark-within-tolerance (protocol recommends 25bp)
+  markToleranceBps: 25            # independent-mark-within-tolerance (protocol recommends 25bp).
+                                  # Keep it equal to tolerances.markBps in your portal settings:
+                                  # CrossDesk re-checks the mark against THAT before submitting.
   liquidationToleranceBps: 100    # liquidations-consistent: worst clearing deviation allowed
   bookAcceptanceMaxAgeMinutes: 60 # book-acceptance: how fresh the acceptance stamp must be
 
+# Evidence mapping (backend field names, sent as-is):
+#   independent-mark-within-tolerance  { independentMark }                     |price - mark| / mark <= markToleranceBps; deviationBps is added
+#   liquidations-consistent            { liquidationsToday, worstDeviationBps } none, or worst <= liquidationToleranceBps
+#   book-acceptance                    { acceptedAt }                          a stamp within bookAcceptanceMaxAgeMinutes.
+#                                      `false` = the book said no (refuse). null / missing = no answer (HALT, retry).
 conditions:
   independent-mark-within-tolerance:
     # Your own valuation of the wrapper - NOT read from CrossDesk. The sandbox has no lender

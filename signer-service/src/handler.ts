@@ -1,17 +1,23 @@
 /**
- * The decision loop for one proposal: resolve sources -> evaluate every condition of the
- * seat -> confirm with evidence, or refuse naming the failed condition -> record.
+ * The decision loop for one proposal: look up the seat's conditions for THIS instrument
+ * (its reserve model) -> resolve sources -> evaluate every one of them -> confirm with
+ * evidence, or refuse naming the failed condition -> record.
  *
  * Three outcomes, deliberately distinct:
  *   confirm  every condition passed; evidence attached; recorded (never repeated)
  *   refuse   a condition FAILED on real numbers; the refusal names it; recorded
- *   halt     a condition could not be evaluated (source down, field missing, unconfigured);
+ *   halt     a condition could not be evaluated (source down, field missing, unconfigured,
+ *            protocol lookup failed, tape empty and no-prints attestation disabled);
  *            nothing is sent; NOT recorded, so the next poll retries after the operator fixes it
+ *
+ * The rule that never bends: a halt is never turned into a confirm. Any condition the
+ * service cannot decide on real numbers stops the whole proposal.
  */
 import type { Config, Seat } from './config';
 import type { CrossDeskClient, Proposal, ProtocolRole } from './client';
 import { ApiError } from './client';
-import { MissingEvidence, ruleFor, satisfiedAlternative, tidy, type RuleResult } from './evaluate';
+import { MissingEvidence, isEmptyTape, ruleFor, satisfiedAlternative, tidy, type RuleResult } from './evaluate';
+import { ProtocolCache, type InstrumentProtocol, type ProtocolLookup } from './protocol';
 import { SourceResolver, type Fetcher, type Runner } from './sources';
 import type { State } from './state';
 import * as log from './log';
@@ -29,6 +35,10 @@ export interface Decision {
   cid: string;
   instrument: string;
   price: number;
+  /** What the protocol said for this instrument, when the lookup succeeded. */
+  protocol?: { version: string; model: string; conditions: string[] };
+  /** venue only: which claim the tape led to. */
+  venueMode?: 'traded-range' | 'no-prints-attested';
   conditions: Record<string, ConditionOutcome | { error: string }>;
   checks: string[];
   evidence: Record<string, unknown>;
@@ -41,7 +51,8 @@ export interface HandlerDeps {
   config: Config;
   client: CrossDeskClient;
   state: State;
-  role: ProtocolRole | undefined;
+  /** Per-instrument protocol lookup. Defaults to a cached `GET /api/signer-protocol?instrument=`. */
+  protocol?: ProtocolLookup;
   fetcher?: Fetcher;
   runner?: Runner;
   now?: () => Date;
@@ -76,24 +87,101 @@ function declaredEvidenceFields(role: ProtocolRole | undefined, condition: strin
   return [];
 }
 
-/** Evaluate every condition without sending anything. Pure apart from the sources. */
+const lookups = new WeakMap<CrossDeskClient, ProtocolLookup>();
+
+function lookupFor(deps: HandlerDeps): ProtocolLookup {
+  if (deps.protocol) return deps.protocol;
+  let l = lookups.get(deps.client);
+  if (!l) {
+    l = new ProtocolCache(deps.client, deps.config.seat, deps.config.crossdesk.protocolCacheSeconds * 1000).lookup;
+    lookups.set(deps.client, l);
+  }
+  return l;
+}
+
+/** Evaluate every condition without sending anything. Pure apart from the sources and the protocol lookup. */
 export async function evaluateProposal(deps: HandlerDeps, p: Proposal): Promise<Decision> {
   const { config } = deps;
   const seat: Seat = config.seat;
   const price = priceOf(p);
   const key = proposalKey(p);
   const now = deps.now ? deps.now() : new Date();
-  const conditions = (p.conditions && p.conditions.length > 0)
-    ? p.conditions
-    : (deps.role?.conditions.map((c) => c.name) ?? Object.keys(config.conditions));
-
-  const resolver = new SourceResolver({ instrument: p.instrument, price, cid: p.cid, seat }, deps.fetcher, deps.runner);
   const out: Decision = { decision: 'halt', key, cid: p.cid, instrument: p.instrument, price, conditions: {}, checks: [], evidence: {} };
 
+  // 1. Which conditions this seat has for THIS instrument. The proposal row lists the
+  //    strict profile; the per-instrument protocol is the one the confirm route enforces.
+  let proto: InstrumentProtocol;
+  try {
+    proto = await lookupFor(deps)(p.instrument);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    out.halt = `protocol lookup for ${p.instrument} failed: ${msg}`;
+    return out;
+  }
+  const role = proto.role;
+  let conditions = role.conditions.map((c) => c.name);
+  out.protocol = { version: proto.version, model: proto.model, conditions };
+  if (p.conditions && p.conditions.length && p.conditions.join() !== conditions.join()) {
+    log.debug('protocol.profile', { instrument: p.instrument, model: proto.model, row: p.conditions, applied: conditions });
+  }
+
+  const resolver = new SourceResolver({ instrument: p.instrument, price, cid: p.cid, seat }, deps.fetcher, deps.runner);
+  const resolved = new Map<string, Record<string, unknown>>();
+
+  /** Every configured field of a condition, resolved once. Throws on a source failure. */
+  const fieldsOf = async (name: string): Promise<Record<string, unknown>> => {
+    const hit = resolved.get(name);
+    if (hit) return hit;
+    const fields: Record<string, unknown> = {};
+    for (const [fname, src] of Object.entries(config.conditions[name] ?? {})) fields[fname] = await resolver.resolve(src);
+    resolved.set(name, fields);
+    return fields;
+  };
+
+  // 2. The venue has two mutually exclusive claims. The TAPE decides which one applies:
+  //    prints in the window -> traded-range (+ spread + volume); an explicitly empty tape
+  //    -> no-prints-attested alone, with the best bid/ask. Never both, never neither.
+  if (seat === 'venue') {
+    const hasNoPrintsCondition = conditions.includes('no-prints-attested');
+    if (!config.conditions['traded-range']) {
+      out.halt = "no data source configured for 'traded-range' (the venue's tape decides which claim applies)";
+      out.conditions['traded-range'] = { error: out.halt };
+      return out;
+    }
+    let tape: Record<string, unknown>;
+    try {
+      tape = await fieldsOf('traded-range');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      out.conditions['traded-range'] = { error: `source failed: ${msg}` };
+      out.halt = `'traded-range': source failed: ${msg}`;
+      return out;
+    }
+    if (isEmptyTape(tape.prints)) {
+      if (!config.venue.attestNoPrints) {
+        out.halt = 'no prints in the window and venue.attestNoPrints is off - nothing to attest';
+        out.conditions['traded-range'] = { error: out.halt };
+        return out;
+      }
+      if (!hasNoPrintsCondition) {
+        out.halt = `no prints in the window and protocol ${proto.version} has no 'no-prints-attested' condition for the venue`;
+        out.conditions['traded-range'] = { error: out.halt };
+        return out;
+      }
+      out.venueMode = 'no-prints-attested';
+      conditions = ['no-prints-attested'];
+    } else {
+      out.venueMode = 'traded-range';
+      conditions = conditions.filter((c) => c !== 'no-prints-attested');
+    }
+    out.protocol.conditions = conditions;
+  }
+
+  // 3. Evaluate exactly those conditions.
   for (const name of conditions) {
     const spec = ruleFor(seat, name);
     if (!spec) {
-      out.conditions[name] = { error: `no rule for condition '${name}' on the ${seat} seat` };
+      out.conditions[name] = { error: `no rule for condition '${name}' on the ${seat} seat (upgrade the signer)` };
       out.halt = out.halt ?? `unknown condition '${name}'`;
       continue;
     }
@@ -112,11 +200,9 @@ export async function evaluateProposal(deps: HandlerDeps, p: Proposal): Promise<
       continue;
     }
     // Resolve every configured field (the rule reads what it needs; extras become evidence too).
-    const fields: Record<string, unknown> = {};
+    let fields: Record<string, unknown>;
     try {
-      for (const [fname, src] of Object.entries(sources)) {
-        fields[fname] = await resolver.resolve(src);
-      }
+      fields = await fieldsOf(name);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       out.conditions[name] = { error: `source failed: ${msg}` };
@@ -134,7 +220,7 @@ export async function evaluateProposal(deps: HandlerDeps, p: Proposal): Promise<
     }
     // The backend may declare evidence fields we must carry; if a declared field is neither
     // produced by the rule nor configured as a source, that is a halt - never confirm without it.
-    const declared = declaredEvidenceFields(deps.role, name);
+    const declared = declaredEvidenceFields(role, name);
     const missing = declared.filter((f) => !(f in r.evidence) && !(f in fields));
     if (r.pass && missing.length > 0) {
       out.conditions[name] = { error: `protocol declares evidence ${missing.join(', ')} for '${name}' and no source provides it` };
@@ -149,7 +235,8 @@ export async function evaluateProposal(deps: HandlerDeps, p: Proposal): Promise<
       out.checks.push(name);
       // The backend contract: evidence is keyed by condition name, { "<condition>": { field: value } }.
       // The venue's traded range is ALSO hoisted to the top level - that is the {low, high} the
-      // ledger enforces, and the shape the venue path reads.
+      // ledger enforces, and the shape the venue path reads. Never hoisted for no-prints-attested:
+      // the backend refuses a range next to that claim.
       out.evidence[name] = r.evidence;
       if (name === 'traded-range') {
         out.evidence.low = r.evidence.low;
@@ -160,15 +247,17 @@ export async function evaluateProposal(deps: HandlerDeps, p: Proposal): Promise<
     }
   }
 
-  if (out.failed) {
+  // 4. Decide. A halt anywhere beats everything: a refusal is only sent when every
+  //    condition was evaluable and at least one failed on its numbers.
+  if (out.halt) {
+    out.decision = 'halt';
+  } else if (out.failed) {
     out.decision = 'refuse';
     // The reason names every failed condition, first one leads.
     const others = Object.entries(out.conditions)
       .filter(([n, c]) => 'pass' in c && !c.pass && n !== out.failed!.condition)
       .map(([n, c]) => `${n}: ${(c as ConditionOutcome).reason}`);
     if (others.length) out.failed.reason += `; also failed ${others.join('; ')}`;
-  } else if (out.halt) {
-    out.decision = 'halt';
   } else if (out.checks.length === conditions.length && out.checks.length > 0) {
     out.decision = 'confirm';
   } else {
@@ -212,8 +301,9 @@ export async function handleProposal(deps: HandlerDeps, p: Proposal): Promise<De
   inFlight.add(key);
   try {
     const d = await evaluateProposal(deps, p);
+    const ctx = { ...base, model: d.protocol?.model, venueMode: d.venueMode };
     if (d.decision === 'halt') {
-      log.warn('decision', { ...base, decision: 'halt', halt: d.halt, conditions: d.conditions, note: 'nothing sent; will retry next poll' });
+      log.warn('decision', { ...ctx, decision: 'halt', halt: d.halt, conditions: d.conditions, note: 'nothing sent; will retry next poll' });
       return d;
     }
     if (d.decision === 'confirm') {
@@ -223,7 +313,11 @@ export async function handleProposal(deps: HandlerDeps, p: Proposal): Promise<De
       if (ok || (r.status >= 400 && r.status < 500)) {
         state.record(key, { cid: p.cid, instrument: p.instrument, decision: ok ? 'confirm' : 'rejected', at: new Date().toISOString(), httpStatus: r.status, detail: ok ? undefined : summarize(r.body) });
       }
-      log[ok ? 'info' : 'error']('decision', { ...base, decision: 'confirm', checks: d.checks, evidence: d.evidence, conditions: d.conditions, http: { status: r.status, body: ok ? r.body : summarize(r.body) } });
+      log[ok ? 'info' : 'error']('decision', {
+        ...ctx, decision: 'confirm', checks: d.checks, evidence: d.evidence, conditions: d.conditions,
+        http: { status: r.status, body: ok ? r.body : summarize(r.body) },
+        ...(r.nonJson ? { note: 'CrossDesk answered 2xx with a non-JSON body; not recorded, will re-check next poll (mine.action tells us if it landed)' } : {}),
+      });
       return d;
     }
     // refuse
@@ -233,7 +327,11 @@ export async function handleProposal(deps: HandlerDeps, p: Proposal): Promise<De
     if (r.ok || (r.status >= 400 && r.status < 500)) {
       state.record(key, { cid: p.cid, instrument: p.instrument, decision: r.ok ? 'refuse' : 'rejected', at: new Date().toISOString(), httpStatus: r.status, detail: r.ok ? `${f.condition}: ${f.reason}` : summarize(r.body) });
     }
-    log[r.ok ? 'info' : 'error']('decision', { ...base, decision: 'refuse', condition: f.condition, reason: f.reason, conditions: d.conditions, http: { status: r.status, body: r.ok ? r.body : summarize(r.body) } });
+    log[r.ok ? 'info' : 'error']('decision', {
+      ...ctx, decision: 'refuse', condition: f.condition, reason: f.reason, conditions: d.conditions,
+      http: { status: r.status, body: r.ok ? r.body : summarize(r.body) },
+      ...(r.nonJson ? { note: 'CrossDesk answered 2xx with a non-JSON body; not recorded, will re-check next poll' } : {}),
+    });
     return d;
   } catch (e) {
     const msg = e instanceof ApiError ? `${e.message}` : (e instanceof Error ? e.message : String(e));
