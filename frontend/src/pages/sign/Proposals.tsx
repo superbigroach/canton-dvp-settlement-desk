@@ -3,6 +3,7 @@ import { useAuth } from '../../auth/AuthContext';
 import { desk, type Proposal } from '../../desk';
 import { LoadState, useAsync } from '../../components/ui';
 import ProposalCard from './ProposalCard';
+import SeatGuide from './SeatGuide';
 import { useSignerRole } from './useSignerRole';
 
 export default function Proposals() {
@@ -27,6 +28,7 @@ export default function Proposals() {
         <button type="button" className="ghost small" onClick={list.reload}>Refresh</button>
       </div>
       {protoError && <div className="banner warn" role="status"><span>Signer protocol not loaded — {protoError}. Conditions come from the proposal itself.</span></div>}
+      <SeatGuide />
       <LoadState loading={list.loading} error={list.error} onRetry={list.reload}
         empty={list.data && open.length === 0 ? 'Nothing waiting for your signature. Proposals appear here at the strike time and by webhook/email.' : null}>
         <div className="proposal-list">

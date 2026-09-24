@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Join a committee — ETP Foundry</title>
+<meta name="description" content="What each fixing-committee seat asserts every day, the evidence it files, what it costs (nothing), how to automate it, and the three trust levels a signature can be made at.">
+<link rel="canonical" href="https://etpfoundry.com/committee">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="ETP Foundry">
+<meta property="og:title" content="Join a committee — ETP Foundry">
+<meta property="og:description" content="Five seats. Each asserts a fact only it can see, never an opinion about the price. Never charged, never paid.">
+<meta property="og:url" content="https://etpfoundry.com/committee">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#0A0B0F">
+<link rel="stylesheet" href="/site/site.css?v=9">
+<link rel="stylesheet" href="/site/committee.css?v=1">
+<script defer src="/site/site.js?v=9"></script>
+<link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32.png">
+<link rel="apple-touch-icon" href="/brand/apple-touch-icon.png">
+<meta property="og:image" content="https://etpfoundry.com/brand/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:image" content="https://etpfoundry.com/brand/og.png">
+<meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="/" aria-label="ETP Foundry home">ETP<span>Foundry</span></a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <a href="/benchmarks/">Benchmarks</a>
+      <a href="/methodology">Methodology</a>
+      <a href="/governance">Governance</a>
+      <a href="/licensing">Licensing</a>
+      <a href="/regulatory">Regulatory</a>
+      <a href="/documents">Documents</a>
+      <a href="/calendar">Calendar</a>
+      <a href="/status">Status</a>
+      <a href="/news">News</a>
+      <a href="/about">About</a>
+      <a href="/desk/login">Sign in</a>
+      <a href="/desk/" class="btn">Open the desk</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+<section class="section hero">
+  <div class="wrap">
+    <h1>Join a committee</h1>
+    <p class="lede">A fixing is signed by K of N parties who each already carry a position against
+      the mark. No signer is ever asked for an opinion about the price. Each signer asserts a fact
+      only it can see &mdash; and a fact is nearly free to answer, so the seat can be automated and
+      stays honest in month six.</p>
+    <p class="note"><strong>Status.</strong> No fixing has been published for commercial use and
+      <strong>no committee has been convened</strong>. Nothing on this page is a claim that a seat is
+      occupied. Signer protocol <code>SIGNER_PROTOCOL v2</code> (22 September 2026); ledger package
+      <code>crossdesk-3.0.0</code>.</p>
+    <div class="cta-row">
+      <a class="btn" href="#seats">The five seats</a>
+      <a class="btn" href="#start" style="background:transparent;color:var(--text);border-color:var(--border-2)">How to start</a>
+    </div>
+  </div>
+</section>
+
+<section class="section tight plain">
+  <div class="wrap">
+    <p class="kicker">In one screen<span class="rule"></span></p>
+    <div class="facts">
+      <div class="fact"><div class="n">$0</div><div class="sub">Members are never charged and never paid. Fund and ETP issuers pay a licence; market makers pay per order. A committee member is neither.</div></div>
+      <div class="fact"><div class="n">1 / day</div><div class="sub">One fixing per series per day, guaranteed by the ledger. Automated: minutes of machine time. Manual: one confirmation in the portal, with your numbers.</div></div>
+      <div class="fact"><div class="n">K &ge; 2</div><div class="sub">A quorum of at least two, from opposed interests. No single party may reach K alone, and no single party may block it.</div></div>
+      <div class="fact"><div class="n">L1 &middot; L2 &middot; L3</div><div class="sub">Every published value states the trust level each signature was made at. Pilots start at L1; nothing settles for a third party until every signer is at L2 or above.</div></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="seats">
+  <div class="wrap">
+    <p class="kicker">The five seats<span class="rule"></span></p>
+    <h2>Each seat wants a different answer</h2>
+    <p>The issuer wants the wrapper marked at par. The lender wants it marked conservatively &mdash;
+      it is the one under-collateralised if the mark is too high. The venue wants it marked where the
+      asset actually traded. The custodian and the transfer agent are neutral and liable. A committee
+      of three issuers is not a committee. The conditions below are the exact names the API accepts;
+      the evidence fields are what the server checks before anything reaches the ledger.</p>
+
+    <div class="seat-grid">
+
+      <article class="seat" id="issuer">
+        <span class="id">seat &middot; issuer</span>
+        <h3>Issuer</h3>
+        <p><strong>Who sits here.</strong> The party that issues the wrapped asset. TradFi analogue: a
+          benchmark contributor under a code of conduct (IOSCO Principle 14 / BMR); an LBMA direct
+          participant with the ability to settle.</p>
+        <p class="assert">&ldquo;The wrapper can actually be redeemed right now.&rdquo;</p>
+        <h4>Conditions &middot; reserve model <em>attested</em> (e.g. cBTC)</h4>
+        <ul class="cond">
+          <li><code>attestor-quorum</code><span class="when">At least your own threshold of attestors are online and signing.</span><span class="ev">quorumSigners (integer) &middot; quorumThreshold (integer) &middot; rule: quorumSigners &ge; quorumThreshold</span></li>
+          <li><code>reserves-current</code><span class="when">The most recent proof-of-reserve attestation is less than 24h old.</span><span class="ev">reservesAsOf (instant, ISO-8601) &middot; rule: within 24h of the confirmation</span></li>
+          <li><code>reserves-cover-supply</code><span class="when">Attested reserves are at least the circulating supply of the wrapped token.</span><span class="ev">reserves (number) &middot; supply (number) &middot; rule: reserves &ge; supply</span></li>
+          <li><code>redemption-queue-clear</code><span class="when">No redemption request is unfilled beyond its stated window.</span><span class="ev">queueDepth (integer) &middot; maxQueueDepth (integer) &middot; rule: queueDepth &le; maxQueueDepth</span></li>
+        </ul>
+        <p><strong>Other reserve models.</strong> If the reserve is <em>on-chain verifiable</em> (e.g. cETH,
+          locked in protocol-controlled contracts) there is no attestor set: you assert your own on-chain
+          verification &lt; 24h, locked &ge; supply, queue clear. If it is <em>custodial</em> (e.g. a
+          tokenised equity): custodian statement &lt; 24h, holdings &ge; supply, queue clear. You are never
+          asked for a number your model does not produce; an undeclared model is held to <em>attested</em>,
+          the strictest profile.</p>
+        <h4>On refuse</h4>
+        <p>You do not sign at par. Refuse naming the failed condition; the administrator either restrikes
+          with a factor below par and a rationale naming that condition, or no fixing is struck.</p>
+        <h4>Eligibility and ongoing obligations</h4>
+        <ul>
+          <li>A named legal entity with disclosed principals and licence; the four on-ledger facts (registrar party, instrument id, registry URL, <code>HoldingV1</code>); a declared reserve model and attestation cadence; a signed attestation agreement.</li>
+          <li>Publish reserve attestations on cadence (&lt; 24h); evidence-backed conditions only &mdash; no ticks; annual re-attestation of fitness, conflicts and confidentiality; notify any change of control.</li>
+          <li>Exactly one issuer seat per instrument. Issuer-controlled parties may never reach K. The issuer may not also hold the custodian or venue seat for its own instrument.</li>
+          <li>Suspension on a missed attestation; mandatory resignation if sanctioned for manipulation; removal for false evidence; three consecutive unexplained silences trigger a review.</li>
+        </ul>
+        <div class="facts-row">
+          <div><div class="k">Cost</div><div class="v">$0 &mdash; never charged, never paid</div></div>
+          <div><div class="k">Time</div><div class="v">Automated: minutes/day &middot; Manual: one confirmation/day</div></div>
+          <div><div class="k">Checker</div><div class="v">Reference config shipped (<code>examples/issuer.yml</code>)</div></div>
+        </div>
+      </article>
+
+      <article class="seat" id="lender">
+        <span class="id">seat &middot; lender</span>
+        <h3>Lender / risk taker</h3>
+        <p><strong>Who sits here.</strong> A platform holding the asset as collateral. TradFi analogue: a
+          financial-intermediary / auction-participant member of a price oversight committee (IBA PMOC);
+          a direct participant with bilateral credit lines.</p>
+        <p class="assert">&ldquo;I will carry this number on my own book.&rdquo;</p>
+        <h4>Conditions</h4>
+        <ul class="cond">
+          <li><code>independent-mark-within-tolerance</code><span class="when">The proposed mark is within your declared tolerance of your own valuation.</span><span class="ev">independentMark (number) &middot; rule: |mark &minus; proposal| / proposal &le; tolerances.markBps (default 25 bp)</span></li>
+          <li><code>liquidations-consistent</code><span class="when">No liquidation you ran in the session cleared materially away from the mark.</span><span class="ev">liquidationsToday (integer) &middot; worstDeviationBps (number) &middot; rule: worstDeviationBps &le; tolerances.liquidationBps</span></li>
+          <li><code>book-acceptance</code><span class="when">You will mark your own collateral at this level for the period the fixing governs.</span><span class="ev">acceptedAt (instant) &middot; rule: a timestamp not in the future</span></li>
+        </ul>
+        <p>This is the strongest signature in the protocol: the only one asserted against the signer&rsquo;s
+          own money. A lender that signs <code>book-acceptance</code> and then marks its book elsewhere has
+          made a false statement, on-ledger, with its own signature on it.</p>
+        <h4>On refuse</h4>
+        <p>Refuse naming the condition &mdash; &ldquo;my mark is 41 bp from the proposal; my tolerance is
+          25&rdquo; is actionable, a vote of no confidence is not. Below K, no fixing exists for the day.</p>
+        <h4>Eligibility and ongoing obligations</h4>
+        <ul>
+          <li>Actually holds the instrument as collateral (position evidence at onboarding, re-checked quarterly); balance sheet at risk; disclosed licence and principals; a declared tolerance in bp.</li>
+          <li>Numbers behind every condition; the tolerance may not be widened silently; quarterly position re-confirmation.</li>
+          <li>Position drops to zero: the seat lapses at the next quarterly review. Three refusals without cause trigger a review. Same manipulation-sanction rule as every seat.</li>
+          <li>At least one lender or venue in every K. A lender that is an affiliate of the issuer counts as issuer-controlled.</li>
+        </ul>
+        <div class="facts-row">
+          <div><div class="k">Cost</div><div class="v">$0 &mdash; never charged, never paid</div></div>
+          <div><div class="k">Time</div><div class="v">Automated: minutes/day &middot; Manual: one confirmation/day</div></div>
+          <div><div class="k">Checker</div><div class="v">Reference config shipped (<code>examples/lender.yml</code>)</div></div>
+        </div>
+      </article>
+
+      <article class="seat" id="venue">
+        <span class="id">seat &middot; venue</span>
+        <h3>Venue</h3>
+        <p><strong>Who sits here.</strong> A venue where the wrapped asset actually trades. TradFi analogue:
+          a constituent exchange under CF Benchmarks&rsquo; Constituent Exchange Criteria; a regulated
+          electronic trading venue at the first tier of the ICE Swap Rate waterfall.</p>
+        <p class="assert">&ldquo;The mark sits inside the range my own book printed.&rdquo;</p>
+        <h4>Conditions</h4>
+        <ul class="cond">
+          <li><code>traded-range</code><span class="when">The proposed mark lies within the high/low your own book traded in the window.</span><span class="ev">low (number) &middot; high (number) &middot; rule: low &le; proposal &le; high &mdash; enforced by the ledger itself</span></li>
+          <li><code>spread-within-tolerance</code><span class="when">Best bid/ask spread at the strike is inside the declared tolerance.</span><span class="ev">recorded, not checked</span></li>
+          <li><code>sufficient-volume</code><span class="when">Traded volume in the window meets the declared minimum.</span><span class="ev">recorded, not checked</span></li>
+          <li><code>no-prints-attested</code><span class="when">Your book showed no trades in the window; you state the best bid/ask at the strike and do not contradict the proposal.</span><span class="ev">bestBid (number) &middot; bestAsk (number) &middot; rule: bestBid &le; proposal &le; bestAsk when quoted; mutually exclusive with traded-range</span></li>
+        </ul>
+        <p>This is the sharpest guard in the system: a venue <em>cannot</em> sign a price its own book never
+          printed. The ledger refuses a range that does not contain the price, an inverted range, and a
+          half-specified one. On Canton a window with no trades is the normal case, so a venue attests the
+          absence instead of staying silent &mdash; and the band widens to carry it.</p>
+        <h4>On refuse</h4>
+        <p>Outside your range: refuse naming <code>traded-range</code>. No prints: do not refuse and do not
+          stay silent &mdash; attest <code>no-prints-attested</code> with your best bid/ask. Never claim both.</p>
+        <h4>Eligibility and ongoing obligations</h4>
+        <ul>
+          <li>An <strong>admitted constituent venue</strong>: all six rulebook &sect;4.0 tests plus an executed data-sharing agreement, an API with trade <em>and</em> order data, KYC/AML compliance, and cooperation with inquiries. Volume above 5% over 30 days, trending to CF&rsquo;s 3% over 90&ndash;180 days.</li>
+          <li>Annual conformance review presented to the committee; surveillance alerts reviewed as a standing item; <code>traded-range</code> or <code>no-prints-attested</code>, never both.</li>
+          <li>The administrator may suspend ad hoc; the committee decides permanence; the decision is published. Anyone may nominate an addition or removal.</li>
+          <li>At least two independent venues (different operators) at launch. A venue owned by the issuer or the administrator is disclosed and does not count toward the two.</li>
+        </ul>
+        <div class="facts-row">
+          <div><div class="k">Cost</div><div class="v">$0 &mdash; never charged, never paid</div></div>
+          <div><div class="k">Time</div><div class="v">Automated: minutes/day &middot; Manual: one confirmation/day</div></div>
+          <div><div class="k">Checker</div><div class="v">Reference config shipped (<code>examples/venue.yml</code>)</div></div>
+        </div>
+      </article>
+
+      <article class="seat" id="custodian">
+        <span class="id">seat &middot; custodian</span>
+        <h3>Custodian / reserve holder</h3>
+        <p><strong>Who sits here.</strong> Whoever actually holds the backing &mdash; a regulated custodian, or
+          the protocol-controlled contracts for an on-chain-verifiable asset. TradFi analogue: an LBMA direct
+          participant with the ability to settle and clear; the custodian and securities-lending communities
+          FTSE Russell draws committees from.</p>
+        <p class="assert">&ldquo;This is what is actually in the account.&rdquo;</p>
+        <h4>Conditions</h4>
+        <ul class="cond">
+          <li><code>holdings-current</code><span class="when">Your most recent holdings statement is less than 24h old.</span><span class="ev">statementAsOf (instant) &middot; rule: within freshnessHours of the confirmation (24h default, declared per asset)</span></li>
+          <li><code>holdings-cover-supply</code><span class="when">Holdings you actually custody are at least the issued supply.</span><span class="ev">holdings (number) &middot; supply (number) &middot; rule: holdings &ge; supply</span></li>
+          <li><code>no-encumbrance</code><span class="when">The holdings are unencumbered &mdash; not pledged, lent or rehypothecated.</span><span class="ev">encumbered (number) &middot; rule: encumbered == 0</span></li>
+        </ul>
+        <h4>On refuse</h4>
+        <p>A stale statement, a shortfall, or any encumbered units: refuse naming the condition. A missed
+          statement moves the fixing to EXCEPTIONAL, then NO FIXING. Notify any lien or rehypothecation
+          immediately.</p>
+        <h4>Eligibility and ongoing obligations</h4>
+        <ul>
+          <li>A regulated custodian (or protocol-controlled contracts); holdings segregated from own assets; statement age within the declared freshness; an independent control report (SOC 1 / ISAE 3402) or on-chain proof.</li>
+          <li>Numbers behind every condition; immediate notice of any lien or rehypothecation.</li>
+          <li>Insolvency: immediate suspension. Must not be the issuer or an issuer affiliate.</li>
+          <li>Mandatory for any asset whose native network is not the settlement ledger.</li>
+        </ul>
+        <div class="facts-row">
+          <div><div class="k">Cost</div><div class="v">$0 &mdash; never charged, never paid</div></div>
+          <div><div class="k">Time</div><div class="v">Automated: minutes/day &middot; Manual: one confirmation/day</div></div>
+          <div><div class="k">Checker</div><div class="v">Same API and body; reference seat rules not yet shipped for this seat</div></div>
+        </div>
+      </article>
+
+      <article class="seat" id="transfer-agent">
+        <span class="id">seat &middot; transfer-agent</span>
+        <h3>Administrator / transfer agent</h3>
+        <p><strong>Who sits here.</strong> The party appointed under the fund&rsquo;s governing documents that
+          keeps the share register and does the fund&rsquo;s accounting today &mdash; already liable for it,
+          which is exactly why its signature carries information. TradFi analogue: a calculation or
+          dissemination agent overseen under a benchmark oversight committee&rsquo;s terms of reference.</p>
+        <p class="assert">&ldquo;This is the share count the NAV is divided by.&rdquo;</p>
+        <h4>Conditions</h4>
+        <ul class="cond">
+          <li><code>shares-outstanding-reconciled</code><span class="when">Shares outstanding on your register match the ledger at the strike instant.</span><span class="ev">registerShares (number) &middot; ledgerShares (number) &middot; rule: registerShares == ledgerShares</span></li>
+          <li><code>fees-accrued</code><span class="when">Accrued fees and liabilities deducted are those the fund&rsquo;s published schedule requires.</span><span class="ev">accruedFees (number) &middot; rule: accruedFees &ge; 0</span></li>
+        </ul>
+        <h4>On refuse</h4>
+        <p>A register that does not reconcile: refuse naming <code>shares-outstanding-reconciled</code> and
+          report the break the same day. An unreconciled register is a NO FIXING for a fund NAV.</p>
+        <h4>Eligibility and ongoing obligations</h4>
+        <ul>
+          <li>Appointed under the fund&rsquo;s governing documents; maintains the share register; reconciles shares outstanding daily; an SLA with the administrator.</li>
+          <li>Numbers behind every condition; breaks reported the same day.</li>
+          <li>Replacement by the fund, notified to licensees. Cannot be the benchmark administrator.</li>
+          <li>Where the fund self-administers, the seat is disclosed as issuer-controlled and excluded from K for issuer-majority purposes.</li>
+        </ul>
+        <div class="facts-row">
+          <div><div class="k">Cost</div><div class="v">$0 &mdash; never charged, never paid</div></div>
+          <div><div class="k">Time</div><div class="v">Automated: minutes/day &middot; Manual: one confirmation/day</div></div>
+          <div><div class="k">Checker</div><div class="v">Same API and body; reference seat rules not yet shipped for this seat</div></div>
+        </div>
+      </article>
+
+    </div>
+
+    <p class="note" style="margin-top:22px">Every member discloses conflicts. The public roster follows IBA&rsquo;s
+      table: name, company, market position, seat and instruments covered, directorships and interests, date of
+      the conflict-of-interest declaration &mdash; plus trust level and declared tolerance band. Tolerances are
+      published in aggregate. Terms of office: six months initial, extended, maximum nine consecutive years, with
+      an annual membership review. Removal is mandatory on a manipulation sanction, for any seat.</p>
+  </div>
+</section>
+
+<section class="section alt">
+  <div class="wrap">
+    <p class="kicker">Automating a seat<span class="rule"></span></p>
+    <h2>Every condition is a query against your own systems</h2>
+    <p>None requires a human to form a view. An unpaid committee that needs daily human attention decays
+      into rubber-stamping within weeks, so a seat should run a checker that confirms automatically when
+      all its conditions pass, refuses naming the condition when one fails, and halts when one cannot be
+      evaluated. A halt is never a confirm, and never a refusal either. <strong>A checker must never
+      auto-confirm on a failed condition and must never widen its own tolerances</strong> &mdash; both are
+      invisible on the ledger because the signature looks identical.</p>
+    <div class="grid g2">
+      <div>
+        <h3>The reference checker</h3>
+        <p><code>signer-service/</code> in the repository is a small program you run on your own
+          infrastructure. It reads each condition from a source you declare &mdash; a static value, an HTTP
+          endpoint, or a command against your systems &mdash; and posts <code>{ checks, evidence }</code> to
+          <code>POST /api/proposals/{cid}/confirm</code> with a scoped API key. It never holds a Canton key,
+          never forms a view about the price, and never acts twice on the same proposal.</p>
+        <p>It hears about a proposal by signed webhook (<code>X-CrossDesk-Signature</code>, HMAC-SHA256) or by
+          polling <code>GET /api/proposals?status=open&amp;mine=true</code>. Rules ship today for the issuer,
+          lender and venue seats; the custodian and transfer-agent seats send the same body to the same route.</p>
+      </div>
+      <div>
+        <h3>Five minutes, no account</h3>
+<pre>npm ci &amp;&amp; npm run build          # Node 20+
+CROSSDESK_SANDBOX_USER=venue@sandbox.crossdesk \
+  node dist/index.js --config examples/venue.yml --check
+CROSSDESK_SANDBOX_USER=venue@sandbox.crossdesk \
+  node dist/index.js --config examples/venue.yml</pre>
+        <p class="note">The sandbox header stands in for an API key with nothing at stake. In production the
+          key comes from the portal (Settings &rarr; API key), is shown once, stored hashed, and can only
+          confirm or refuse fixings for the instruments your seat covers.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="trust">
+  <div class="wrap">
+    <p class="kicker">The trust ladder<span class="rule"></span></p>
+    <h2>A signature is worth exactly what it costs to forge</h2>
+    <p>Every published value states the level each signature was made at; the fixing record shows the mix,
+      e.g. <code>K=3 of N=5 &mdash; L1:2, L2:1</code>. Scope limits apply at every level: a signer credential
+      may only confirm or refuse fixings for the instruments its seat covers. It cannot move assets, propose a
+      fixing, or act as another seat.</p>
+    <div class="tablewrap">
+      <table class="docs ladder">
+        <thead><tr><th>Level</th><th>Where the signing key lives</th><th>Could the administrator forge it?</th><th>Your cost</th><th>What it requires from you</th></tr></thead>
+        <tbody>
+          <tr><td>L1 &middot; hosted party</td><td>On the administrator&rsquo;s participant; a scoped API key authorises and the administrator exercises the choice as your party.</td><td><strong>Yes, technically</strong></td><td>Zero</td><td>Your e-mail on the roster. Nothing to run.</td></tr>
+          <tr><td>L2 &middot; external signing</td><td>With you, off-ledger; the administrator submits a transaction you have already signed.</td><td>No</td><td>Moderate</td><td>An API key and a checker on your infrastructure (the reference signer-service or your own).</td></tr>
+          <tr><td>L3 &middot; own participant</td><td>On your own Canton participant.</td><td>No</td><td>High &mdash; you run Canton</td><td>Your own participant party id on the roster.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><strong>L1 is honest for a pilot and dishonest as a destination.</strong> It is the right level for a free
+      shadow run or a design partnership, where nothing settles against the value. It is not acceptable for an
+      OFFICIAL fixing a third party settles against. Target state: every signer at L2 or above before that
+      happens. Disclosed at onboarding: the administrator can assume a mapped user&rsquo;s identity for a single
+      request (support). Every such act is recorded, and it is never used to confirm a fixing on a signer&rsquo;s
+      behalf.</p>
+  </div>
+</section>
+
+<section class="section tight plain">
+  <div class="wrap">
+    <div class="enforce">
+      <h3>What the ledger enforces &mdash; package 3.0.0</h3>
+      <ul>
+        <li><strong>The administrator signs every proposal</strong> and every fixing (<code>signatory admin :: approvers</code>). A proposal can only be born inside a choice on a committee the administrator signed; a forgery is not refused, it cannot be constructed.</li>
+        <li><strong>K &ge; 2, K &le; N, and the administrator is not a member.</strong> It proposes and publishes; it never attests.</li>
+        <li><strong>A venue&rsquo;s range or an attested absence is mandatory.</strong> Plain confirm is gone; every attestation carries a <code>SignerCheck</code>. A range from any other seat is refused on-ledger.</li>
+        <li><strong>One fixing per series per day.</strong> Every proposal carries an attested <code>asOfDate</code>; one series contract per (administrator, instrument, session) is consumed and advanced by every finalise.</li>
+        <li>Any approver or the administrator may finalise &mdash; the proposer holds no veto. Members observe every fixing, so a member that did not sign can open a restatement.</li>
+      </ul>
+      <p class="src">The API enforces, before submission, that a claimed condition belongs to the seat claiming it and
+        that the numbers behind it pass the stated rule. Nothing enforces the provenance of those numbers &mdash;
+        that rests on your own systems, and on the fact that a false number is permanent, attributable, and
+        made against your own money. This residual trust is disclosed to every seat rather than glossed.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="start">
+  <div class="wrap">
+    <p class="kicker">How to start<span class="rule"></span></p>
+    <h2>A seat is issued, never self-registered</h2>
+    <p>Open registration would let anyone self-declare as a lender, and the value of K-of-N is entirely
+      in who the N are. So the roster is seeded by the administrator, and every row carries: e-mail &middot;
+      Canton party &middot; seat &middot; declared tolerances &middot; API key hash.</p>
+    <div class="steps">
+      <div class="step">
+        <div>
+          <h3>Say which seat, and on what</h3>
+          <p>One e-mail: the seat you hold (issuer, lender, venue, custodian or transfer agent), the instruments it
+            covers, and the position that makes you eligible &mdash; the asset you issue, the collateral you hold,
+            the book you run, the account you custody, the register you keep. An issuer adds the four facts:
+            registrar party id, instrument id, registry base URL, <code>HoldingV1</code> confirmation &mdash; and its
+            reserve model.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div>
+          <h3>Declare your tolerances and disclose conflicts</h3>
+          <p>How far from your own valuation a mark may sit before you refuse (recommended 25 bp); any affiliation
+            with the issuer, the administrator, or another seat on the same instrument. The seat is issued at L1
+            and your e-mail is added to the roster.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div>
+          <h3>Sign in, read your seat, generate a key</h3>
+          <p>The portal&rsquo;s first screen shows exactly what your seat asserts for each instrument, the evidence
+            fields the API accepts, and the checker quickstart. Generate an API key under Settings and point the
+            reference checker at your own systems &mdash; or confirm by hand, with your numbers, once a day.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div>
+          <h3>Shadow run, then move up the ladder</h3>
+          <p>Nothing settles against a shadow value. When your checker has run clean for a period you are
+            comfortable with, the level is recorded as L2 (external signing) or L3 (your own participant), and
+            every published value carries it.</p>
+          <p><a class="btn" href="mailto:s.borjas@lucilla.ca?subject=Committee%20seat">Write to s.borjas@lucilla.ca</a></p>
+        </div>
+      </div>
+    </div>
+    <p class="note">Sending the e-mail commits you to nothing. See the <a href="/documents">rulebook and signer
+      protocol</a> for the full text, and <a href="/governance">Governance</a> for how the committee is composed.</p>
+  </div>
+</section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="cols">
+      <div><h3>Benchmarks</h3><ul>
+        <li><a href="/benchmarks/CBTC">CBTC Close</a></li>
+        <li><a href="/benchmarks/cETH">cETH Close</a></li>
+        <li><a href="/benchmarks/LX1">LX1 NAV</a></li>
+        <li><a href="/benchmarks/">All benchmarks</a></li>
+      </ul></div>
+      <div><h3>Documents</h3><ul>
+        <li><a href="/methodology">Methodology</a></li>
+        <li><a href="/governance">Governance</a></li>
+        <li><a href="/licensing">Licensing</a></li>
+        <li><a href="/regulatory">Regulatory</a></li>
+        <li><a href="/documents">Documents</a></li>
+      </ul></div>
+      <div><h3>ETP Foundry</h3><ul>
+        <li><a href="/about">About</a></li>
+        <li><a href="/news">News</a></li>
+        <li><a href="/showcase/">Showcase</a></li>
+        <li><a href="/pitch/">Pitch</a></li>
+        <li><a href="https://github.com/superbigroach/canton-dvp-settlement-desk" rel="noopener">Source</a></li>
+      </ul></div>
+      <div><h3>Desk</h3><ul>
+        <li><a href="/desk/">Open the desk</a></li>
+        <li><a href="/desk/login">Sign in</a></li>
+      </ul></div>
+    </div>
+    <div class="disclosure">
+      <p><strong>Sandbox disclosure.</strong> The values on this site come from a hosted sandbox: an
+        in-process Canton ledger running the CrossDesk Daml packages, seeded with a demonstration book.
+        It is not a Canton Network participant and it is not connected to DevNet, TestNet or MainNet.
+        No fixing has been published for commercial use, and no committee has been convened.
+        Instruments in the demonstration basket are issued for demonstration.</p>
+      <p>ETP Foundry is not an authorised or registered benchmark administrator in any jurisdiction.
+        Nothing on this site is a price, a valuation, a benchmark for regulatory purposes, investment
+        advice, or an offer of any financial product or service. See <a href="/regulatory">Regulatory</a>.</p>
+    </div>
+    <p><strong>ETP Foundry</strong> — attested fixings and atomic creation and redemption for tokenised
+      funds. Built on the <a href="https://www.canton.network" rel="noopener">Canton Network</a>.</p>
+    <p class="formerly" style="margin-top:12px;opacity:.85">ETP Foundry was formerly <strong>CrossDesk</strong> &mdash; winner of <a href="/news">Best Financial Application, HackCanton Season 2</a> (Grand Final, 5 August 2026). Same team, same code, new name.</p>
+    <p style="margin-top:16px">
+      <a href="mailto:s.borjas@lucilla.ca">s.borjas@lucilla.ca</a>
+      &nbsp;·&nbsp;
+      <a href="https://t.me/sb_lucilla" rel="noopener">@sb_lucilla</a>
+      &nbsp;·&nbsp;
+      <a href="https://www.linkedin.com/in/sborjasto/" rel="noopener">LinkedIn</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

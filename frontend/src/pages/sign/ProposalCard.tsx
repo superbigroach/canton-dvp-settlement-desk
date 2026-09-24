@@ -1,64 +1,184 @@
 // One proposal, as the seat sees it: what is proposed and how it was built, how long is
-// left, the named conditions THIS seat verifies, evidence where the seat must attach it,
-// Confirm / Refuse, and the message log. Optimistic: the card moves the moment you act
-// and moves back, with the backend's sentence, if the ledger says no.
-import { useState } from 'react';
+// left, the named conditions THIS seat verifies, the evidence each one needs (one input
+// per field, from /api/signer-protocol for THIS instrument), Confirm / Refuse, and the
+// message log. Optimistic: the card moves the moment you act and moves back, with the
+// backend's sentence, if the ledger says no.
+//
+// THE WIRE. POST /api/proposals/{cid}/confirm takes `{ checks: [names], evidence }`
+// (ProposalController.ConfirmRequest). For the venue the server reads `evidence.low` /
+// `evidence.high` and the ledger checks the range; for every other seat it reads
+// `evidence[<condition>][<field>]` and SignerEvidence.verify applies the rule before the
+// submit. A tick without numbers is a 422, and the 422's message is shown verbatim.
+import { useMemo, useState } from 'react';
 import type { SignerRole } from '../../api';
-import { errorMessage } from '../../api';
-import { desk, type Proposal, type ProposalEvent } from '../../desk';
+import { ApiError, errorMessage } from '../../api';
+import { useAuth } from '../../auth/AuthContext';
+import { desk, type ConfirmBody, type Proposal, type ProposalEvent } from '../../desk';
 import { Countdown, fmtN, fmtQty, fmtTs, fmtTime, NumberField, shortCid, useAsync } from '../../components/ui';
+import { fetchSeatProtocol, type EvidenceField, type GuideCondition } from '../../seatGuide';
 
 interface Props {
   proposal: Proposal;
-  role: SignerRole | null;          // my seat's protocol entry (names + passesWhen)
+  role: SignerRole | null;          // my seat's protocol entry (names + passesWhen), unqualified by instrument
   onChanged: (next: Proposal) => void;
   /** Re-read the list from the backend — after the ledger says no, the card is stale. */
   onRefresh?: () => void;
   readOnly?: boolean;
 }
 
+const NO_PRINTS = 'no-prints-attested';
+const TRADED_RANGE = 'traded-range';
+
+/** condition → field → raw input text. */
+type Inputs = Record<string, Record<string, string>>;
+
+/** Parse one field the way the server will (SignerEvidence.number / instant), or null. */
+function parseField(f: EvidenceField, raw: string): number | string | null {
+  const v = raw.trim();
+  if (!v) return null;
+  if (f.type === 'instant') {
+    const t = Date.parse(v);
+    if (Number.isNaN(t)) return null;
+    return new Date(t).toISOString();
+  }
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  if (f.type === 'integer' && !Number.isInteger(n)) return null;
+  return n;
+}
+
 export default function ProposalCard({ proposal: p, role, onChanged, onRefresh, readOnly }: Props) {
-  const conditionNames = p.conditions.length ? p.conditions : role?.conditions.map((c) => c.name) ?? [];
-  const needsRange = p.requiresObservedRange || role?.requiresObservedRange || false;
-  const passesWhen = (name: string) => role?.conditions.find((c) => c.name === name)?.passesWhen;
+  const { me } = useAuth();
+  const seatKey = (me?.seat ? String(me.seat) : role?.key ?? '').toLowerCase();
+
+  // The seat as it applies to THIS instrument: an issuer on an on-chain-verifiable asset
+  // is shown three conditions, not four, because the API said so.
+  const proto = useAsync(() => fetchSeatProtocol(p.instrument), [p.instrument]);
+  const instRole = proto.data?.roles.find((r) => r.key === seatKey) ?? null;
+
+  const conditions: GuideCondition[] = useMemo(() => {
+    if (instRole) return instRole.conditions;
+    if (role) return role.conditions.map((c) => ({ ...c }));
+    return p.conditions.map((name) => ({ name, passesWhen: '' }));
+  }, [instRole, role, p.conditions]);
+
+  const needsRange = p.requiresObservedRange || instRole?.requiresObservedRange || role?.requiresObservedRange || false;
+  const isVenue = needsRange;
+  const noPrintsCondition = conditions.find((c) => c.name === NO_PRINTS) ?? null;
 
   const [checks, setChecks] = useState<string[]>([]);
+  const [inputs, setInputs] = useState<Inputs>({});
   const [low, setLow] = useState('');
   const [high, setHigh] = useState('');
+  const [noPrints, setNoPrints] = useState(false);
   const [refusing, setRefusing] = useState(false);
-  const [refuseCondition, setRefuseCondition] = useState(conditionNames[0] ?? '');
+  const [refuseCondition, setRefuseCondition] = useState(conditions[0]?.name ?? '');
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState<'confirm' | 'refuse' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorHint, setErrorHint] = useState<string | null>(null);
   const [showLog, setShowLog] = useState(false);
 
   const log = useAsync<ProposalEvent[]>(() => (showLog ? desk.proposalEvents(p.cid) : Promise.resolve([])), [showLog, p.cid, p.mine?.at]);
 
   const open = p.status === 'open' && !p.mine;
   const deadlinePassed = new Date(p.deadline).getTime() < Date.now();
-  const lowN = Number(low); const highN = Number(high);
-  const rangeOk = !needsRange || (low !== '' && high !== '' && lowN <= highN);
-  const rangeContains = !needsRange || (rangeOk && p.price >= lowN && p.price <= highN);
-  const canConfirm = open && !readOnly && checks.length > 0 && rangeOk && busy === null;
+
+  // What is on screen. The venue's thin-market toggle swaps the whole claim: either the
+  // book traded (range + the other venue conditions) or it did not (no-prints only) —
+  // the server refuses both on one proposal.
+  const visibleConditions = isVenue
+    ? (noPrints ? conditions.filter((c) => c.name === NO_PRINTS) : conditions.filter((c) => c.name !== NO_PRINTS))
+    : conditions;
+  const effectiveChecks = isVenue && noPrints ? [NO_PRINTS] : checks.filter((n) => visibleConditions.some((c) => c.name === n));
+
+  const setField = (cond: string, field: string, v: string) =>
+    setInputs((prev) => ({ ...prev, [cond]: { ...(prev[cond] ?? {}), [field]: v } }));
 
   const toggle = (name: string) =>
     setChecks((c) => (c.includes(name) ? c.filter((x) => x !== name) : [...c, name]));
 
+  // Which conditions need typed inputs on this card. The venue's traded range keeps its
+  // own two inputs (the ledger's check), so its fields are not rendered generically.
+  const fieldsFor = (c: GuideCondition): EvidenceField[] => {
+    if (!c.evidence?.required) return [];
+    if (isVenue && c.name === TRADED_RANGE) return [];
+    return c.evidence.fields ?? [];
+  };
+
+  // ---- completeness: the first missing or malformed field, named ----------------------
+  const lowN = Number(low); const highN = Number(high);
+  const rangeNeeded = isVenue && !noPrints;
+  const rangeOk = !rangeNeeded || (low !== '' && high !== '' && Number.isFinite(lowN) && Number.isFinite(highN) && lowN <= highN);
+  const rangeContains = !rangeNeeded || (rangeOk && p.price >= lowN && p.price <= highN);
+
+  let missing: string | null = null;
+  if (rangeNeeded && (low === '' || high === '')) missing = low === '' ? 'traded low' : 'traded high';
+  else if (rangeNeeded && !rangeOk) missing = 'a range with low ≤ high';
+  if (!missing) {
+    for (const name of effectiveChecks) {
+      const c = conditions.find((x) => x.name === name);
+      if (!c) continue;
+      for (const f of fieldsFor(c)) {
+        const raw = inputs[name]?.[f.name] ?? '';
+        if (parseField(f, raw) === null) { missing = `${name}.${f.name}${raw.trim() ? ` (not a valid ${f.type})` : ''}`; break; }
+      }
+      if (missing) break;
+    }
+  }
+  if (!missing && effectiveChecks.length === 0) missing = 'at least one condition';
+  const canConfirm = open && !readOnly && !missing && busy === null;
+
+  // ---- the body, exactly as the API accepts it ------------------------------------------
+  const buildBody = (): { checks: string[]; evidence: Record<string, unknown> } => {
+    const evidence: Record<string, unknown> = {};
+    for (const name of effectiveChecks) {
+      const c = conditions.find((x) => x.name === name);
+      if (!c) continue;
+      const block: Record<string, number | string> = {};
+      for (const f of fieldsFor(c)) {
+        const v = parseField(f, inputs[name]?.[f.name] ?? '');
+        if (v !== null) block[f.name] = v;
+      }
+      if (Object.keys(block).length) evidence[name] = block;
+    }
+    if (rangeNeeded) {
+      // Top-level low/high is what the server reads and the ledger checks; the nested
+      // block mirrors what the reference checker sends.
+      evidence.low = lowN;
+      evidence.high = highN;
+      if (effectiveChecks.includes(TRADED_RANGE)) evidence[TRADED_RANGE] = { low: lowN, high: highN };
+    }
+    return { checks: effectiveChecks, evidence };
+  };
+
+  const fail = (e: unknown) => {
+    if (e instanceof ApiError && e.status === 422) {
+      // The server's refusal names the number that failed; show it as it came.
+      setError(`Refused (422): ${e.message}`);
+      setErrorHint(e.hint ?? null);
+    } else {
+      setError(errorMessage(e));
+      setErrorHint(e instanceof ApiError ? e.hint ?? null : null);
+    }
+  };
+
   const confirm = async () => {
-    setBusy('confirm'); setError(null);
+    setBusy('confirm'); setError(null); setErrorHint(null);
+    const body = buildBody();
     const optimistic: Proposal = {
-      ...p, confirmed: [...p.confirmed, role?.key ?? 'me'],
-      mine: { action: 'confirmed', at: new Date().toISOString(), checks, evidence: needsRange ? { low: lowN, high: highN } : undefined },
+      ...p, confirmed: [...p.confirmed, seatKey || 'me'],
+      mine: { action: 'confirmed', at: new Date().toISOString(), checks: body.checks, evidence: rangeNeeded ? { low: lowN, high: highN } : undefined },
     };
     onChanged(optimistic);
     try {
-      const r = await desk.confirm(p.cid, { checks, evidence: needsRange ? { low: lowN, high: highN } : undefined });
+      const r = await desk.confirm(p.cid, body as unknown as ConfirmBody);
       const cid = r?.cid || r?.contractId;
       onChanged({ ...optimistic, mine: { ...optimistic.mine!, cid: cid || undefined },
         status: optimistic.confirmed.length >= p.k ? 'finalized' : optimistic.status });
     } catch (e) {
       onChanged(p);
-      setError(errorMessage(e));
+      fail(e);
       // "already attested", "outside the window": the ledger knows more than this card did.
       onRefresh?.();
     } finally {
@@ -68,7 +188,7 @@ export default function ProposalCard({ proposal: p, role, onChanged, onRefresh, 
 
   const refuse = async () => {
     if (!reason.trim()) { setError('Say why — a refusal without a reason is not recorded.'); return; }
-    setBusy('refuse'); setError(null);
+    setBusy('refuse'); setError(null); setErrorHint(null);
     const optimistic: Proposal = { ...p, status: 'refused', mine: { action: 'refused', at: new Date().toISOString(), reason } };
     onChanged(optimistic);
     try {
@@ -78,11 +198,40 @@ export default function ProposalCard({ proposal: p, role, onChanged, onRefresh, 
       setRefusing(false);
     } catch (e) {
       onChanged(p);
-      setError(errorMessage(e));
+      fail(e);
       onRefresh?.();
     } finally {
       setBusy(null);
     }
+  };
+
+  const renderField = (cond: string, f: EvidenceField) => {
+    const id = `ev-${p.cid}-${cond}-${f.name}`;
+    const raw = inputs[cond]?.[f.name] ?? '';
+    const bad = raw.trim() !== '' && parseField(f, raw) === null;
+    if (f.type === 'instant') {
+      return (
+        <label key={f.name} className="field grow" htmlFor={id}>
+          <span>{f.description}</span>
+          <div className="row tight" style={{ margin: 0 }}>
+            <input id={id} className="mono" type="text" value={raw} placeholder="2026-09-24T16:00:00Z"
+              disabled={busy !== null} onChange={(e) => setField(cond, f.name, e.target.value)} style={{ flex: 1 }} />
+            <button type="button" className="ghost small" disabled={busy !== null}
+              onClick={() => setField(cond, f.name, new Date().toISOString())}>now</button>
+          </div>
+          <small className={`field-hint${bad ? ' bad-text' : ''}`}>{f.name} · ISO-8601{bad ? ' — not a valid timestamp' : ''}</small>
+        </label>
+      );
+    }
+    return (
+      <label key={f.name} className="field" htmlFor={id}>
+        <span>{f.description}</span>
+        <input id={id} className="mono" type="number" inputMode={f.type === 'integer' ? 'numeric' : 'decimal'}
+          step={f.type === 'integer' ? 1 : 'any'} value={raw} disabled={busy !== null}
+          onChange={(e) => setField(cond, f.name, e.target.value)} />
+        <small className={`field-hint${bad ? ' bad-text' : ''}`}>{f.name} · {f.type}{bad ? ` — not a valid ${f.type}` : ''}</small>
+      </label>
+    );
   };
 
   return (
@@ -124,7 +273,7 @@ export default function ProposalCard({ proposal: p, role, onChanged, onRefresh, 
         {p.confirmed.length > 0 && <span>attested: {p.confirmed.join(', ')}</span>}
       </div>
 
-      {(p.refusals ?? []).filter((r) => !(p.mine?.action === 'refused' && r.seat && r.seat === role?.key)).map((r, i) => (
+      {(p.refusals ?? []).filter((r) => !(p.mine?.action === 'refused' && r.seat && r.seat === seatKey)).map((r, i) => (
         <div key={i} className="banner warn" role="status">
           <span>
             <strong>{r.actor ?? r.seat ?? 'a seat'}</strong> refused{r.condition ? <> on <code>{r.condition}</code></> : ''}
@@ -146,21 +295,51 @@ export default function ProposalCard({ proposal: p, role, onChanged, onRefresh, 
 
       {open && !readOnly && (
         <>
+          {proto.error && (
+            <div className="banner warn" role="status">
+              <span>Signer protocol for {p.instrument} not loaded — {proto.error}. Evidence fields may be missing; the server will say what it needs.</span>
+            </div>
+          )}
+
+          {isVenue && noPrintsCondition && (
+            <label className={`check${noPrints ? ' on' : ''}`} style={{ borderBottom: 'none', padding: '4px 4px 10px' }}>
+              <input type="checkbox" checked={noPrints} disabled={busy !== null}
+                onChange={() => { setNoPrints((v) => !v); setError(null); }} />
+              <span className="check-name mono">no prints in the window</span>
+              <span className="check-when">Your book showed no trades: attest the absence with your best bid/ask instead of a range. Never both.</span>
+            </label>
+          )}
+
           <fieldset className="checklist">
-            <legend>Conditions your seat verifies{role ? ` (${role.title})` : ''}</legend>
-            {conditionNames.length === 0 && (
+            <legend>Conditions your seat verifies{instRole ? ` (${instRole.title})` : role ? ` (${role.title})` : ''}{proto.data ? ` · ${proto.data.version}` : ''}</legend>
+            {visibleConditions.length === 0 && (
               <p className="hint subtle">No conditions are defined for your seat on this instrument — the signer protocol may not be loaded.</p>
             )}
-            {conditionNames.map((name) => (
-              <label key={name} className={`check${checks.includes(name) ? ' on' : ''}`}>
-                <input type="checkbox" checked={checks.includes(name)} onChange={() => toggle(name)} disabled={busy !== null} />
-                <span className="check-name mono">{name}</span>
-                {passesWhen(name) && <span className="check-when">{passesWhen(name)}</span>}
-              </label>
-            ))}
+            {visibleConditions.map((c) => {
+              const on = effectiveChecks.includes(c.name);
+              const forced = isVenue && noPrints && c.name === NO_PRINTS;
+              const fields = fieldsFor(c);
+              return (
+                <div key={c.name}>
+                  <label className={`check${on ? ' on' : ''}`}>
+                    <input type="checkbox" checked={on} onChange={() => !forced && toggle(c.name)} disabled={busy !== null || forced} />
+                    <span className="check-name mono">{c.name}</span>
+                    {c.passesWhen && <span className="check-when">{c.passesWhen}</span>}
+                  </label>
+                  {on && fields.length > 0 && (
+                    <div className="evidence" style={{ padding: '0 4px 8px 28px' }}>
+                      <div className="row tight" style={{ marginBottom: 4 }}>
+                        {fields.map((f) => renderField(c.name, f))}
+                      </div>
+                      {c.evidence?.rule && <p className="hint subtle mono" style={{ margin: 0 }}>rule: {c.evidence.rule}</p>}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </fieldset>
 
-          {needsRange && (
+          {rangeNeeded && (
             <div className="evidence">
               <div className="row tight">
                 <NumberField id={`low-${p.cid}`} label="Traded low" value={low} onChange={setLow} placeholder="0.00" />
@@ -180,12 +359,14 @@ export default function ProposalCard({ proposal: p, role, onChanged, onRefresh, 
 
           {!refusing ? (
             <div className="proposal-actions">
-              <button type="button" className="primary" disabled={!canConfirm} onClick={() => void confirm()}>
-                {busy === 'confirm' ? 'Submitting…' : `Confirm${checks.length ? ` (${checks.length} verified)` : ''}`}
+              <button type="button" className="primary" disabled={!canConfirm} onClick={() => void confirm()}
+                title={missing ? `Missing: ${missing}` : undefined}>
+                {busy === 'confirm' ? 'Submitting…' : `Confirm${effectiveChecks.length ? ` (${effectiveChecks.length} verified)` : ''}`}
               </button>
-              <button type="button" className="ghost" disabled={busy !== null} onClick={() => { setRefusing(true); setError(null); }}>
+              <button type="button" className="ghost" disabled={busy !== null} onClick={() => { setRefusing(true); setError(null); setErrorHint(null); }}>
                 Refuse with reason
               </button>
+              {missing && busy === null && <span className="hint subtle" style={{ margin: 0 }}>Missing: <span className="mono">{missing}</span></span>}
             </div>
           ) : (
             <form className="refuse" onSubmit={(e) => { e.preventDefault(); void refuse(); }}>
@@ -193,7 +374,7 @@ export default function ProposalCard({ proposal: p, role, onChanged, onRefresh, 
                 <label className="field" htmlFor={`rc-${p.cid}`}>
                   <span>Condition that fails</span>
                   <select id={`rc-${p.cid}`} value={refuseCondition} onChange={(e) => setRefuseCondition(e.target.value)}>
-                    {conditionNames.map((n) => <option key={n} value={n}>{n}</option>)}
+                    {conditions.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
                     <option value="other">other</option>
                   </select>
                 </label>
@@ -214,7 +395,11 @@ export default function ProposalCard({ proposal: p, role, onChanged, onRefresh, 
         </>
       )}
 
-      {error && <div className="banner error" role="alert"><span>{error}</span></div>}
+      {error && (
+        <div className="banner error" role="alert">
+          <span>{error}{errorHint ? <><br /><span className="muted">{errorHint}</span></> : null}</span>
+        </div>
+      )}
 
       <div className="msglog">
         <button type="button" className="link" aria-expanded={showLog} onClick={() => setShowLog((s) => !s)}>
