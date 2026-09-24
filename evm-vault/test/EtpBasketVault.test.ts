@@ -8,6 +8,16 @@ const ONE = 10n ** 18n;
 const DAY = 24n * 60n * 60n;
 const INSTRUMENT = ethers.keccak256(ethers.toUtf8Bytes("LX1"));
 const RULEBOOK = ethers.keccak256(ethers.toUtf8Bytes("lx1-rulebook-v1"));
+// keccak256 of a Canton NavFixing contract id, as the relay derives it.
+const FIXING_REF = ethers.keccak256(ethers.toUtf8Bytes("00a1b2c3d4e5f6:NavFixing:LX1:2026-09-24"));
+const TIER_SEED = 0;
+const TIER_ATTESTED = 1;
+const TIER_ALTERNATE_SEATS = 2;
+const TIER_BENCHMARK_X_FACTOR = 3;
+const TIER_CARRIED_FORWARD = 4;
+const TIER_MISSED = 5;
+const NAV_TYPE_STRING =
+  "NavFixing(bytes32 instrumentId,uint64 asOfDate,uint8 session,uint256 navPerShare,bytes32 rulebookVersion,uint64 signedAt,bytes32 fixingRef,uint8 tier)";
 
 // 0.5 of a 6-decimal token and 0.25 of an 18-decimal token per share.
 const UNITS_A = 500_000n;
@@ -28,6 +38,8 @@ type Fixing = {
   navPerShare: bigint;
   rulebookVersion: string;
   signedAt: bigint;
+  fixingRef: string;
+  tier: number;
 };
 
 const NAV_TYPES = {
@@ -38,6 +50,8 @@ const NAV_TYPES = {
     { name: "navPerShare", type: "uint256" },
     { name: "rulebookVersion", type: "bytes32" },
     { name: "signedAt", type: "uint64" },
+    { name: "fixingRef", type: "bytes32" },
+    { name: "tier", type: "uint8" },
   ],
 };
 
@@ -65,7 +79,7 @@ async function todayDays(): Promise<bigint> {
   return BigInt(await time.latest()) / DAY;
 }
 
-async function makeFixing(nav: bigint, dateOffsetDays = 0n, session = 0): Promise<Fixing> {
+async function makeFixing(nav: bigint, dateOffsetDays = 0n, session = 0, tier = TIER_ATTESTED): Promise<Fixing> {
   const now = BigInt(await time.latest());
   return {
     instrumentId: INSTRUMENT,
@@ -74,6 +88,8 @@ async function makeFixing(nav: bigint, dateOffsetDays = 0n, session = 0): Promis
     navPerShare: nav,
     rulebookVersion: RULEBOOK,
     signedAt: now,
+    fixingRef: FIXING_REF,
+    tier,
   };
 }
 
@@ -523,7 +539,7 @@ describe("EtpBasketVault", () => {
       const f = await makeFixing(890n * ONE);
       const sigs = await signFixing(vault, [att1, att2], f);
       await expect(vault.postNav(f, sigs))
-        .to.emit(vault, "NavPosted").withArgs(INSTRUMENT, f.asOfDate, 890n * ONE, 2n);
+        .to.emit(vault, "NavPosted").withArgs(INSTRUMENT, f.asOfDate, 890n * ONE, 2n, FIXING_REF, TIER_ATTESTED);
       const [nav, asOf, age] = await vault.navPerShare();
       expect(nav).to.equal(890n * ONE);
       expect(asOf).to.equal(f.asOfDate);
@@ -532,13 +548,123 @@ describe("EtpBasketVault", () => {
       const rec = await vault.latestNav();
       expect(rec.attestorCount).to.equal(2n);
       expect(rec.rulebookVersion).to.equal(RULEBOOK);
+      expect(rec.fixingRef).to.equal(FIXING_REF);
+      expect(rec.tier).to.equal(TIER_ATTESTED);
+    });
+
+    it("typehash covers fixingRef and tier, so a signature over the old struct shape is invalid", async () => {
+      const { vault, att1, att2 } = await loadFixture(deployFixture);
+      expect(await vault.NAV_FIXING_TYPEHASH()).to.equal(ethers.keccak256(ethers.toUtf8Bytes(NAV_TYPE_STRING)));
+      const f = await makeFixing(ONE);
+      const domain = await domainFor(vault);
+      const oldTypes = { NavFixing: NAV_TYPES.NavFixing.slice(0, 6) };
+      const { fixingRef: _r, tier: _t, ...oldShape } = f;
+      const oldSigs = await Promise.all([att1, att2].map((s) => s.signTypedData(domain, oldTypes, oldShape)));
+      await expect(vault.postNav(f, oldSigs)).to.be.revertedWithCustomError(vault, "NotAnAttestor");
+    });
+
+    it("stores and exposes the Canton fixing reference via latestFixingRef()", async () => {
+      const { vault, att1, att2 } = await loadFixture(deployFixture);
+      const [refBefore, tierBefore] = await vault.latestFixingRef();
+      expect(refBefore).to.equal(ethers.ZeroHash);
+      expect(tierBefore).to.equal(0);
+      const cid = "00deadbeef:NavFixing:LX1:2026-09-25";
+      const f = { ...(await makeFixing(ONE)), fixingRef: ethers.keccak256(ethers.toUtf8Bytes(cid)) };
+      await vault.postNav(f, await signFixing(vault, [att1, att2], f));
+      const [ref, tier] = await vault.latestFixingRef();
+      expect(ref).to.equal(ethers.keccak256(ethers.toUtf8Bytes(cid)));
+      expect(tier).to.equal(TIER_ATTESTED);
+      // Two different Canton records for consecutive days produce different refs.
+      const g = { ...(await makeFixing(ONE, 1n)), fixingRef: ethers.keccak256(ethers.toUtf8Bytes(cid + ":next")) };
+      // asOfDate + 1 is "tomorrow" relative to chain time; advance the clock so it is not in the future.
+      await time.increase(DAY);
+      g.signedAt = BigInt(await time.latest());
+      await vault.postNav(g, await signFixing(vault, [att1, att2], g));
+      expect((await vault.latestFixingRef())[0]).to.not.equal(ref);
+    });
+
+    it("refuses a zero fixingRef", async () => {
+      const { vault, att1, att2 } = await loadFixture(deployFixture);
+      const f = { ...(await makeFixing(ONE)), fixingRef: ethers.ZeroHash };
+      await expect(vault.postNav(f, await signFixing(vault, [att1, att2], f)))
+        .to.be.revertedWithCustomError(vault, "ZeroFixingRef");
+    });
+
+    it("refuses a seed (tier 0) fixing at EVERY maxTier setting", async () => {
+      const { vault, admin, att1, att2 } = await loadFixture(deployFixture);
+      for (const setting of [TIER_ATTESTED, TIER_BENCHMARK_X_FACTOR, TIER_MISSED]) {
+        if (setting !== TIER_ATTESTED) await vault.connect(admin).setMaxTier(setting);
+        expect(await vault.maxTier()).to.equal(setting);
+        const seed = await makeFixing(ONE, 0n, 0, TIER_SEED);
+        await expect(vault.postNav(seed, await signFixing(vault, [att1, att2], seed)))
+          .to.be.revertedWithCustomError(vault, "TierNotAccepted").withArgs(TIER_SEED, setting);
+      }
+    });
+
+    it("accepts an attested (tier 1) fixing under the default maxTier", async () => {
+      const { vault, att1, att2 } = await loadFixture(deployFixture);
+      expect(await vault.maxTier()).to.equal(TIER_ATTESTED);
+      const f = await makeFixing(ONE, 0n, 0, TIER_ATTESTED);
+      await expect(vault.postNav(f, await signFixing(vault, [att1, att2], f)))
+        .to.emit(vault, "NavPosted").withArgs(INSTRUMENT, f.asOfDate, ONE, 2n, FIXING_REF, TIER_ATTESTED);
+      expect((await vault.latestFixingRef())[1]).to.equal(TIER_ATTESTED);
+    });
+
+    it("refuses a carried-forward (tier 4) fixing by default", async () => {
+      const { vault, att1, att2 } = await loadFixture(deployFixture);
+      const cf = await makeFixing(ONE, 0n, 0, TIER_CARRIED_FORWARD);
+      await expect(vault.postNav(cf, await signFixing(vault, [att1, att2], cf)))
+        .to.be.revertedWithCustomError(vault, "TierNotAccepted").withArgs(TIER_CARRIED_FORWARD, TIER_ATTESTED);
+    });
+
+    it("accepts carried-forward once the admin raises maxTier to 4, and still refuses missed (tier 5)", async () => {
+      const { vault, admin, att1, att2 } = await loadFixture(deployFixture);
+      await expect(vault.connect(admin).setMaxTier(TIER_CARRIED_FORWARD))
+        .to.emit(vault, "MaxTierSet").withArgs(TIER_ATTESTED, TIER_CARRIED_FORWARD);
+      const cf = await makeFixing(ONE, 0n, 0, TIER_CARRIED_FORWARD);
+      await expect(vault.postNav(cf, await signFixing(vault, [att1, att2], cf)))
+        .to.emit(vault, "NavPosted").withArgs(INSTRUMENT, cf.asOfDate, ONE, 2n, FIXING_REF, TIER_CARRIED_FORWARD);
+      // A missed strike is weaker still, so it stays out at maxTier 4.
+      await time.increase(DAY);
+      const missed = await makeFixing(ONE, 0n, 0, TIER_MISSED);
+      await expect(vault.postNav(missed, await signFixing(vault, [att1, att2], missed)))
+        .to.be.revertedWithCustomError(vault, "TierNotAccepted").withArgs(TIER_MISSED, TIER_CARRIED_FORWARD);
+    });
+
+    it("admits the intermediate tiers in order as maxTier rises", async () => {
+      const { vault, admin, att1, att2 } = await loadFixture(deployFixture);
+      const alt = await makeFixing(ONE, 0n, 0, TIER_ALTERNATE_SEATS);
+      await expect(vault.postNav(alt, await signFixing(vault, [att1, att2], alt)))
+        .to.be.revertedWithCustomError(vault, "TierNotAccepted").withArgs(TIER_ALTERNATE_SEATS, TIER_ATTESTED);
+      await vault.connect(admin).setMaxTier(TIER_ALTERNATE_SEATS);
+      await vault.postNav(alt, await signFixing(vault, [att1, att2], alt));
+      expect((await vault.latestFixingRef())[1]).to.equal(TIER_ALTERNATE_SEATS);
+      // benchmark-x-factor (3) is one step weaker and stays out.
+      await time.increase(DAY);
+      const xf = await makeFixing(ONE, 0n, 0, TIER_BENCHMARK_X_FACTOR);
+      await expect(vault.postNav(xf, await signFixing(vault, [att1, att2], xf)))
+        .to.be.revertedWithCustomError(vault, "TierNotAccepted").withArgs(TIER_BENCHMARK_X_FACTOR, TIER_ALTERNATE_SEATS);
+    });
+
+    it("setMaxTier is admin-only and bounded to 1..5", async () => {
+      const { vault, admin, outsider } = await loadFixture(deployFixture);
+      await expect(vault.connect(outsider).setMaxTier(TIER_CARRIED_FORWARD))
+        .to.be.revertedWithCustomError(vault, "AccessControlUnauthorizedAccount");
+      await expect(vault.connect(admin).setMaxTier(TIER_SEED))
+        .to.be.revertedWithCustomError(vault, "InvalidMaxTier").withArgs(TIER_SEED);
+      await expect(vault.connect(admin).setMaxTier(6))
+        .to.be.revertedWithCustomError(vault, "InvalidMaxTier").withArgs(6);
+      await expect(vault.connect(admin).setMaxTier(TIER_MISSED))
+        .to.emit(vault, "MaxTierSet").withArgs(TIER_ATTESTED, TIER_MISSED);
+      expect(await vault.maxTier()).to.equal(TIER_MISSED);
     });
 
     it("accepts more than threshold signatures (3 of 3) and records the count", async () => {
       const { vault, att1, att2, att3 } = await loadFixture(deployFixture);
       const f = await makeFixing(1n * ONE);
       const sigs = await signFixing(vault, [att3, att1, att2], f);
-      await expect(vault.postNav(f, sigs)).to.emit(vault, "NavPosted").withArgs(INSTRUMENT, f.asOfDate, ONE, 3n);
+      await expect(vault.postNav(f, sigs))
+        .to.emit(vault, "NavPosted").withArgs(INSTRUMENT, f.asOfDate, ONE, 3n, FIXING_REF, TIER_ATTESTED);
     });
 
     it("refuses a duplicate signer even if the count meets the threshold", async () => {

@@ -101,22 +101,44 @@ multiplier-adjusted management fee all preserve it; `applyBasket` and
  Canton fixing committee (K of N)            ETP Foundry API                relay (anyone)                EtpBasketVault
  ------------------------------              ---------------                --------------                --------------
  compute NAV under the rulebook  --commit-->  GET /api/benchmarks/<id>  -->  build NavFixing{           -->  postNav(f, sigs)
- each member signs the EIP-712                latest: price, asOf,            instrumentId, asOfDate,          - K distinct registered attestors
+ each member signs the EIP-712                last: price, asOf,              instrumentId, asOfDate,          - K distinct registered attestors
  NavFixing on their own signer                tier, k, n, signers,            session, navPerShare,            - EIP-712 domain = this vault + chain
-                                              fixingCid                       rulebookVersion, signedAt }      - asOfDate strictly newer (1/day)
-                                                                              collect K+ signatures            - not in the future
-                                                                                                               stores latestNav, emits NavPosted
+                                              fixingCid                       rulebookVersion, signedAt,       - asOfDate strictly newer (1/day)
+                                                                              fixingRef = keccak(fixingCid),   - not in the future
+                                                                              tier }                           - fixingRef != 0, tier in 1..maxTier
+                                                                              collect K+ signatures            stores latestNav, emits NavPosted
 ```
 
 `NavFixing` is EIP-712 typed data in the vault's own domain
 (`name`, version `"1"`, `chainId`, `verifyingContract`) — the same domain
 `permit` uses — so a fixing signed for another vault, another instrument or
-another chain is worthless here. `postNav` enforces: instrument match; at least
-`navThreshold` **distinct** registered attestors (threshold ≥ 2, ≤ N); `asOfDate`
-strictly greater than the last accepted fixing (one fixing per day, no replay,
-no rollback); `asOfDate` not in the future; `signedAt` within 10 minutes of
-chain time. It does **not** judge whether the number is right — that is the
-committee's and the rulebook's job.
+another chain is worthless here. Type string:
+
+```
+NavFixing(bytes32 instrumentId,uint64 asOfDate,uint8 session,uint256 navPerShare,
+          bytes32 rulebookVersion,uint64 signedAt,bytes32 fixingRef,uint8 tier)
+```
+
+* `fixingRef` — `keccak256` of the UTF-8 Canton `NavFixing` contract id
+  (`last.fixingCid` in the API). Every on-chain posting names the attested
+  Canton record it projects; a zero ref is refused. `latestFixingRef()` returns
+  the ref and tier behind the current NAV, and both are in `NavPosted`.
+* `tier` — the desk's fixing tier from `last.tier`, as defined by
+  `SeriesRow.labelFor` in the desk backend: `1` attested, `2` alternate-seats,
+  `3` benchmark-x-factor, `4` carried-forward, `5` missed, and anything else
+  (including `0`) a seed value. **The scale ascends as trust descends**, so the
+  on-chain gate is a MAXIMUM: `postNav` refuses unless `1 <= tier <= maxTier`.
+  **`maxTier` defaults to 1** — fully attested only — and only `ADMIN_ROLE` can
+  change it, within `1..5` (`setMaxTier`, emits `MaxTierSet`). Raising it is a
+  degraded-operations posture. Tier 0 is refused at every setting: a seed value
+  is not attested at all, so there is deliberately no way to configure it in.
+
+`postNav` enforces: instrument match; at least `navThreshold` **distinct**
+registered attestors (threshold ≥ 2, ≤ N); `asOfDate` strictly greater than
+the last accepted fixing (one fixing per day, no replay, no rollback);
+`asOfDate` not in the future; `signedAt` within 10 minutes of chain time;
+non-zero `fixingRef`; `1 <= tier <= maxTier`. It does **not** judge whether the
+number is right — that is the committee's and the rulebook's job.
 
 **NAV is informational for the in-kind flows.** An AP delivers units, not
 value, so the vault never prices anything. `navPerShare()` (value, date, age
@@ -125,8 +147,10 @@ a lender taking shares as collateral, a UI, or a future cash-creation
 extension. Consumers must check freshness themselves.
 
 `scripts/post-nav.ts` is a **reference relay**: it reads the benchmark from
-`https://etpfoundry.com/api/benchmarks/<id>`, refuses tier-0 "seed" values
-unless `ALLOW_SEED_FIXING=true`, signs with N local keys and submits. Holding
+`https://etpfoundry.com/api/benchmarks/<id>`, takes `fixingRef` from
+`last.fixingCid` and `tier` from `last.tier`, **refuses to run when `fixingCid`
+is absent** (as it is for seed values) or when the tier falls outside the
+vault's accepted `1..maxTier` band, signs with N local keys and submits. Holding
 all N keys in one process collapses K-of-N to 1-of-1; in production each
 committee member signs on their own key service and the relay only collects.
 

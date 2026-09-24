@@ -91,6 +91,13 @@ contract EtpBasketVault is ERC20, ERC20Permit, AccessControl, Pausable, Reentran
     /// @param navPerShare     NAV per 1e18 shares, 18 decimals, in the quote currency.
     /// @param rulebookVersion Hash/tag of the calculation rulebook the committee applied.
     /// @param signedAt        Unix seconds when the committee produced the fixing.
+    /// @param fixingRef       keccak256 of the UTF-8 Canton NavFixing contract id
+    ///                        this posting projects. Ties the on-chain number
+    ///                        back to the attested Canton record; never zero.
+    /// @param tier            The desk's fixing tier (the API's `last.tier`).
+    ///                        The scale ASCENDS AS TRUST DESCENDS, so 1 is the
+    ///                        best a fixing can be. Gated on-chain by {maxTier};
+    ///                        tier 0 is never acceptable. See the TIER_* constants.
     struct NavFixing {
         bytes32 instrumentId;
         uint64 asOfDate;
@@ -98,6 +105,8 @@ contract EtpBasketVault is ERC20, ERC20Permit, AccessControl, Pausable, Reentran
         uint256 navPerShare;
         bytes32 rulebookVersion;
         uint64 signedAt;
+        bytes32 fixingRef;
+        uint8 tier;
     }
 
     /// @notice What the vault remembers about the last accepted fixing.
@@ -108,6 +117,8 @@ contract EtpBasketVault is ERC20, ERC20Permit, AccessControl, Pausable, Reentran
         uint64 postedAt;
         bytes32 rulebookVersion;
         uint256 attestorCount;
+        bytes32 fixingRef;
+        uint8 tier;
     }
 
     struct BasketProposal {
@@ -154,8 +165,26 @@ contract EtpBasketVault is ERC20, ERC20Permit, AccessControl, Pausable, Reentran
 
     bytes32 public constant NAV_FIXING_TYPEHASH =
         keccak256(
-            "NavFixing(bytes32 instrumentId,uint64 asOfDate,uint8 session,uint256 navPerShare,bytes32 rulebookVersion,uint64 signedAt)"
+            "NavFixing(bytes32 instrumentId,uint64 asOfDate,uint8 session,uint256 navPerShare,bytes32 rulebookVersion,uint64 signedAt,bytes32 fixingRef,uint8 tier)"
         );
+
+    /// @notice Fixing tiers as used by the ETP Foundry desk (`last.tier` in the
+    ///         API). SOURCE OF TRUTH:
+    ///         `backend/src/main/java/com/lucilla/settlement/benchmarks/SeriesRow.java`,
+    ///         `labelFor(int tier)` -- 1 attested, 2 alternate-seats,
+    ///         3 benchmark-x-factor, 4 carried-forward, 5 missed, and anything
+    ///         else (including 0) "seed". Keep these constants in step with that
+    ///         switch so the numbering cannot drift silently.
+    /// @dev    The scale ASCENDS AS TRUST DESCENDS, which is why the on-chain
+    ///         gate is a MAXIMUM ({maxTier}) and not a minimum. Tier 0 is the
+    ///         seed value the sandbox emits: not attested at all, never
+    ///         acceptable, and deliberately not configurable in.
+    uint8 public constant TIER_SEED = 0;
+    uint8 public constant TIER_ATTESTED = 1;
+    uint8 public constant TIER_ALTERNATE_SEATS = 2;
+    uint8 public constant TIER_BENCHMARK_X_FACTOR = 3;
+    uint8 public constant TIER_CARRIED_FORWARD = 4;
+    uint8 public constant TIER_MISSED = 5;
 
     // ------------------------------------------------------------------
     // Storage
@@ -205,6 +234,12 @@ contract EtpBasketVault is ERC20, ERC20Permit, AccessControl, Pausable, Reentran
     uint256 public navThreshold;
 
     NavRecord private _latestNav;
+    /// @notice Worst fixing tier {postNav} accepts, inclusive. Defaults to
+    ///         {TIER_ATTESTED}, i.e. a fully attested committee fixing and
+    ///         nothing weaker. Raising it admits progressively weaker fixings
+    ///         (alternate seats, x-factor, carried forward, missed); no setting
+    ///         admits tier 0, which is not attested at all.
+    uint8 public maxTier;
 
     // ------------------------------------------------------------------
     // Events
@@ -237,7 +272,15 @@ contract EtpBasketVault is ERC20, ERC20Permit, AccessControl, Pausable, Reentran
     event BasketApplied(uint256 indexed epoch, address[] constituents, uint256[] unitsPerShare);
     event ExcessSwept(address indexed token, address indexed to, uint256 amount);
     event AttestorsSet(address[] attestors, uint256 threshold);
-    event NavPosted(bytes32 indexed instrumentId, uint64 indexed asOfDate, uint256 navPerShare, uint256 attestorCount);
+    event NavPosted(
+        bytes32 indexed instrumentId,
+        uint64 indexed asOfDate,
+        uint256 navPerShare,
+        uint256 attestorCount,
+        bytes32 fixingRef,
+        uint8 tier
+    );
+    event MaxTierSet(uint8 previous, uint8 current);
 
     // ------------------------------------------------------------------
     // Errors
@@ -273,6 +316,9 @@ contract EtpBasketVault is ERC20, ERC20Permit, AccessControl, Pausable, Reentran
     error StaleFixing(uint64 provided, uint64 latest);
     error FixingInFuture(uint64 asOfDate);
     error SignedAtInFuture(uint64 signedAt);
+    error ZeroFixingRef();
+    error TierNotAccepted(uint8 tier, uint8 maxTier);
+    error InvalidMaxTier(uint8 maxTier);
     error NoNavPosted();
 
     // ------------------------------------------------------------------
@@ -295,6 +341,7 @@ contract EtpBasketVault is ERC20, ERC20Permit, AccessControl, Pausable, Reentran
         feeRecipient = p.feeRecipient;
         rebalanceDelay = DEFAULT_REBALANCE_DELAY;
         lastFeeAccrual = block.timestamp;
+        maxTier = TIER_ATTESTED;
 
         _setBasket(p.constituents, p.unitsPerShare);
         epoch = 1;
@@ -504,7 +551,12 @@ contract EtpBasketVault is ERC20, ERC20Permit, AccessControl, Pausable, Reentran
     ///           - `asOfDate` is strictly newer than the last accepted fixing:
     ///             one fixing per day, no replay, no rollback;
     ///           - `asOfDate` is not in the future and `signedAt` is not
-    ///             materially ahead of the chain clock.
+    ///             materially ahead of the chain clock;
+    ///           - `fixingRef` is non-zero (every posting names the Canton
+    ///             record it projects) and the tier is acceptable: at least
+    ///             {TIER_ATTESTED} and no worse than {maxTier}, so a seed value
+    ///             never posts at all and a carried-forward or missed strike
+    ///             does not reach a consumer by default.
     ///         NOT enforced: whether the number is right. That is the
     ///         committee's job and the rulebook's job.
     /// @param f    The fixing struct exactly as signed.
@@ -520,6 +572,8 @@ contract EtpBasketVault is ERC20, ERC20Permit, AccessControl, Pausable, Reentran
         if (_latestNav.postedAt != 0 && f.asOfDate <= latestDate) revert StaleFixing(f.asOfDate, latestDate);
         if (uint256(f.asOfDate) * 1 days > block.timestamp + 1 days) revert FixingInFuture(f.asOfDate);
         if (f.signedAt > block.timestamp + SIGNED_AT_MAX_SKEW) revert SignedAtInFuture(f.signedAt);
+        if (f.fixingRef == bytes32(0)) revert ZeroFixingRef();
+        if (f.tier < TIER_ATTESTED || f.tier > maxTier) revert TierNotAccepted(f.tier, maxTier);
         if (sigs.length < threshold) revert InsufficientSignatures(sigs.length, threshold);
 
         bytes32 digest = hashNavFixing(f);
@@ -539,10 +593,28 @@ contract EtpBasketVault is ERC20, ERC20Permit, AccessControl, Pausable, Reentran
             session: f.session,
             postedAt: uint64(block.timestamp),
             rulebookVersion: f.rulebookVersion,
-            attestorCount: sigs.length
+            attestorCount: sigs.length,
+            fixingRef: f.fixingRef,
+            tier: f.tier
         });
 
-        emit NavPosted(f.instrumentId, f.asOfDate, f.navPerShare, sigs.length);
+        emit NavPosted(f.instrumentId, f.asOfDate, f.navPerShare, sigs.length, f.fixingRef, f.tier);
+    }
+
+    /// @notice Set the worst fixing tier {postNav} will accept (inclusive).
+    /// @dev    WHY admin-gated and defaulting to {TIER_ATTESTED}: a consumer
+    ///         reading {navPerShare} must be able to assume it is a fully
+    ///         attested committee fixing unless the issuer has explicitly said
+    ///         otherwise. Raising it is a degraded-operations posture (the
+    ///         committee could not seat a quorum; the strike was missed) and is
+    ///         recorded by {MaxTierSet}.
+    ///         The range is {TIER_ATTESTED}..{TIER_MISSED}: 0 is refused because
+    ///         a seed value is not attested at all, and anything above
+    ///         {TIER_MISSED} is not a tier the desk emits.
+    function setMaxTier(uint8 newMaxTier) external onlyRole(ADMIN_ROLE) {
+        if (newMaxTier < TIER_ATTESTED || newMaxTier > TIER_MISSED) revert InvalidMaxTier(newMaxTier);
+        emit MaxTierSet(maxTier, newMaxTier);
+        maxTier = newMaxTier;
     }
 
     /// @notice EIP-712 digest a committee member signs for `f`.
@@ -559,10 +631,18 @@ contract EtpBasketVault is ERC20, ERC20Permit, AccessControl, Pausable, Reentran
                         f.session,
                         f.navPerShare,
                         f.rulebookVersion,
-                        f.signedAt
+                        f.signedAt,
+                        f.fixingRef,
+                        f.tier
                     )
                 )
             );
+    }
+
+    /// @notice The Canton fixing reference (keccak256 of its contract id) and
+    ///         tier behind the latest posted NAV. Both zero if nothing posted.
+    function latestFixingRef() external view returns (bytes32 fixingRef, uint8 tier) {
+        return (_latestNav.fixingRef, _latestNav.tier);
     }
 
     /// @notice Latest NAV per share with its on-chain age.

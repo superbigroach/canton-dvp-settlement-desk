@@ -21,9 +21,16 @@
  *   "latest": { ...same shape... },
  *   "referencing":[]
  * }
- * `latest.tier` 0 = seed (not attested); `k`/`n`/`signers` describe the Canton
- * committee that produced it; `fixingCid` is the Canton contract id. There is
- * no `session` field, so the session code comes from NAV_SESSION (0 = close).
+ * `last.tier` per `SeriesRow.labelFor` in the desk backend: 1 = attested,
+ * 2 = alternate-seats, 3 = benchmark-x-factor, 4 = carried-forward, 5 = missed,
+ * anything else (including 0) = seed. The scale ASCENDS AS TRUST DESCENDS.
+ * `k`/`n`/`signers` describe the Canton committee that produced it;
+ * `fixingCid` is the Canton NavFixing contract id (null for a seed value).
+ * The relay puts keccak256(utf8(fixingCid)) into `fixingRef` and `last.tier`
+ * into `tier`, and REFUSES to post when fixingCid is absent: the on-chain
+ * record must always point back to an attested Canton contract. The vault then
+ * enforces 1 <= tier <= maxTier (default 1) itself. There is no `session`
+ * field, so the session code comes from NAV_SESSION (0 = close).
  */
 import { ethers, network } from "hardhat";
 
@@ -39,6 +46,7 @@ type ApiFixing = {
   n?: number;
   signers?: string[];
   fixingCid?: string | null;
+  displayLabel?: string;
   session?: number | string;
 };
 type ApiBenchmark = { id: string; name?: string; kind?: string; latest: ApiFixing | null; last?: ApiFixing | null };
@@ -87,7 +95,6 @@ async function main() {
   const relayerKey = opt("RELAYER_PRIVATE_KEY", opt("DEPLOYER_PRIVATE_KEY"));
   const session = Number(opt("NAV_SESSION", "0"));
   const rulebookVersion = toBytes32(opt("RULEBOOK_VERSION", "rulebook-v1"));
-  const allowSeed = opt("ALLOW_SEED_FIXING", "false").toLowerCase() === "true";
   if (!relayerKey) throw new Error("Set RELAYER_PRIVATE_KEY (or DEPLOYER_PRIVATE_KEY) to pay gas");
 
   // 1. Fetch the latest fixing from ETP Foundry.
@@ -96,15 +103,23 @@ async function main() {
   const res = await fetch(url, { headers: { accept: "application/json" } });
   if (!res.ok) throw new Error(`API ${res.status} ${res.statusText}`);
   const bench = (await res.json()) as ApiBenchmark;
-  const fixing = bench.latest ?? bench.last;
+  const fixing = bench.last ?? bench.latest;
   if (!fixing) throw new Error(`Benchmark ${benchmarkId} has no fixing yet`);
   console.log(
     `  ${bench.name ?? bench.id}: price=${fixing.price} asOf=${fixing.asOf} tier=${fixing.tier} (${fixing.tierLabel}) ` +
       `k=${fixing.k}/n=${fixing.n} signers=${JSON.stringify(fixing.signers ?? [])} fixingCid=${fixing.fixingCid ?? "null"}`
   );
-  if ((fixing.tier ?? 0) === 0 && !allowSeed) {
-    throw new Error("Latest fixing is tier 0 (seed, not attested). Set ALLOW_SEED_FIXING=true to relay it anyway (testnet only).");
+  if (typeof fixing.fixingCid !== "string" || fixing.fixingCid.trim() === "") {
+    throw new Error(
+      `Refusing to relay: benchmark ${benchmarkId} has no fixingCid (tier ${fixing.tier ?? "?"}: ${fixing.displayLabel ?? fixing.tierLabel ?? "unlabelled"}). ` +
+        "Every on-chain posting must reference the Canton NavFixing contract it projects."
+    );
   }
+  if (fixing.tier === undefined || !Number.isInteger(fixing.tier) || fixing.tier < 0 || fixing.tier > 255) {
+    throw new Error(`Refusing to relay: benchmark ${benchmarkId} has no usable tier (${fixing.tier})`);
+  }
+  const fixingRef = ethers.keccak256(ethers.toUtf8Bytes(fixing.fixingCid));
+  const tier = fixing.tier;
 
   // 2. Build the on-chain struct.
   const relayer = new ethers.Wallet(relayerKey, ethers.provider);
@@ -127,11 +142,20 @@ async function main() {
     navPerShare: toWad(fixing.price),
     rulebookVersion,
     signedAt: BigInt(Math.floor(Date.now() / 1000)),
+    fixingRef,
+    tier,
   };
   const latest = await vault.latestNav();
   if (latest.postedAt !== 0n && navFixing.asOfDate <= latest.asOfDate) {
     console.log(`Vault already has asOfDate ${latest.asOfDate}; API fixing is ${navFixing.asOfDate}. Nothing to post.`);
     return;
+  }
+  const maxTier = await vault.maxTier();
+  if (tier < 1 || BigInt(tier) > maxTier) {
+    throw new Error(
+      `Refusing to relay: fixing tier ${tier} (${fixing.tierLabel ?? "?"}) is outside the vault's accepted band 1..${maxTier}. ` +
+        "Tier 0 is a seed value and can never be posted; for a weaker but genuine fixing the admin may raise maxTier with setMaxTier()."
+    );
   }
 
   // 3. Sign with each local attestor key against the vault's own EIP-712 domain.
@@ -149,6 +173,8 @@ async function main() {
       { name: "navPerShare", type: "uint256" },
       { name: "rulebookVersion", type: "bytes32" },
       { name: "signedAt", type: "uint64" },
+      { name: "fixingRef", type: "bytes32" },
+      { name: "tier", type: "uint8" },
     ],
   };
   const threshold = await vault.navThreshold();
@@ -170,13 +196,18 @@ async function main() {
   if (onchainDigest !== localDigest) throw new Error("Digest mismatch between local encoder and vault; aborting");
 
   // 4. Post.
-  console.log(`postNav on ${network.name}: asOfDate=${navFixing.asOfDate} nav=${ethers.formatUnits(navFixing.navPerShare, 18)} sigs=${sigs.length}`);
+  console.log(
+    `postNav on ${network.name}: asOfDate=${navFixing.asOfDate} nav=${ethers.formatUnits(navFixing.navPerShare, 18)} ` +
+      `tier=${tier} fixingCid=${fixing.fixingCid} fixingRef=${fixingRef} sigs=${sigs.length}`
+  );
   const tx = await vault.postNav(navFixing, sigs);
   console.log(`  tx ${tx.hash}`);
   const receipt = await tx.wait();
   console.log(`  mined in block ${receipt?.blockNumber}`);
   const [nav, asOf, age] = await vault.navPerShare();
+  const [ref, postedTier] = await vault.latestFixingRef();
   console.log(`  vault.navPerShare() = ${ethers.formatUnits(nav, 18)} asOfDate=${asOf} age=${age}s`);
+  console.log(`  vault.latestFixingRef() = ${ref} tier=${postedTier}`);
 }
 
 main().catch((e) => {
