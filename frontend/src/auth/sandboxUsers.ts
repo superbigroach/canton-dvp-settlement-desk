@@ -22,6 +22,8 @@ export const SANDBOX_USERS: SandboxUser[] = [
   u('issuer@sandbox.crossdesk', 'signer', 'Issuer', 'Issuer', 'Issuer signer', 'signer · issuer seat', 'issuer', ['CBTC', 'cETH', 'LX1']),
   u('lender@sandbox.crossdesk', 'signer', 'Bank', 'Bank', 'Lender signer', 'signer · lender seat', 'lender', ['CBTC', 'cETH', 'LX1']),
   u('venue@sandbox.crossdesk', 'signer', 'Venue', 'Venue', 'Venue signer', 'signer · venue seat (traded range)', 'venue', ['CBTC', 'cETH']),
+  u('custodian@sandbox.crossdesk', 'signer', 'Custodian', 'Custodian', 'Custodian signer', 'signer · custodian seat (holdings)', 'custodian', ['CBTC', 'cETH']),
+  u('transferagent@sandbox.crossdesk', 'signer', 'TransferAgent', 'Transfer agent', 'Transfer-agent signer', 'signer · transfer-agent seat (share register)', 'transfer-agent', ['CBTC', 'cETH', 'LX1']),
   u('alice@sandbox.crossdesk', 'ap', 'Alice', 'Alice Capital', 'Alice', 'authorised participant'),
   u('bob@sandbox.crossdesk', 'ap', 'Bob', 'Bob Markets', 'Bob', 'authorised participant'),
   u('fund@sandbox.crossdesk', 'fund_admin', 'Issuer', 'LX1 Fund', 'Fund administrator', 'fund admin · LX1'),

@@ -7,7 +7,7 @@
 // a backend that sends less still renders.
 
 export type Role = 'admin' | 'signer' | 'ap' | 'fund_admin' | 'auditor' | 'viewer';
-export type Seat = 'issuer' | 'lender' | 'venue';
+export type Seat = 'issuer' | 'lender' | 'venue' | 'custodian' | 'transfer-agent';
 
 export interface Me {
   uid: string;
@@ -101,6 +101,8 @@ export interface Proposal {
   cid: string;
   instrument: string;
   session?: string;
+  /** The day this fixing describes (ISO date, attested on-ledger since package 3.0.0). */
+  asOfDate?: string | null;
   kind: 'wrapped' | 'nav' | 'snapshot';
   price: number;
   referencePrice?: number;   // wrapped: the benchmark print
@@ -154,6 +156,8 @@ export interface SignerSettings {
   webhookSecretSet?: boolean;
   email: string;
   tolerances: Record<string, number>;
+  /** What an absent tolerance key is judged at (SignerSettingsController.view). */
+  toleranceDefaults?: Record<string, number>;
   /** ASSUMED: whether an API key exists, never the key itself. */
   apiKey?: { createdAt: string; prefix: string } | null;
 }

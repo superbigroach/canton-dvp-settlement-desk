@@ -8,8 +8,8 @@
 # same shape. In the sandbox the parties are the ones Test:initialize allocates, and
 # the e-mails are the ones the desk app (frontend/src/desk) signs in with.
 #
-# Roles: admin | signer (seat: issuer|lender|venue, instruments) | ap | fund_admin |
-#        auditor | viewer
+# Roles: admin | signer (seat: issuer|lender|venue|custodian|transfer-agent, instruments) |
+#        ap | fund_admin | auditor | viewer
 #
 # X-Sandbox-User (AUTH_MODE=sandbox) accepts the e-mail, its local part, or the party
 # label: "issuer@sandbox.crossdesk", "issuer" and "Issuer" all resolve to the same row.
@@ -48,6 +48,27 @@ users:
     instruments: [CBTC, cETH]
     org: Venue (sandbox stand-in for a trading venue)
     displayName: Venue seat
+
+  # The §2e / §2f seats of SIGNER_PROTOCOL v2. Test:initialize allocates no party for
+  # either, so DemoSeed allocates Custodian and TransferAgent on the local sandbox and
+  # seats them on the demo committee; on a participant the party is the institution's own.
+  - uid: sandbox-custodian
+    email: custodian@sandbox.crossdesk
+    role: signer
+    seat: custodian
+    party: Custodian
+    instruments: [CBTC, cETH]
+    org: Custodian (sandbox stand-in for the reserve holder)
+    displayName: Custodian seat
+
+  - uid: sandbox-transferagent
+    email: transferagent@sandbox.crossdesk
+    role: signer
+    seat: transfer-agent
+    party: TransferAgent
+    instruments: [CBTC, cETH, LX1]
+    org: Transfer agent (sandbox stand-in for the fund administrator)
+    displayName: Transfer-agent seat
 
   - uid: sandbox-alice
     email: alice@sandbox.crossdesk

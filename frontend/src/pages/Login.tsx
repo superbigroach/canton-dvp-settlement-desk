@@ -3,6 +3,7 @@ import { useState, type FormEvent } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { SANDBOX_USERS } from '../auth/sandboxUsers';
+import { sectionsFor } from '../shell/Shell';
 
 export default function Login() {
   const auth = useAuth();
@@ -14,7 +15,11 @@ export default function Login() {
 
   const from = (loc.state as { from?: string } | null)?.from;
   if (auth.status === 'ready' && auth.me) {
-    return <Navigate to={from && from !== '/login' ? from : '/'} replace />;
+    // Go back to where the session expired — but only if THIS role has that section. Signing
+    // out on /admin and back in as a signer used to land the signer on "NOT YOUR SECTION".
+    const mine = sectionsFor(auth.me.role, auth.degraded);
+    const back = from && from !== '/login' && mine.some((s) => from === s.path || from.startsWith(`${s.path}/`));
+    return <Navigate to={back ? from : '/'} replace />;
   }
 
   const run = async (kind: 'email' | 'google' | 'sandbox', fn: () => Promise<void>) => {

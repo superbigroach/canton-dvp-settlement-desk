@@ -1225,6 +1225,39 @@ public class LedgerService {
     }
 
     /**
+     * Allocate a party on the LOCAL sandbox by hint, unless one with that label already
+     * exists — then return the existing id.
+     *
+     * <p>Only for the sandbox: with a configured {@code LEDGER_PARTIES} roster the desk's
+     * ledger user is deliberately not a participant admin and every party is the
+     * institution's own, so this refuses rather than minting one. Used by the demo seed to
+     * stand up the custodian and transfer-agent seats, which {@code Test:initialize}
+     * predates.
+     */
+    public String allocateSandboxParty(String hint) {
+        if (hint == null || hint.isBlank()) {
+            throw new LedgerException("party hint is required");
+        }
+        if (connection.properties().hasPartyRoster()) {
+            throw new LedgerException("cannot allocate party '" + hint + "': a LEDGER_PARTIES roster is"
+                    + " configured, so parties are the institutions' own and are never minted here");
+        }
+        for (PartyView p : listParties()) {
+            if (p.label().equalsIgnoreCase(hint.trim())) {
+                return p.party();
+            }
+        }
+        return withRetry("allocate party " + hint, () -> {
+            var req = com.daml.ledger.api.v2.admin.PartyManagementServiceOuterClass.AllocatePartyRequest
+                    .newBuilder().setPartyIdHint(hint.trim()).build();
+            var resp = connection.partyManagement()
+                    .withDeadlineAfter(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .allocateParty(req);
+            return resp.getPartyDetails().getParty();
+        });
+    }
+
+    /**
      * Resolve a caller-supplied party reference (a hint/label like {@code "Alice"},
      * or an already-qualified {@code "Alice::1220…"}) to the FULL on-ledger party id.
      * If an exact match exists it wins; otherwise a unique prefix match on the label

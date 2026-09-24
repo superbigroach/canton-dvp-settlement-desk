@@ -48,6 +48,9 @@ public class DemoSeed {
 
     /** The committee the signer portal signs against on a fresh sandbox. */
     public static final String COMMITTEE_LABEL = "ETP Foundry NAV Committee";
+    /** The §2e / §2f seats' sandbox parties — the hints users.yml binds custodian@ and transferagent@ to. */
+    public static final String CUSTODIAN_PARTY = "Custodian";
+    public static final String TRANSFER_AGENT_PARTY = "TransferAgent";
 
     private final LedgerService ledger;
     private final boolean enabled;
@@ -110,14 +113,20 @@ public class DemoSeed {
     }
 
     /**
-     * A 2-of-3 committee of Issuer, Bank and Venue — the issuer, lender and venue seats
-     * of docs/SIGNER_PROTOCOL.md §2 — ADMINISTERED BY OPERATOR (the benchmark
-     * administrator's own party, allocated by {@code Test:initialize}), observed by the
-     * Auditor. Since package 3.0.0 the administrator cannot be a member: it proposes and
-     * publishes, it never attests. The scheduler proposes into it as Operator and the
-     * signer portal signs against it. Idempotent on the label, so a committee the
-     * operator desk stood up by hand is left alone and a second boot does not mint a
-     * second roster.
+     * A 2-of-5 committee of Issuer, Bank, Venue, Custodian and TransferAgent — the five
+     * seats of docs/SIGNER_PROTOCOL.md §2 (v2: §2a–c plus the §2e custodian and §2f
+     * transfer agent) — ADMINISTERED BY OPERATOR (the benchmark administrator's own party,
+     * allocated by {@code Test:initialize}), observed by the Auditor. Since package 3.0.0
+     * the administrator cannot be a member: it proposes and publishes, it never attests.
+     * The scheduler proposes into it as Operator and the signer portal signs against it.
+     * Idempotent on the label, so a committee the operator desk stood up by hand is left
+     * alone and a second boot does not mint a second roster.
+     *
+     * <p>{@code Test:initialize} predates the custodian and transfer-agent seats and
+     * allocates no party for them, so on the local sandbox (no {@code LEDGER_PARTIES}
+     * roster) the seed allocates {@code Custodian} and {@code TransferAgent} itself; the
+     * users.yml rows for those seats are bound to exactly these hints. On a participant
+     * the roster names the institutions' own parties and nothing is minted.
      */
     public synchronized void seedCommitteeOnce() {
         String operator = ledger.resolveParty("Operator");
@@ -128,11 +137,13 @@ public class DemoSeed {
             return;
         }
         List<String> members = List.of(ledger.resolveParty("Issuer"), ledger.resolveParty("Bank"),
-                ledger.resolveParty("Venue"));
+                ledger.resolveParty("Venue"), ledger.allocateSandboxParty(CUSTODIAN_PARTY),
+                ledger.allocateSandboxParty(TRANSFER_AGENT_PARTY));
         String cid = ledger.submitForCreated(operator,
                 LedgerCommands.createCommittee(operator, members, 2, ledger.resolveParty("Auditor"), COMMITTEE_LABEL),
                 LedgerCommands.operatorCommitteeTemplateId());
-        log.info("demo committee '{}' seeded ({}): admin Operator; Issuer, Bank, Venue; K=2", COMMITTEE_LABEL, cid);
+        log.info("demo committee '{}' seeded ({}): admin Operator; Issuer, Bank, Venue, {}, {}; K=2",
+                COMMITTEE_LABEL, cid, CUSTODIAN_PARTY, TRANSFER_AGENT_PARTY);
     }
 
     void seedFund() {

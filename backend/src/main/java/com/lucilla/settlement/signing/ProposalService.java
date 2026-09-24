@@ -260,6 +260,9 @@ public class ProposalService {
         out.put("rootCid", root);
         out.put("instrument", p.instrumentId());
         out.put("session", p.session());
+        // The day the fixing describes (3.0.0 attests it). Two open proposals on one
+        // instrument and session are told apart by this, and by nothing else on the card.
+        out.put("asOfDate", p.asOfDate() == null ? null : p.asOfDate().toString());
         out.put("cashInstrument", p.cashInstrument());
         // frontend/src/desk/types.ts Proposal.kind: 'wrapped' | 'nav' | 'snapshot'
         boolean isFund = isFund(p.instrumentId());
@@ -512,7 +515,7 @@ public class ProposalService {
             throw AuthException.forbidden("only a signer may act on a proposal");
         }
         if (me.seat() == null || me.seat().isBlank()) {
-            throw AuthException.forbidden("your user has no signer seat (issuer | lender | venue)");
+            throw AuthException.forbidden("your user has no signer seat (issuer | lender | venue | custodian | transfer-agent)");
         }
     }
 

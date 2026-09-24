@@ -100,6 +100,24 @@ class LedgerErrorsTest {
         assertThat(LedgerErrors.damlMessageOf(null)).isNull();
     }
 
+    @Test
+    void damlMessage_handlesTheDaml3UserFailureRendering() {
+        // Canton 3.4 renders an `assertMsg` failure without any `{ message = "…" }` payload.
+        String desc = "DAML_FAILURE(9,5d0752da): Interpretation error: Error: User failure: "
+                + "UNHANDLED_EXCEPTION/DA.Exception.AssertionFailed:AssertionFailed (error category 9): "
+                + "attested price sits outside the venue's observed range";
+        assertThat(LedgerErrors.damlMessageOf(desc))
+                .isEqualTo("attested price sits outside the venue's observed range");
+
+        LedgerErrors.Failure f = LedgerErrors.of(grpc(Status.Code.FAILED_PRECONDITION, desc));
+        assertThat(f.businessRejection()).isTrue();
+        assertThat(LedgerErrors.userMessage(f, "cmd-9"))
+                .isEqualTo("attested price sits outside the venue's observed range");
+        // A model rejection is not "re-read and retry": the sentence IS the reason.
+        assertThat(f.hint()).isEqualTo(LedgerErrors.DAML_REJECTION_HINT);
+        assertThat(f.hint()).doesNotContain("Re-read and retry");
+    }
+
     // ---- The codes that mean different things --------------------------------
 
     @Test

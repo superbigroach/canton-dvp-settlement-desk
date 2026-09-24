@@ -73,6 +73,18 @@ public final class LedgerErrors {
     private static final Pattern DAML_ASSERTION =
             Pattern.compile("(?:Assertion failed|Template precondition violated)[:\\s]+([^\\n]+)");
 
+    /**
+     * The Daml 3.x / Canton 3.4 rendering of an {@code assertMsg} failure:
+     * {@code DAML_FAILURE(9,…): Interpretation error: Error: User failure:
+     * UNHANDLED_EXCEPTION/DA.Exception.AssertionFailed:AssertionFailed (error category 9):
+     * attested price sits outside the venue's observed range}. Neither pattern above
+     * matched it, so until 24 Sep 2026 a venue whose range excluded the price was told
+     * "the ledger's state does not permit this command … re-read and retry" instead of the
+     * model's own sentence.
+     */
+    private static final Pattern DAML_USER_FAILURE =
+            Pattern.compile("UNHANDLED_EXCEPTION/[^\\s:]+:[A-Za-z]+ \\(error category \\d+\\):\\s*([^\\n]+)");
+
     // -----------------------------------------------------------------------
     // The verdict
     // -----------------------------------------------------------------------
@@ -138,8 +150,12 @@ public final class LedgerErrors {
             correlationId = firstGroup(CORRELATION_HINT, description, 1);
         }
         String damlMessage = damlMessageOf(description);
+        // A Daml rejection is the MODEL saying no, not the ledger's state moving on: "re-read
+        // and retry" (the FAILED_PRECONDITION hint) sent a venue whose range excluded the
+        // price back to the same form on 24 Sep 2026. Say what it is instead.
         return new Failure(status.getCode(), cantonCode, description, correlationId, damlMessage,
-                damlMessage != null, hintFor(status.getCode(), cantonCode));
+                damlMessage != null,
+                damlMessage != null ? DAML_REJECTION_HINT : hintFor(status.getCode(), cantonCode));
     }
 
     /**
@@ -155,6 +171,11 @@ public final class LedgerErrors {
      *
      * @return the bare message, or {@code null} when this was not a Daml rejection
      */
+    /** The hint that goes with a model rejection — the message IS the reason; retrying changes nothing. */
+    public static final String DAML_REJECTION_HINT = "the Daml model refused this command; the message above "
+            + "is its own reason. Resubmitting the same input gives the same answer — change the input, "
+            + "or refuse with a reason.";
+
     public static String damlMessageOf(String description) {
         if (description == null || description.isBlank()) {
             return null;
@@ -162,6 +183,9 @@ public final class LedgerErrors {
         String m = firstGroup(DAML_MESSAGE, description, 1);
         if (m == null) {
             m = firstGroup(DAML_ASSERTION, description, 1);
+        }
+        if (m == null) {
+            m = firstGroup(DAML_USER_FAILURE, description, 1);
         }
         if (m == null) {
             return null;

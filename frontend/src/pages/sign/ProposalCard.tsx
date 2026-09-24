@@ -238,7 +238,7 @@ export default function ProposalCard({ proposal: p, role, onChanged, onRefresh, 
     <article className={`card proposal ${p.status}`} aria-labelledby={`p-${p.cid}`}>
       <div className="card-head">
         <h2 id={`p-${p.cid}`}>
-          {p.instrument}{p.session ? ` · ${p.session}` : ''}
+          {p.instrument}{p.session ? ` · ${p.session}` : ''}{p.asOfDate ? ` · ${p.asOfDate}` : ''}
           <span className="tag kind">{p.kind === 'nav' ? 'fund NAV' : p.kind === 'wrapped' ? 'benchmark × factor' : 'snapshot'}</span>
         </h2>
         <div className="proposal-meta mono">
@@ -267,6 +267,7 @@ export default function ProposalCard({ proposal: p, role, onChanged, onRefresh, 
       </div>
       {p.rationale && <p className="hint subtle proposal-rationale">{p.rationale}</p>}
       <div className="proposal-facts mono muted">
+        {p.asOfDate && <span>as of {p.asOfDate}</span>}
         <span>proposed {fmtTs(p.proposedAt)}{p.proposedBy ? ` by ${p.proposedBy}` : ''}</span>
         <span>window ends {fmtTime(p.deadline)}</span>
         <span>cid {shortCid(p.cid)}</span>

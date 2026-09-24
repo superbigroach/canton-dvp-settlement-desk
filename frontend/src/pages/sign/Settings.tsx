@@ -5,9 +5,13 @@ import { errorMessage } from '../../api';
 import { desk, type SignerSettings } from '../../desk';
 import { ConfirmDialog, fmtTs, LoadState, useAsync } from '../../components/ui';
 
+// The keys the backend reads (SignerProtocol.TOLERANCE_MARK_KEY / TOLERANCE_LIQUIDATION_KEY,
+// via SignerEvidence.Tolerances.from). Before 24 Sep 2026 this form saved `maxDeviationBps`
+// and `maxAgeSeconds`, which nothing on the server reads, so a lender who "edited the
+// tolerance" was still judged at the 25 bp default.
 const TOLERANCES: { key: string; label: string; hint: string }[] = [
-  { key: 'maxDeviationBps', label: 'Max deviation from benchmark × factor (bps)', hint: 'Above this an automated signer refuses rather than confirms.' },
-  { key: 'maxAgeSeconds', label: 'Max age of the reference print (seconds)', hint: 'A stale benchmark input is a reason to refuse.' },
+  { key: 'markBps', label: 'Independent mark tolerance (bps)', hint: 'The lender’s independent-mark-within-tolerance rule: |your mark − proposal| / proposal must be within this. Blank = the default.' },
+  { key: 'liquidationBps', label: 'Liquidation deviation tolerance (bps)', hint: 'The lender’s liquidations-consistent rule: the worst deviation of a session liquidation from the mark. Blank = the mark tolerance.' },
 ];
 
 export default function Settings() {
@@ -111,7 +115,12 @@ export default function Settings() {
                   <span>{t.label}</span>
                   <input id={`tol-${t.key}`} type="number" className="mono" inputMode="numeric" min={0}
                     value={form.tolerances?.[t.key] ?? ''}
-                    onChange={(e) => setForm({ ...form, tolerances: { ...form.tolerances, [t.key]: Number(e.target.value) } })} />
+                    placeholder={form.toleranceDefaults?.[t.key] !== undefined ? `default ${form.toleranceDefaults[t.key]}` : undefined}
+                    onChange={(e) => {
+                      const next = { ...form.tolerances };
+                      if (e.target.value === '') delete next[t.key]; else next[t.key] = Number(e.target.value);
+                      setForm({ ...form, tolerances: next });
+                    }} />
                   <small className="field-hint">{t.hint}</small>
                 </label>
               ))}

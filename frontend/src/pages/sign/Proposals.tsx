@@ -29,7 +29,10 @@ export default function Proposals() {
       </div>
       {protoError && <div className="banner warn" role="status"><span>Signer protocol not loaded — {protoError}. Conditions come from the proposal itself.</span></div>}
       <SeatGuide />
-      <LoadState loading={list.loading} error={list.error} onRetry={list.reload}
+      {/* A background reload (after a confirm or a refusal the ledger answered) must not unmount
+          the cards: before 24 Sep 2026 `loading` alone swapped the whole list for "Loading…", so
+          a 422 the card had just rendered was wiped by its own onRefresh before anyone read it. */}
+      <LoadState loading={list.loading && !list.data} error={list.error} onRetry={list.reload}
         empty={list.data && open.length === 0 ? 'Nothing waiting for your signature. Proposals appear here at the strike time and by webhook/email.' : null}>
         <div className="proposal-list">
           {open.map((p) => <ProposalCard key={p.cid} proposal={p} role={role} onChanged={replace} onRefresh={list.reload} />)}

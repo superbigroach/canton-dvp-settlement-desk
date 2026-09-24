@@ -14,7 +14,7 @@ public record Principal(
         String email,
         Role role,
         String party,          // a label ("Issuer") or a full party id; resolved by LedgerService
-        String seat,           // issuer | lender | venue — signers only
+        String seat,           // issuer | lender | venue | custodian | transfer-agent — signers only
         List<String> instruments,
         String org,
         String displayName,
