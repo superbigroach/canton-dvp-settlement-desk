@@ -148,7 +148,7 @@ class AuthFilterTest {
     }
 
     @Test
-    @DisplayName("firebase: a bad token is a 401 with WWW-Authenticate; a verified stranger is a viewer")
+    @DisplayName("firebase: a bad token is a 401 with WWW-Authenticate; a verified stranger is 403 (roster-only)")
     void firebaseTokens() throws Exception {
         MockHttpServletRequest req = new MockHttpServletRequest("GET", "/api/me");
         req.setRequestURI("/api/me");
@@ -159,10 +159,11 @@ class AuthFilterTest {
         assertNotNull(res.getHeader("WWW-Authenticate"));
         assertTrue(res.getContentAsString().contains("\"authMode\":\"firebase\""));
 
+        // Roster-only sign-in (23 Sep 2026): a verified identity that is not on the roster is 403
+        // everywhere, including /api/me — no anonymous viewer seat exists any more.
         Outcome stranger = run(filter("firebase"), "/api/me", "Authorization", "Bearer tok-stranger");
-        assertTrue(stranger.reachedChain(), "/api/me works for any verified identity");
-        assertEquals(Role.VIEWER, stranger.principal().role());
-        assertNull(stranger.principal().party());
+        assertFalse(stranger.reachedChain(), "/api/me is roster-only");
+        assertEquals(403, stranger.status());
         assertEquals(403, run(filter("firebase"), "/api/proposals", "Authorization", "Bearer tok-stranger").status());
     }
 

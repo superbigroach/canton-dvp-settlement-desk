@@ -1422,12 +1422,15 @@ public class SettlementController {
         // indistinguishable from a verified one. The venue is the exception: its evidence is
         // the observed range (or an attested absence), checked below and on-ledger.
         boolean venueSeat = "venue".equalsIgnoreCase(req.role() == null ? "" : req.role().trim());
-        if (!venueSeat && req.evidence() == null
-                && com.lucilla.settlement.ledger.SignerEvidence.required(req.role())) {
+        // `verifiable` also covers the venue's `no-prints-attested`, whose bid/ask rule is the
+        // desk's to check (the range is the ledger's). Before 24 Sep 2026 that block was recorded
+        // on the event unverified because only `required` gated this branch.
+        boolean mustVerify = com.lucilla.settlement.ledger.SignerEvidence.verifiable(req.role(), req.checksPassed());
+        if (req.evidence() == null && mustVerify) {
             throw new IllegalArgumentException("the " + req.role().trim().toLowerCase()
                     + " seat must supply evidence for every condition it claims; a bare tick is not an attestation");
         }
-        if (req.evidence() != null && com.lucilla.settlement.ledger.SignerEvidence.required(req.role())) {
+        if (req.evidence() != null && mustVerify) {
             BigDecimal proposalPrice = ledger.fixingProposalsVisibleTo(member).stream()
                     .filter(p -> p.contractId().equals(cid))
                     .map(LedgerService.FixingProposalView::price)

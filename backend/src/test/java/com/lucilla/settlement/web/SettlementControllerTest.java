@@ -195,7 +195,7 @@ class SettlementControllerTest {
                         new BigDecimal("0.036"), "ACT/360",
                         Instant.parse("2026-08-05T14:00:00Z"),
                         List.of(), Instant.parse("2026-08-05T14:07:00Z"),
-                        null, null, null, null, null));
+                        null, null, null, null, null, "Issuer::ns", java.time.LocalDate.of(2026, 8, 5), List.of("Issuer::ns", "Bank::ns")));
         when(ledger.auctionsVisibleTo("Auditor")).thenReturn(List.of());
 
         mvc.perform(get("/api/fixing/fix-1/nav").param("at", "2026-08-06T14:00:00Z"))
@@ -225,7 +225,7 @@ class SettlementControllerTest {
                         new BigDecimal("0.036"), "ACT/360",
                         Instant.parse("2026-08-05T14:00:00Z"),
                         List.of(), Instant.parse("2026-08-05T14:00:00Z"),
-                        null, null, null, null, null));
+                        null, null, null, null, null, "Issuer::ns", java.time.LocalDate.of(2026, 8, 5), List.of("Issuer::ns", "Bank::ns")));
 
         // One day behind at 3.6% ACT/360 is EXACTLY the 1bp budget — RunClose accepts it.
         mvc.perform(get("/api/fixing/fix-1/nav")

@@ -28,7 +28,7 @@ class SignerProtocolTest {
         // list with nothing in it and a signer with no way to know what they are claiming.
         assertThat(SignerProtocol.roles())
                 .extracting(SignerProtocol.Role::key)
-                .containsExactly("issuer", "lender", "venue", "operator");
+                .containsExactly("issuer", "lender", "venue", "custodian", "transfer-agent", "operator");
 
         for (SignerProtocol.Role r : SignerProtocol.roles()) {
             assertThat(r.conditions()).as("conditions for %s", r.key()).isNotEmpty();

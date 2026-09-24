@@ -25,7 +25,7 @@ class SeriesDerivationTest {
         return new LedgerService.NavFixingView(cid, attestors, 2, instrument, "USDC", "Close",
                 new BigDecimal(price), "r", BigDecimal.ZERO, "NONE", at, List.of(), at.plusSeconds(60),
                 "committee", ref == null ? null : new BigDecimal(ref), factor == null ? null : new BigDecimal(factor),
-                supersedes, supersedes == null ? null : "typo");
+                supersedes, supersedes == null ? null : "typo", "Issuer::1", at.atZone(LONDON).toLocalDate(), attestors);
     }
 
     static FixingEvent event(String kind, String instrument, Instant at, String price, Integer tier, Map<String, Object> d) {
@@ -101,7 +101,7 @@ class SeriesDerivationTest {
     void sessionAndInstrumentFilter() {
         Instant d1 = Instant.parse("2026-09-01T15:00:00Z");
         var open = new LedgerService.NavFixingView("o", List.of("A::1", "B::1"), 2, "CBTC", "USDC", "Open",
-                BigDecimal.TEN, "r", BigDecimal.ZERO, "NONE", d1, List.of(), d1, "committee", null, null, null, null);
+                BigDecimal.TEN, "r", BigDecimal.ZERO, "NONE", d1, List.of(), d1, "committee", null, null, null, null, "Issuer::1", d1.atZone(LONDON).toLocalDate(), List.of("A::1", "B::1"));
         List<SeriesRow> rows = SeriesDerivation.derive("CBTC", "Close", List.of(open), List.of(),
                 null, null, null, LONDON, LedgerService::labelOf, 0);
         assertTrue(rows.isEmpty(), "an Open fixing is not the Close series");

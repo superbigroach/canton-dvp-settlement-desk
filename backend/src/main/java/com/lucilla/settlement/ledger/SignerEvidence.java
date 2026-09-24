@@ -117,6 +117,28 @@ public final class SignerEvidence {
         return r != null && r.requiresEvidence();
     }
 
+    /**
+     * Whether the desk must run {@link #verify} for this confirmation: at least one claimed
+     * condition carries server-verified evidence. Not {@link #required}: the venue's traded-range
+     * is required evidence too, but the LEDGER checks it, so a range-only venue confirm must not
+     * be treated as a bare tick here. The second half exists for the venue: its
+     * range is the ledger's to check, but {@code no-prints-attested} is the desk's — before
+     * 24 Sep 2026 a venue's bid/ask block reached the ledger unchecked on both confirm routes
+     * because only {@link #required} gated verification.
+     */
+    public static boolean verifiable(String roleKey, List<String> checks) {
+        SignerProtocol.Role r = SignerProtocol.role(roleKey);
+        if (r == null || checks == null) return false;
+        for (String raw : checks) {
+            SignerProtocol.Condition c = r.condition(raw == null ? "" : raw.trim());
+            if (c != null && c.evidence() != null && c.evidence().required()
+                    && "server".equals(c.evidence().verifiedBy())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** The evidence schema, per condition, for a seat — what the 422 and the protocol JSON carry. */
     public static Map<String, Object> schemaFor(String roleKey, List<String> onlyConditions) {
         SignerProtocol.Role r = SignerProtocol.role(roleKey);

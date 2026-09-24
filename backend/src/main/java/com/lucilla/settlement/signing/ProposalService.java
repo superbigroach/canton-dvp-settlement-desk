@@ -127,10 +127,15 @@ public class ProposalService {
         SignerEvidence.Tolerances tol = null;
         SignerEvidence.Result result = null;
         if (role != null && role.requiresObservedRange()) {
-            // The venue path, exactly as before: the range is the evidence, and the ledger checks it.
+            // The venue path: the range is the evidence, and the ledger checks it.
             low = evidence == null ? null : SignerEvidence.number(evidence.get("low"));
             high = evidence == null ? null : SignerEvidence.number(evidence.get("high"));
-        } else if (SignerEvidence.required(seat)) {
+        }
+        if (SignerEvidence.verifiable(seat, checks)) {
+            // Every seat that brings numbers — and the venue when it attests an absence
+            // (`no-prints-attested`: bestBid <= proposal <= bestAsk is the desk's rule, not
+            // the ledger's). Before 24 Sep 2026 the venue branch above returned early and a
+            // portal no-prints confirm reached the ledger with its bid/ask never checked.
             Map<String, Object> schema = SignerEvidence.schemaFor(seat, checks);
             if (evidence == null || evidence.isEmpty()) {
                 throw new SignerEvidence.Rejected("the " + seat + " seat confirms with evidence, not a tick: "

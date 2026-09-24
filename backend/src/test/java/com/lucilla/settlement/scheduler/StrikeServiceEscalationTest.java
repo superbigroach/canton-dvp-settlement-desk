@@ -76,7 +76,7 @@ class StrikeServiceEscalationTest {
         return new LedgerService.FixingProposalView("p#1", "Issuer", List.of("Issuer", "Bank", "Venue"), 2,
                 "Auditor", "Issuer", "CBTC", "USDC", "Close", new BigDecimal("65000"), "scheduled",
                 BigDecimal.ZERO, "ACT/365", STRIKE, approvers, new BigDecimal("65000"), BigDecimal.ONE,
-                List.of(), "1");
+                List.of(), "1", java.time.LocalDate.of(2026, 9, 2));
     }
 
     @BeforeEach

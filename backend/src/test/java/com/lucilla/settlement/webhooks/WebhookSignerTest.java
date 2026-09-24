@@ -55,7 +55,7 @@ class WebhookSignerTest {
 
     @Test
     void conditionsFollowTheSeat() {
-        assertEquals(List.of("traded-range", "spread-within-tolerance", "sufficient-volume"),
+        assertEquals(List.of("traded-range", "spread-within-tolerance", "sufficient-volume", "no-prints-attested"),
                 WebhookDispatcher.conditionsFor("venue"));
         assertTrue(WebhookDispatcher.conditionsFor("nobody").isEmpty());
     }
