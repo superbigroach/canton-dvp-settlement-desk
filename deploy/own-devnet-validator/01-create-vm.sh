@@ -104,7 +104,7 @@ else
   cd_run gcloud compute instances create "$VM" --zone "$ZONE" "${P[@]}" \
     --machine-type "$MACHINE" \
     --image-family debian-12 --image-project debian-cloud \
-    --boot-disk-size "${DISK_GB}GB" --boot-disk-type pd-balanced --boot-disk-auto-delete=no \
+    --boot-disk-size "${DISK_GB}GB" --boot-disk-type pd-balanced --no-boot-disk-auto-delete \
     --network-interface "subnet=$SUB_VM,private-network-ip=$INTERNAL_IP_NAME,address=$EXTERNAL_IP_NAME,network-tier=PREMIUM" \
     --service-account "$SA" --scopes cloud-platform \
     --tags "$TAG" \

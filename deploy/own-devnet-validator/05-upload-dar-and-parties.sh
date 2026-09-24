@@ -8,7 +8,7 @@
 # Idempotent: re-running uploads the same DAR (a no-op on the participant), skips parties
 # that exist, and re-grants rights (granting an existing right is a no-op).
 #
-# 1. upload .daml/dist/crossdesk-2.1.0.dar   (SDK 3.4.11 → Daml-LF 2.2; a Canton 3.5.17
+# 1. upload .daml/dist/crossdesk-3.0.0.dar   (SDK 3.4.11 → Daml-LF 2.2; a Canton 3.5.17
 #    participant accepts LF 2.1/2.2 — verified on LocalNet 0.8.1, 2026-09-15)
 # 2. allocate <hint>-crossdesk for every hint in CD_PARTY_HINTS on THIS participant
 # 3. create user CD_BACKEND_USER (primary party = issuer) with CanActAs + CanReadAs on
@@ -23,7 +23,7 @@
 . "$(dirname "$0")/lib/common.sh"
 cd_load_profile
 
-DAR="${DAR:-$CD_REPO/.daml/dist/crossdesk-2.1.0.dar}"
+DAR="${DAR:-$CD_REPO/.daml/dist/crossdesk-3.0.0.dar}"
 [ -f "$DAR" ] || cd_die "no DAR at $DAR — run 'daml build' (SDK $(grep '^sdk-version' "$CD_REPO/daml.yaml" | awk '{print $2}'))"
 
 cd_say "0 · participant"

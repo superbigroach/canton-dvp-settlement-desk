@@ -50,7 +50,7 @@ cd_secret() {  # resolve CD_HMAC_SECRET_REF into stdout (callers capture it, nev
   case "$CD_HMAC_SECRET_REF" in
     literal:*) printf '%s' "${CD_HMAC_SECRET_REF#literal:}" ;;
     gsm:*)     gcloud secrets versions access latest --secret "${CD_HMAC_SECRET_REF#gsm:}" \
-                 --project "$CD_GCP_PROJECT" ;;
+                 --project "$CD_GCP_PROJECT" | tr -d '\r\n' ;;   # a value stored from Windows carries a CR
     *) cd_die "CD_HMAC_SECRET_REF must be literal:<v> or gsm:<secret-name>" ;;
   esac
 }

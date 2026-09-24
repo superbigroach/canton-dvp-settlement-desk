@@ -171,17 +171,23 @@ fi
 
 # ----------------------------------------------------------------------------- T5
 t_begin T5 "K-of-N committee NAV — 2-of-3 attest, finalize; finalize below quorum must fail"
-cm="$(post /committee '{"admin":"Bank","members":["Bank","Issuer","Venue"],"threshold":2,"label":"E2E NAV Committee"}')"
+cm="$(post /committee '{"admin":"Operator","members":["Bank","Issuer","Venue"],"threshold":2,"label":"E2E NAV Committee"}')"
 cc="$(echo "$cm" | field "d.get('contractId','')")"
-p1="$(post "/committee/$cc/propose" '{"proposer":"Bank","instrumentId":"CBTC","cashInstrument":"USDC","session":"Close","price":65000,"rationale":"E2E: committee-attested mark"}')"
+# 3.0.0 FixingSeries: one fixing per (instrument, session, asOfDate). Each run attests a later
+# date (one day per minute since the 2026-09-22 epoch), so reruns never collide with the slot.
+asof="$(date -u -d "2026-09-22 +$(( ( $(date +%s) - 1790000000 ) / 60 )) days" +%F)"
+p1="$(post "/committee/$cc/propose" "{\"proposer\":\"Operator\",\"instrumentId\":\"CBTC\",\"cashInstrument\":\"USDC\",\"session\":\"Close\",\"price\":65000,\"rationale\":\"E2E: committee-attested mark\",\"asOfDate\":\"$asof\"}")"
 pc="$(echo "$p1" | field "d.get('contractId','')")"
-early="$(post "/fixing/$pc/finalize" '{"proposer":"Bank","publishTo":["Venue"]}' | cd_code)"
-c2="$(post "/fixing/$pc/confirm" '{"member":"Issuer"}' | field "d.get('contractId','')")"
-fin="$(post "/fixing/${c2:-$pc}/finalize" '{"proposer":"Bank","publishTo":["Venue"]}')"
+# 3.0.0: the administrator (Operator) proposes and never attests; members attest WITH evidence
+# (plain /confirm is retired → 410). Venue signs its traded range; Issuer signs one condition with numbers.
+early="$(post "/fixing/$pc/finalize" '{"proposer":"Operator","publishTo":["Venue"]}' | cd_code)"
+c1="$(post "/fixing/$pc/confirm-checked" '{"member":"Venue","role":"venue","checksPassed":["traded-range"],"observedLow":64500,"observedHigh":65500}' | field "d.get('contractId','')")"
+c2="$(post "/fixing/${c1:-$pc}/confirm-checked" '{"member":"Issuer","role":"issuer","checksPassed":["redemption-queue-clear"],"evidence":{"redemption-queue-clear":{"queueDepth":0,"maxQueueDepth":10}}}' | field "d.get('contractId','')")"
+fin="$(post "/fixing/${c2:-${c1:-$pc}}/finalize" '{"proposer":"Operator","publishTo":["Venue"]}')"
 fcid="$(echo "$fin" | field "d.get('contractId','')" 2>/dev/null || true)"
 fpx="$(echo "$fin" | field "d.get('attestedPrice')" 2>/dev/null || true)"
 if [ -n "$cc" ] && [ "${early:0:1}" = "4" ] && [ -n "$fcid" ] && [ "${fpx%%.*}" = "65000" ]; then
-  t_pass "finalize at 1-of-2 refused (HTTP $early); after Issuer confirmed → NavFixing @ $fpx; update $(update_of "$fcid" "$(party Bank)")"
+  t_pass "finalize at 0-of-2 refused (HTTP $early); after Venue + Issuer confirmed with evidence → NavFixing @ $fpx; update $(update_of "$fcid" "$(party Bank)")"
 else
   t_fail "committee=$cc early-finalize HTTP $early fin=$(echo "$fin" | head -c 300)"
 fi

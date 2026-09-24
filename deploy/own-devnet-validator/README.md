@@ -327,6 +327,37 @@ See [`E2E_TEST_PLAN.md`](E2E_TEST_PLAN.md) for each test's exact call and expect
 
 ---
 
+## Went live — 24 September 2026 (what the runbook did not know on 15 Sep)
+
+- **Validator approved 23 Sep** (tokenomics-announce #388). From the VM, 14/14 SV scans and 29/29
+  sequencers answered before the whitelist form was even processed — DevNet was effectively open.
+- **DevNet runs Splice 0.8.3**, not 0.8.1. `02-bootstrap-node.sh` checks `/info` and refuses a
+  mismatch; run it with `SPLICE_VERSION=0.8.3` (and re-check before every deploy).
+- **`gcloud … --data-file=-` from Git Bash stores a trailing CR.** The HMAC secret came back with
+  ``, the participant refused its own config (`control character 0xd`) and every token failed.
+  `04-onboard.sh` and `lib/common.sh` now `tr -d '
+'`; the secret was rotated (version 3).
+- **Run 05 and 07 ON the VM** with `profiles/own-devnet-vm.env` (JSON API `127.0.0.1:7575`, nginx
+  `:80`; derived by `run05.sh`) — the Windows `gcloud compute ssh` (plink) cannot carry `|`, `"`
+  or `<` in `--command`, so put every remote command in a script and `scp` it. Run 06 from the
+  laptop. Copy `.roster-own-devnet-vm` back as `.roster-own-devnet` before 06.
+- **Real cBTC needs the DA Utilities DARs on the participant.** The BitSafe faucet refuses with
+  `UNRESOLVED_PACKAGE_NAME utility-registry-app-v0` until the Registry App packages are vetted here.
+  Bundle: `https://get.digitalasset.com/utility-dars/canton-network-utility-dars-<v>.tar.gz` (+ `.sha256`),
+  versions at `docs.digitalasset.com/registry/releases/daml-models` (0.14.4 on DevNet/TestNet/MainNet,
+  24 Sep). `install-utility-dars.sh` downloads, verifies and uploads all 17 DARs. After that:
+  faucet 1 CBTC → `GET /api/token-standard/pending?party=Alice` → `POST …/accept` → HTTP 200,
+  `Utility.Registry.Holding` for Alice (update `12208bd0867a…`).
+- **Identities backed up** to Secret Manager `crossdesk-validator-identities` via
+  `GET /api/validator/v0/admin/participant/identities` — that endpoint needs the *validator* user
+  (`ledger-api-user`) token under the validator audience, not the wallet user.
+- **Result, run e2e1790270955:** T1–T2, T4–T9 PASS on DevNet; T3 PASS by hand after the DARs; T10
+  SKIP (site not switched). `crossdesk-devnet-api` rev 00013 runs `AUTH_MODE=firebase`; flip to
+  `sandbox` only for a test run and flip back.
+- **Founder rule (24 Sep): real assets only on DevNet.** `scripts/bootstrap-devnet.sh` seeds
+  self-issued stand-ins and is now sandbox-only. Real cBTC works for anything that reads
+  `HoldingV1`; the basket still consumes `ContractId Holding` (Gap A / roadmap task 7).
+
 ## Rollback
 
 | What | How |

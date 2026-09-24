@@ -48,7 +48,7 @@ if [ "${SKIP_ALLOWLIST_CHECK:-0}" != "1" ]; then
 fi
 
 echo "== 2 · secrets and addresses (values never echoed)"
-CROSSDESK_LEDGER_HMAC_SECRET="$(gcloud secrets versions access latest --secret crossdesk-ledger-hmac-secret --project "$PROJECT")"
+CROSSDESK_LEDGER_HMAC_SECRET="$(gcloud secrets versions access latest --secret crossdesk-ledger-hmac-secret --project "$PROJECT" | tr -d '\r\n')"
 [ "${#CROSSDESK_LEDGER_HMAC_SECRET}" -ge 32 ] || { echo "HMAC secret missing/short"; exit 1; }
 CROSSDESK_LEDGER_BIND_IP="$(curl -fsS -H 'Metadata-Flavor: Google' \
   http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip)"
