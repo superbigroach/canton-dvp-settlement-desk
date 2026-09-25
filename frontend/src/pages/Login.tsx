@@ -1,5 +1,5 @@
-// /desk/login — email + password, Google, or (sandbox builds only) a users.yml identity.
-import { useState, type FormEvent } from 'react';
+// /desk/login — Google only, or (sandbox builds only) a users.yml identity.
+import { useState } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { SANDBOX_USERS } from '../auth/sandboxUsers';
@@ -8,8 +8,9 @@ import { sectionsFor } from '../shell/Shell';
 export default function Login() {
   const auth = useAuth();
   const loc = useLocation();
+  // Sign-in is Google-only; the e-mail is still held because the sandbox path selects a
+  // roster user by address, and that is the only place it is used now.
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [busy, setBusy] = useState<'email' | 'google' | 'sandbox' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,11 +35,6 @@ export default function Login() {
     }
   };
 
-  const onEmail = (e: FormEvent) => {
-    e.preventDefault();
-    void run('email', () => auth.signInEmail(email.trim(), password));
-  };
-
   return (
     <div className="login">
       <div className="login-card card">
@@ -54,23 +50,13 @@ export default function Login() {
 
         {auth.mode === 'firebase' && (
           <>
-            <form onSubmit={onEmail} className="login-form">
-              <label className="field" htmlFor="login-email">
-                <span>Email</span>
-                <input id="login-email" type="email" autoComplete="username" required value={email}
-                  onChange={(e) => setEmail(e.target.value)} />
-              </label>
-              <label className="field" htmlFor="login-password">
-                <span>Password</span>
-                <input id="login-password" type="password" autoComplete="current-password" required value={password}
-                  onChange={(e) => setPassword(e.target.value)} />
-              </label>
-              <button type="submit" className="primary" disabled={busy !== null}>
-                {busy === 'email' ? 'Signing in…' : 'Sign in'}
-              </button>
-            </form>
-            <div className="login-or"><span>or</span></div>
-            <button type="button" className="ghost wide" disabled={busy !== null}
+            {/* GOOGLE ONLY. A seat is issued to a named person, never self-registered, so the
+                address is what matters and the password is just one more secret for a
+                counterparty's engineer to mislay or leak. Federated sign-in also means we never
+                hold a credential we could lose. The e-mail and password form is deliberately gone
+                rather than hidden; if it is ever needed for a seat whose firm forbids Google, add
+                it back behind a flag rather than leaving an unused field on the page. */}
+            <button type="button" className="primary wide" disabled={busy !== null}
               onClick={() => void run('google', () => auth.signInGoogle())}>
               {busy === 'google' ? 'Opening Google…' : 'Continue with Google'}
             </button>
