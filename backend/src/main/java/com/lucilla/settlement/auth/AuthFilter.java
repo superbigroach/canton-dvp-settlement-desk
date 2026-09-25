@@ -97,7 +97,21 @@ public class AuthFilter implements Filter {
         }
 
         try {
-            Optional<Principal> who = resolve(http);
+            Optional<Principal> who;
+            try {
+                who = resolve(http);
+            } catch (AuthException e) {
+                // A PUBLIC route serves public data, so an unusable credential must not break it.
+                // Before 25 Sep 2026 a stale or malformed Authorization header made /api/health and
+                // /api/benchmarks return 401 INVALID_ID_TOKEN: the token was verified before the
+                // route's rule was consulted. Any browser still holding an expired token after
+                // signing out saw the public benchmark pages fail. Ignore the credential here and
+                // continue anonymously; every non-public route still rejects it immediately below.
+                if (rule.kind() != AuthRoutes.Kind.PUBLIC) {
+                    throw e;
+                }
+                who = Optional.empty();
+            }
             // X-Act-As: an admin (and, in sandbox mode, the headerless operator desk, which
             // IS the admin) takes another mapped user's role, party, seat and instruments
             // for this request only. Anyone else sending it is refused outright, before

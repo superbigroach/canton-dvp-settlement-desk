@@ -1747,6 +1747,27 @@ public class SettlementController {
         List<FixingSchedule.Declared> declared = store == null ? FixingSchedule.defaults()
                 : store.all().stream().map(s -> new FixingSchedule.Declared(s.getInstrumentId(), s.getSession(),
                         s.strikeTime(), s.zone(), Math.max(1, s.getWindowMinutes()), s.effectiveCalendar())).toList();
+        // A SCHEDULE IS A PROMISE TO STRIKE, so promising one for an instrument this ledger has
+        // never carried advertises a strike that can never happen — and marks itself overdue the
+        // moment that time passes. On 25 Sep 2026 the public schedule advertised a daily 16:00
+        // London strike for a fund that exists only behind DEMO_SEED_FUND, which is correctly off
+        // on DevNet. Keep a declared row only when the ledger actually knows the instrument. When
+        // the ledger cannot answer at all, keep every row, because an empty schedule during a
+        // restart is the worse error.
+        java.util.Set<String> knownInstruments = new java.util.HashSet<>();
+        try {
+            for (var i : ledger.instrumentsVisibleTo(ledger.resolveParty("Issuer"))) {
+                knownInstruments.add(i.id().toUpperCase(java.util.Locale.ROOT));
+            }
+        } catch (RuntimeException ledgerSilent) {
+            knownInstruments.clear();
+        }
+        if (!knownInstruments.isEmpty()) {
+            declared = declared.stream()
+                    .filter(d -> knownInstruments.contains(d.instrumentId().toUpperCase(java.util.Locale.ROOT)))
+                    .toList();
+        }
+
         // A fund strikes only on days ALL its components strike (the intersection rule the
         // runner applies) — so a fund of an NYSE-listed component reads NOT_DUE_TODAY on an
         // NYSE holiday even though its own calendar is daily.
