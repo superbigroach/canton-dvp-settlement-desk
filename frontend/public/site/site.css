@@ -397,3 +397,184 @@ td.restated{color:var(--warn)}
 .for-label{font-family:var(--mono);font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:var(--faint);margin-right:6px}
 .for-row a{font-family:var(--ui);font-size:13px;color:var(--text);text-decoration:none;border:1px solid var(--border-2);border-radius:999px;padding:6px 12px;background:var(--surface-2)}
 .for-row a:hover{border-color:var(--faint)}
+
+/* =======================================================================
+   LIGHT CANVAS REDESIGN — 25 Sep 2026
+   =======================================================================
+   The brief, in the owner's words: Mastercard / Visa / CF Benchmarks / Obol —
+   modern fintech, not a dark crypto page. The reference shown was
+   obol-arc.web.app, and its STRUCTURE is the thing worth copying: a white
+   canvas, dark rounded containers floating on it, one gradient used with
+   restraint, and a nav short enough to read in a glance.
+
+   Why light is right here and not a fashion choice: this site's job is to
+   convince a risk analyst at a regulated firm that a benchmark administrator
+   is credible. Every dark page in this market reads as crypto. The three firms
+   we claim to be combined — ICE, MSCI, U.S. Bank — are all light. The DESK
+   stays dark, because an instrument somebody stares at all day should be; the
+   site that sells it should not look like the terminal.
+
+   Appended as an override layer so the dark rules above stay intact and any
+   page still leaning on them degrades to readable rather than broken.
+   ======================================================================= */
+
+:root{
+  --canvas:#FFFFFF;
+  --canvas-2:#F7F8FA;
+  --ink-1:#0B0D12;
+  --ink-2:#3C424E;
+  --ink-3:#6B7280;
+  --line:#E5E7EB;
+  --line-2:#D6DAE1;
+  /* ONE gradient, on the primary action and a single accent word. Blue into
+     indigo, close to the accent already in the desk, so the app and the site
+     stay recognisably the same brand. */
+  --grad:linear-gradient(135deg,#4C82F7 0%,#6D5DF6 55%,#8B5CF6 100%);
+  color-scheme:light;
+}
+
+body{ background:var(--canvas); color:var(--ink-2); }
+
+/* ---- header: white, quiet, one gradient button ----------------------- */
+.site-header{
+  background:rgba(255,255,255,0.86);
+  backdrop-filter:saturate(180%) blur(12px);
+  -webkit-backdrop-filter:saturate(180%) blur(12px);
+  border-bottom:1px solid var(--line);
+}
+.site-header .logo{ color:var(--ink-1); }
+.site-header .logo span{ color:#4C82F7; }
+.site-nav a{ color:var(--ink-2); }
+.site-nav a:hover{ color:var(--ink-1); }
+.site-nav a.nav-signin{ color:var(--ink-3); }
+.nav-toggle{ color:var(--ink-1); border-color:var(--line-2); background:#fff; }
+
+/* ---- the primary action ---------------------------------------------- */
+.btn{
+  background:var(--grad);
+  color:#fff;
+  border:0;
+  border-radius:10px;
+  font-weight:600;
+  box-shadow:0 1px 2px rgba(11,13,18,0.08), 0 6px 20px rgba(76,130,247,0.22);
+  transition:transform 150ms ease-out, box-shadow 150ms ease-out, filter 150ms ease-out;
+}
+.btn:hover{
+  transform:translateY(-1px);
+  box-shadow:0 2px 4px rgba(11,13,18,0.10), 0 10px 28px rgba(76,130,247,0.30);
+  filter:saturate(110%);
+}
+.btn:active{ transform:translateY(0); }
+.btn.ghost{
+  background:#fff; color:var(--ink-1);
+  border:1px solid var(--line-2);
+  box-shadow:0 1px 2px rgba(11,13,18,0.04);
+}
+.btn.ghost:hover{ background:var(--canvas-2); filter:none; }
+
+/* ---- THE HERO CONTAINER ---------------------------------------------
+   Obol's move, and the one that makes a white page feel designed rather than
+   empty: the hero is not the page, it is a dark card sitting ON the page, with
+   the gradient living inside it where it cannot shout. */
+.section.hero{ padding:28px 0 64px; background:transparent; }
+.section.hero > .wrap{
+  position:relative;
+  max-width:1180px;
+  padding:clamp(40px,6vw,84px) clamp(28px,5vw,72px);
+  border-radius:28px;
+  overflow:hidden;
+  background:
+    radial-gradient(760px 420px at 88% 8%, rgba(109,93,246,0.38), transparent 62%),
+    radial-gradient(620px 420px at 6% 96%, rgba(76,130,247,0.26), transparent 60%),
+    linear-gradient(168deg,#11131A 0%,#0A0B0F 62%);
+  color:#E8EAED;
+  box-shadow:0 1px 2px rgba(11,13,18,0.06), 0 30px 70px -28px rgba(11,13,18,0.45);
+}
+/* A faint grid inside the container — an instrument surface, not decoration. */
+.section.hero > .wrap::before{
+  content:"";
+  position:absolute; inset:0; pointer-events:none;
+  background-image:linear-gradient(rgba(232,234,237,0.05) 1px,transparent 1px),
+                   linear-gradient(90deg,rgba(232,234,237,0.05) 1px,transparent 1px);
+  background-size:52px 52px;
+  -webkit-mask-image:radial-gradient(760px 420px at 70% 20%,#000,transparent 75%);
+  mask-image:radial-gradient(760px 420px at 70% 20%,#000,transparent 75%);
+}
+.section.hero > .wrap > *{ position:relative; }
+.section.hero h1{ color:#F3F5F8; letter-spacing:-0.02em; }
+/* ONE gradient phrase. A highlight, not a paint job. */
+.section.hero h1 em{
+  font-style:normal;
+  background:linear-gradient(135deg,#7FA6FF 0%,#A78BFA 100%);
+  -webkit-background-clip:text; background-clip:text; color:transparent;
+}
+.section.hero .lede{ color:#B9BFCB; }
+.section.hero .cta-note{ color:#6F7684; }
+.section.hero .pill{ background:rgba(232,234,237,0.07); border-color:rgba(232,234,237,0.16); color:#C9CFDA; }
+.section.hero .for-label{ color:#6F7684; }
+.section.hero .for-row a{
+  background:rgba(232,234,237,0.05);
+  border-color:rgba(232,234,237,0.14);
+  color:#D4D9E2;
+  transition:background 150ms ease-out, border-color 150ms ease-out;
+}
+.section.hero .for-row a:hover{ background:rgba(232,234,237,0.10); border-color:rgba(232,234,237,0.26); }
+.section.hero .btn.ghost{ background:rgba(232,234,237,0.06); border-color:rgba(232,234,237,0.20); color:#E8EAED; }
+.section.hero .btn.ghost:hover{ background:rgba(232,234,237,0.12); }
+
+/* ---- the light sections below ---------------------------------------- */
+.section{ background:transparent; }
+.section.plain{ background:var(--canvas-2); }
+.section h2, .section h3{ color:var(--ink-1); letter-spacing:-0.015em; }
+.section p, .section li{ color:var(--ink-2); }
+.kicker span:first-child{ color:var(--ink-3); }
+.kicker .rule{ background:var(--line); }
+.lede{ color:var(--ink-2); }
+.note, .src, .cta-note{ color:var(--ink-3); }
+
+/* Cards on a light canvas: white, one hairline, one soft shadow. */
+.card, .tile, .entry, .doc, .step, .fact, .news-item, .founder, .disclosure, .hero-value{
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:16px;
+  box-shadow:0 1px 2px rgba(11,13,18,0.04);
+  color:var(--ink-2);
+  transition:border-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+.card:hover, .tile:hover, .entry:hover, .doc:hover, .news-item:hover{
+  border-color:var(--line-2);
+  box-shadow:0 2px 6px rgba(11,13,18,0.06), 0 12px 28px -14px rgba(11,13,18,0.18);
+}
+.card h3, .tile h3, .entry-title, .step h3, .doc h3{ color:var(--ink-1); }
+.card.accent{
+  border-color:rgba(76,130,247,0.35);
+  box-shadow:0 1px 2px rgba(11,13,18,0.04), 0 0 0 3px rgba(76,130,247,0.06);
+}
+
+/* Tables read as data on light, not as boxes. */
+.tablewrap table{ color:var(--ink-2); }
+.tablewrap th{ color:var(--ink-3); border-bottom-color:var(--line-2); }
+.tablewrap td{ border-bottom-color:var(--line); }
+
+/* GOLD STILL MEANS ATTESTED — the one rule that survives the repaint.
+   Darkened for contrast on white; it is the same signal. */
+.hero-value .value.official, .official{ color:#B07E16; }
+
+.pill{ background:#fff; border:1px solid var(--line); color:var(--ink-2); }
+.status.built{ color:#0F7A4F; }
+.status.partial{ color:#9A6B00; }
+.status.not{ color:#B03A3A; }
+.callout{ background:var(--canvas-2); border:1px solid var(--line); color:var(--ink-2); }
+.callout.warn{ background:#FFFBEB; border-color:#F3E4B3; }
+.callout.bad{ background:#FEF2F2; border-color:#F3C9C9; }
+
+/* ---- footer ----------------------------------------------------------- */
+.site-footer{ background:var(--canvas-2); border-top:1px solid var(--line); color:var(--ink-3); }
+.site-footer a{ color:var(--ink-2); }
+.site-footer a:hover{ color:var(--ink-1); }
+
+/* ---- phone ------------------------------------------------------------ */
+@media (max-width:860px){
+  .site-nav{ background:#fff; border:1px solid var(--line); box-shadow:0 12px 32px -12px rgba(11,13,18,0.25); }
+  .section.hero > .wrap{ border-radius:20px; padding:36px 22px; }
+}

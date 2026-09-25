@@ -13,7 +13,7 @@
 <meta property="og:url" content="https://etpfoundry.com/">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#0A0B0F">
-<link rel="stylesheet" href="/site/site.css?v=9">
+<link rel="stylesheet" href="/site/site.css?v=10">
 <script defer src="/site/site.js?v=9"></script>
 <link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32.png">
 <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png">
@@ -31,18 +31,21 @@
   <div class="wrap">
     <a class="logo" href="/" aria-label="ETP Foundry home">ETP<span>Foundry</span></a>
     <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <!-- FIVE ITEMS, NOT THIRTEEN.
+         This nav carried Benchmarks, Methodology, Governance, Licensing, Regulatory,
+         Documents, Calendar, Status, Committee, News, About, Sign in and Open the desk —
+         thirteen links in one row. A nav that long is not navigation, it is a sitemap: it
+         tells a visitor nothing is more important than anything else, and it makes the
+         product look like a filing cabinet. Every page still exists and is still linked
+         from the footer and from the group it belongs to; what changed is that the top of
+         the site now answers "what is this, and can I use it" instead of listing rooms. -->
     <nav class="site-nav" id="site-nav" aria-label="Primary">
       <a href="/benchmarks/">Benchmarks</a>
       <a href="/methodology">Methodology</a>
-      <a href="/governance">Governance</a>
+      <a href="/committee">Committee</a>
       <a href="/licensing">Licensing</a>
-      <a href="/regulatory">Regulatory</a>
-      <a href="/documents">Documents</a>
-      <a href="/calendar">Calendar</a>
-      <a href="/status">Status</a><a href="/committee">Committee</a>
-      <a href="/news">News</a>
       <a href="/about">About</a>
-      <a href="/desk/login" title="Committee signers, authorised participants, fund administrators, auditors">Sign in</a>
+      <a class="nav-signin" href="/desk/login" title="Committee signers, authorised participants, fund administrators, auditors">Sign in</a>
       <a href="/desk/" class="btn">Open the desk →</a>
     </nav>
   </div>
@@ -54,7 +57,8 @@
 <section class="section hero" aria-labelledby="hero-h">
   <div class="wrap">
     <div class="pill"><span class="dot"></span> Benchmark administrator · transfer agent · Canton Network</div>
-    <h1 id="hero-h">Official NAV for tokenised funds on&nbsp;Canton.</h1>
+    <!-- One gradient phrase, and it is the phrase the whole business turns on. -->
+    <h1 id="hero-h">Official NAV for <em>tokenised funds</em> on&nbsp;Canton.</h1>
     <p class="lede">One price a day, signed K&#8209;of&#8209;N by a committee with money on the mark.
       Fund shares are created and redeemed against it, in kind, on the ledger.</p>
     <div class="cta-row">
