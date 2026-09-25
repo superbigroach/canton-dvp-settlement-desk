@@ -179,6 +179,16 @@ export interface ApFund {
   cutoff: { time: string; timezone: string; nextAt?: string };
   minShares?: number;
   lot?: number;
+  /**
+   * Is the NAV backed by a committee signature on every component?
+   *
+   * False means dealing is CLOSED: creation and redemption exchange units for shares at
+   * the NAV, so the NAV is the price of the trade, and an unattested NAV is the seed.
+   * The API refuses both orders with `dealingClosedReason`; the row says so rather than
+   * offering a link that 422s.
+   */
+  navAttested?: boolean;
+  dealingClosedReason?: string | null;
 }
 
 export interface Receipt {

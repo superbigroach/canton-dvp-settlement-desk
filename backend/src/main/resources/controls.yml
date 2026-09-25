@@ -1,0 +1,267 @@
+# ===========================================================================
+# THE CONTROLS REGISTER — what a client's risk team asks for, and where we are.
+# ===========================================================================
+#
+# WHY THIS FILE EXISTS. Every prospective institutional client runs the same
+# questionnaire: insurance, an assurance report, a tested restore, incident
+# response, alerting, four-eyes. Today the honest answer to most of it is NO. The
+# failure mode is not saying no — it is saying no in an e-mail, getting the control
+# six months later, and nobody noticing that the certificate expired, or that the
+# answer in the e-mail is now out of date, or that three different documents give
+# three different statuses.
+#
+# So the register is the single source and it is machine-readable. A control has a
+# status and, when it exists, an owner, evidence and an expiry. Expiry is the point:
+# an insurance policy and a SOC report are the two things that go stale silently,
+# and both are exactly what a client rechecks at renewal. The desk computes
+# `daysUntilExpiry` and flags anything expiring inside 60 days, so the reminder is a
+# property of the system rather than a note in somebody's calendar.
+#
+# HOW TO USE IT. When a control becomes real: set `status: in_place`, fill `owner`,
+# `evidence` and `effectiveFrom`, and set `expiresAt` for anything that renews. The
+# API and the admin page pick it up on the next boot. Nothing else to change.
+#
+# `publish: true` puts a control on the PUBLIC readiness endpoint. Default is false:
+# a client under NDA gets the full register, the open web does not get a list of
+# what we do not have. Publish the ones that are strengths.
+#
+# Status: not_started | in_progress | in_place | not_applicable
+# Blocked: time | money | customer | none
+#
+# Sourced from BUSINESS/10-ENTERPRISE-READINESS/READINESS-GAPS.md (25 Sep 2026).
+# Keep the two in step: that file is the argument, this file is the state.
+# ===========================================================================
+
+controls:
+
+  # ---- records and evidence ---------------------------------------------
+  - id: durable-records
+    name: The fixing record survives a deploy
+    category: Records
+    frameworks: [SOC2-CC7.2, ISO27001-A.8.13]
+    question: Where is the audit trail stored, and has it survived a restart?
+    status: in_progress
+    blocked: time
+    owner: Sebastián Borjas
+    detail: >-
+      The event log, roster and schedule are on a Cloud Storage bucket mounted at
+      /desk-data, and the desk refuses to boot when it is not writable
+      (REQUIRE_DURABLE_STORE=true), so a mis-mounted volume is a failed deploy rather
+      than a service that quietly stops writing its audit trail. NOT YET PROVEN: no
+      restart has been observed across a revision with the boot ledger in place.
+    evidence: https://etpfoundry.com/api/diag
+    publish: true
+
+  - id: retention-7y
+    name: Seven-year retention of fixing records
+    category: Records
+    frameworks: [IOSCO-PMF-Principle-15]
+    question: How long are benchmark records kept, and is that enforced?
+    status: in_progress
+    blocked: time
+    owner: Sebastián Borjas
+    detail: >-
+      The rulebook commits to seven years. Object versioning on the records bucket is
+      the mechanism; until the survival test passes the commitment is a promise, not a
+      control.
+
+  - id: daily-publication-record
+    name: Hash-chained daily publication record
+    category: Records
+    frameworks: [IOSCO-PMF-Principle-15]
+    question: Can you show what you published on a given day, and prove it is unaltered?
+    status: in_place
+    blocked: none
+    owner: Sebastián Borjas
+    effectiveFrom: 2026-09-25
+    detail: >-
+      One row per day, each carrying the SHA-256 of the previous row, generated from
+      the public API and committed to a public repository. Tamper detection tested:
+      altering one digit fails verification and names the line. LIMIT, stated: the
+      chain proves internal consistency, not third-party time — an RFC 3161 anchor or
+      a digest written to the Canton ledger would close that.
+    evidence: docs/record/PUBLICATION-RECORD.jsonl
+    publish: true
+
+  # ---- engineering assurance --------------------------------------------
+  - id: ci-pipeline
+    name: Continuous integration on every push
+    category: Engineering
+    frameworks: [SOC2-CC8.1, ISO27001-A.8.31]
+    question: How do you know a change did not break the service?
+    status: not_started
+    blocked: time
+    owner: Sebastián Borjas
+    detail: >-
+      554 tests exist and gate nothing. Commits go straight to master with no branch
+      protection and no automated build. The honest answer to the question today is
+      "I ran it by hand", which is the answer that fails this line of a questionnaire.
+
+  - id: alerting
+    name: Alerting and uptime monitoring
+    category: Engineering
+    frameworks: [SOC2-CC7.2]
+    question: How would you know the service was down or publishing wrong values?
+    status: not_started
+    blocked: time
+    owner: Sebastián Borjas
+    detail: >-
+      No alert policy, uptime check, notification channel or error tracker exists.
+      /status is client-side JavaScript that polls when somebody opens the page — a
+      display, not a monitor. Every incident so far was found by a human looking,
+      which means the ones nobody looked for were not found.
+
+  - id: backup-restore-tested
+    name: Backups exist and a restore has been tested
+    category: Engineering
+    frameworks: [SOC2-A1.2, ISO27001-A.8.13]
+    question: When did you last restore from backup?
+    status: not_started
+    blocked: time
+    owner: Sebastián Borjas
+    detail: A restore has never been performed. An untested backup is a hypothesis.
+
+  - id: tls-participant
+    name: End-to-end TLS and OIDC to the participant
+    category: Security
+    frameworks: [SOC2-CC6.7, ISO27001-A.8.24]
+    question: Is traffic to the ledger encrypted and authenticated?
+    status: not_started
+    blocked: time
+    owner: Sebastián Borjas
+    detail: >-
+      The desk reaches the participant over plaintext gRPC on a private VPC using HMAC
+      tokens, an auth mode Canton's own documentation labels unsafe for production.
+      Private networking is a mitigation, not the control.
+
+  # ---- corporate and financial ------------------------------------------
+  - id: operating-entity
+    name: Operating entity incorporated and IP assigned
+    category: Corporate
+    frameworks: [Vendor-Onboarding]
+    question: Which legal entity would we contract with?
+    status: not_started
+    blocked: time
+    owner: Sebastián Borjas
+    detail: >-
+      Blocked on time first, then money ($1–5k to incorporate, $1–5k/yr to maintain).
+      A client cannot sign with an entity that does not exist.
+
+  - id: insurance-eo
+    name: Professional indemnity / errors and omissions cover
+    category: Insurance
+    frameworks: [Vendor-Onboarding]
+    question: What insurance do you carry, for how much, and with whom?
+    status: not_started
+    blocked: money
+    owner: Sebastián Borjas
+    detail: >-
+      NONE. No policy, no quote, no broker engaged, not even an estimate. This is a
+      hard gate for several categories of client. When it is bound, set status to
+      in_place and fill effectiveFrom, expiresAt, insurer and limit — the desk will
+      warn 60 days before expiry.
+    # insurer:
+    # limit:
+    # effectiveFrom:
+    # expiresAt:
+
+  - id: insurance-cyber
+    name: Cyber liability cover
+    category: Insurance
+    frameworks: [Vendor-Onboarding]
+    question: Do you carry cyber liability cover?
+    status: not_started
+    blocked: money
+    owner: Sebastián Borjas
+    detail: NONE. Same treatment as E&O when bound.
+
+  # ---- independent assurance --------------------------------------------
+  - id: assurance-report
+    name: External assurance report (ISAE 3000 / SOC 1 / SOC 2)
+    category: Assurance
+    frameworks: [SOC2, ISAE3000, IOSCO-PMF-Principle-19]
+    question: Do you have a controls report from an independent auditor?
+    status: not_started
+    blocked: money
+    owner: Sebastián Borjas
+    detail: >-
+      None of any kind. $40–80k and 6–12 months. A 1940 Act fund's CCO treats the
+      absence of a SOC 1 as a gate, so this is the single control that most limits
+      which clients can be sold to at all.
+
+  - id: independent-oversight
+    name: Independent oversight function
+    category: Governance
+    frameworks: [IOSCO-PMF-Principle-5, UK-BMR]
+    question: Who reviews the administrator, independently of the administrator?
+    status: not_started
+    blocked: customer
+    owner: Sebastián Borjas
+    detail: >-
+      The committee attests values; nobody independent reviews the administrator
+      itself. Required for BMR recognition, expected by any regulated user.
+
+  - id: independent-committee-seat
+    name: At least one committee seat held by an independent third party
+    category: Governance
+    frameworks: [IOSCO-PMF-Principle-5]
+    question: Is any signature outside your control?
+    status: not_started
+    blocked: customer
+    owner: Sebastián Borjas
+    detail: >-
+      Every seat is currently operated by the administrator (trust level L1), which is
+      disclosed on every published value. Until one seat is external the K-of-N claim
+      is procedural, not adversarial. Costs nothing — it needs a counterparty to say yes.
+    publish: true
+
+  # ---- operations -------------------------------------------------------
+  - id: four-eyes-succession
+    name: A second operator — four-eyes and succession
+    category: Operations
+    frameworks: [SOC2-CC1.3, IOSCO-PMF-Principle-3]
+    question: What happens if the only person is unavailable?
+    status: not_started
+    blocked: money
+    owner: Sebastián Borjas
+    detail: >-
+      One person operates everything and there is no succession plan. $90–160k/yr.
+      Honest answer for a pilot; not acceptable for a production dependency.
+
+  - id: incident-response
+    name: Incident response plan
+    category: Operations
+    frameworks: [SOC2-CC7.4, ISO27001-A.5.24]
+    question: What do you do when something goes wrong, and who is told?
+    status: not_started
+    blocked: time
+    owner: Sebastián Borjas
+    detail: >-
+      No written plan. Nine incidents have been handled and documented after the fact,
+      which is evidence of diligence and not of a process.
+
+  - id: privacy-notice
+    name: Privacy notice and retention schedule
+    category: Legal
+    frameworks: [GDPR-Art13, GDPR-Art17]
+    question: What personal data do you hold and for how long?
+    status: not_started
+    blocked: time
+    owner: Sebastián Borjas
+    detail: >-
+      Neither exists. There is also no stated position on the tension between a GDPR
+      erasure request and immutable ledger records, which a European client will ask about.
+
+  # ---- regulatory -------------------------------------------------------
+  - id: bmr-recognition
+    name: UK/EU BMR recognition or endorsement
+    category: Regulatory
+    frameworks: [UK-BMR, EU-BMR]
+    question: Are you an authorised benchmark administrator?
+    status: not_started
+    blocked: customer
+    owner: Sebastián Borjas
+    detail: >-
+      NO, and the site says so on every page. $50–250k+ and 12–24 months, and it is
+      only worth starting when a client needs a benchmark they can use under BMR.
+    publish: true

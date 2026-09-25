@@ -29,7 +29,20 @@ export default function Funds() {
                   <td className="num mono">{f.sharesOutstanding !== undefined ? fmtQty(f.sharesOutstanding) : '—'}</td>
                   <td className="num mono">{f.fee.createBps} / {f.fee.redeemBps}</td>
                   <td className="mono">{f.cutoff.time} <span className="muted">{f.cutoff.timezone}</span></td>
-                  <td><Link to={`/ap/funds/${encodeURIComponent(f.id)}`} className="link">Create / Redeem</Link></td>
+                  {/* DEALING IS CLOSED UNTIL SOMEBODY SIGNS. The link used to be
+                      unconditional, so an AP could create shares at a seeded 890.00 while
+                      the basket's live value was 1,110 — 24% below the market, recorded as
+                      settled at the official NAV. The API refuses it now; this stops
+                      offering it, and says why. */}
+                  <td>
+                    {f.navAttested === false ? (
+                      <span className="muted" title={f.dealingClosedReason ?? undefined}>
+                        dealing closed — no attested NAV
+                      </span>
+                    ) : (
+                      <Link to={`/ap/funds/${encodeURIComponent(f.id)}`} className="link">Create / Redeem</Link>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

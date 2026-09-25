@@ -71,10 +71,41 @@ public class ApController {
     public record OrderRequest(@NotBlank String fundId, @NotNull @Positive BigDecimal shares) {
     }
 
+    /**
+     * NOTHING SETTLES AGAINST A NUMBER NOBODY SIGNED.
+     *
+     * <p>Creation and redemption exchange units for shares at the fund's NAV, so the NAV is
+     * the price of the trade. That NAV is summed from each component's {@code referencePrice}
+     * — the field a finalised fixing writes back to, and the SEED before any fixing exists.
+     * On 25 Sep 2026 this desk would happily have created shares at 890.00 for a basket no
+     * committee had ever attested, while the components' live value was 1,110: an authorised
+     * participant could have minted shares 24% below the market with one call, and the
+     * receipt would have recorded it as settled at the official NAV.
+     *
+     * <p>The portal now hides the button, but a button is not a control — this route is
+     * reachable with an API key. So the refusal lives here, in the one place both paths go
+     * through, and it names what is missing rather than failing obscurely.
+     */
+    private void requireAttestedNav(String fundId) {
+        var b = basketOr404(fundId);
+        List<String> unattested = new ArrayList<>();
+        for (var c : b.components()) {
+            boolean attested = series.series(c.instrumentId()).stream().anyMatch(r -> r.tier() == 1);
+            if (!attested) unattested.add(c.instrumentId());
+        }
+        if (!unattested.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "no committee has attested " + String.join(", ", unattested)
+                    + ", so " + fundId + " has no official NAV and nothing can settle against it. "
+                    + "Creation and redemption reopen once a fixing is struck.");
+        }
+    }
+
     /** Returns the receipt ({@code types.ts Receipt}). */
     @PostMapping("/api/ap/create")
     public Map<String, Object> create(HttpServletRequest req, @Valid @RequestBody OrderRequest body) {
         Principal me = CurrentUser.requireParty(req);
+        requireAttestedNav(body.fundId());
         String party = ledger.resolveParty(me.party());
         var r = desk.createBasketUnits(new Dtos.BasketCreateRequest(body.fundId(), party, body.shares()));
         record(FixingEvent.Kinds.CREATION, me, party, body, r.receiptCid(), r.navPerShare());
@@ -86,6 +117,7 @@ public class ApController {
     @PostMapping("/api/ap/redeem")
     public Map<String, Object> redeem(HttpServletRequest req, @Valid @RequestBody OrderRequest body) {
         Principal me = CurrentUser.requireParty(req);
+        requireAttestedNav(body.fundId());
         String party = ledger.resolveParty(me.party());
         var r = desk.redeemBasketUnits(new Dtos.BasketRedeemRequest(body.fundId(), party, body.shares()));
         record(FixingEvent.Kinds.REDEMPTION, me, party, body, r.receiptCid(), null);
@@ -158,6 +190,17 @@ public class ApController {
         }
         out.put("official", official);
         out.put("officialNav", complete ? nav : null);
+        // Whether this fund can trade at all today, and if not, why — so the portal can
+        // say so on the row instead of offering a Create/Redeem link that 422s.
+        List<String> unattested = new ArrayList<>();
+        for (var c : b.components()) {
+            if (series.series(c.instrumentId()).stream().noneMatch(r -> r.tier() == 1)) {
+                unattested.add(c.instrumentId());
+            }
+        }
+        out.put("navAttested", unattested.isEmpty());
+        out.put("dealingClosedReason", unattested.isEmpty() ? null
+                : "no committee has attested " + String.join(", ", unattested));
         try {
             var ind = desk.basketIndicativeNav(b.basketId(), viewer);
             out.put("indicative", ind.indicativeNavPerShare());

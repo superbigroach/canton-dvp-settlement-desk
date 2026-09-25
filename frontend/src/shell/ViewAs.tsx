@@ -13,8 +13,20 @@ export function ViewAsSelect() {
   const users = useAsync<UserRow[]>(() => desk.usersAsSelf(), []);
   const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
+  // YOU ARE NOT SOMEBODY ELSE. The list is every mapped user, and it included the signed-in
+  // admin — so the switcher showed "myself" and, a line below it, the same person again
+  // under `admin`. Picking that second entry sends X-Act-As with your own address:
+  // impersonating yourself, which changes nothing on screen and writes a real act-as record
+  // into the audit log for no reason. Own row out; "myself" already is that row, and now
+  // says so rather than leaving you to work out which of the two you are.
+  const self = (auth.adminMe?.email ?? auth.me?.email ?? '').toLowerCase();
   const groups = ROLE_ORDER
-    .map((role) => ({ role, rows: (users.data ?? []).filter((u) => u.role === role) }))
+    .map((role) => ({
+      role,
+      rows: (users.data ?? []).filter(
+        (u) => u.role === role && (u.email ?? '').toLowerCase() !== self,
+      ),
+    }))
     .filter((g) => g.rows.length > 0);
 
   const onChange = async (email: string) => {
@@ -34,7 +46,7 @@ export function ViewAsSelect() {
       <span>View as</span>
       <select id="view-as" value={auth.actAs ?? ''} disabled={busy || users.loading} onChange={(e) => void onChange(e.target.value)}
         title={users.error ? `Users could not be loaded — ${users.error}` : 'Look at the desk as another mapped user'}>
-        <option value="">myself</option>
+        <option value="">{self ? `myself — ${self}` : 'myself'}</option>
         {groups.map((g) => (
           <optgroup key={g.role} label={g.role}>
             {g.rows.map((u) => (
