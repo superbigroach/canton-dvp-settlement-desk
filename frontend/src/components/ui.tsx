@@ -80,7 +80,13 @@ export function TierTag({ tier, k, n, label }: { tier?: number; k?: number; n?: 
   const word = label ?? (tier === 2 ? 'alternate seats' : tier === 3 ? 'benchmark × factor' : tier === 4 ? 'prior fixing' : tier === 5 ? 'missed' : undefined);
   // Tier 0 is the backend's seed ("seed" is its own label for it): say what that means.
   const text = tier === 0 ? `${label && label !== 'seed' ? label : 'seed'} · not attested` : word ? `tier ${tier} · ${word}` : `tier ${tier}`;
-  return <span className="tag fallback" title={tier === 0 ? 'A seeded value: no committee has attested it, so it is not official.' : undefined}>{text}</span>;
+  // PROVISIONAL IS NOT FAILED. Everything below tier 1 used the red `fallback` tag, so a
+  // live indicative mark — a real observation of a real market, correctly labelled as
+  // unattested — was painted the same colour as a MISSED strike. Red has to mean something
+  // went wrong, or it stops meaning anything. Tier 0 (seed, indicative) is amber:
+  // provisional, not broken. Tiers 2–5 are genuine fallbacks and stay red.
+  const kind = tier === 0 ? 'provisional' : 'fallback';
+  return <span className={`tag ${kind}`} title={tier === 0 ? 'No committee has attested this value, so it is not official.' : undefined}>{text}</span>;
 }
 
 // ---- countdown --------------------------------------------------------------
