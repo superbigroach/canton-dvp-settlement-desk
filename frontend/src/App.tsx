@@ -108,6 +108,12 @@ export default function App() {
   // Official fixes on the ledger, so a yielding instrument can show the rate that was
   // actually attested rather than a number typed into this file.
   const [accruingFixes, setAccruingFixes] = useState<FixingResponse[]>([]);
+  // IS THE SELECTED FUND'S OFFICIAL NAV ACTUALLY SIGNED? The header quoted "OFFICIAL NAV
+  // 890.00 · Committee-signed NAV per share" for a basket no committee had attested,
+  // because the number comes from the components' stored referencePrice — the field a
+  // finalised fixing writes back to, and the SEED before that. The backend now answers
+  // this directly (`officialAttested`), so the header can stop guessing.
+  const [fundNavAttested, setFundNavAttested] = useState<boolean | null>(null);
 
   const tradableAssets = useMemo(
     () => instruments.filter((i) => i.kind !== 'Cash'),
@@ -147,7 +153,9 @@ export default function App() {
   // WHAT THE ANCHOR IS CALLED. For a traded asset it is the official open/close the
   // auction discovered; for a fund it is the official NAV per share the committee
   // signed. Same number in the same field, different name.
-  const anchorLabel = selectedIsFund ? 'Official NAV' : sessionLabel(session);
+  const anchorLabel = selectedIsFund
+    ? (fundNavAttested === false ? 'NAV · not struck' : 'Official NAV')
+    : sessionLabel(session);
   // The newest ACCRUING fix for it — the rate and day count the committee signed.
   const yieldFix = useMemo(
     () =>
@@ -265,6 +273,21 @@ export default function App() {
     return ins;
   }, []);
 
+  // Ask the backend whether the selected fund's official NAV is attested on every leg.
+  // Null while unknown, so a slow answer never flashes "not struck" at a fund that is.
+  useEffect(() => {
+    if (!selectedIsFund || !asset) {
+      setFundNavAttested(null);
+      return;
+    }
+    let alive = true;
+    api
+      .basketIndicativeNav(asset, acting || undefined)
+      .then((r) => { if (alive) setFundNavAttested(r.officialAttested); })
+      .catch(() => { if (alive) setFundNavAttested(null); });
+    return () => { alive = false; };
+  }, [selectedIsFund, asset, acting]);
+
   useEffect(() => {
     (async () => {
       try {
@@ -338,7 +361,9 @@ export default function App() {
 
   const qtyNum = Number((Number(quantity) || 0).toFixed(10));
   const priceNum = Number(price) || 0;
-  const closePrice = refPriceOf(asset);
+  // A fund's stored mark is only a price once somebody signed it. Until then the header
+  // shows a dash rather than a confident number under the word "Official".
+  const closePrice = selectedIsFund && fundNavAttested === false ? null : refPriceOf(asset);
   const dvpCash = qtyNum * priceNum;
   // BUYING POWER — quantity * the worst price the order can LEGALLY execute at.
   // This must match the ledger's own reservation exactly or the ticket rejects orders
@@ -714,7 +739,11 @@ export default function App() {
                 <>no accruing fix struck yet — the committee attests base, rate and day count</>
               )
             ) : selectedIsFund ? (
-              <>Committee-signed NAV per share · the cross is discovered from the book</>
+              fundNavAttested === false ? (
+                <>no committee has struck this NAV — the basket has an indicative value only</>
+              ) : (
+                <>Committee-signed NAV per share · the cross is discovered from the book</>
+              )
             ) : (
               <>Published anchor · the cross is discovered from the book</>
             )}

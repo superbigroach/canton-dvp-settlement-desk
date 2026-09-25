@@ -540,6 +540,18 @@ export interface IndicativeNav {
   /** False when nothing could be revalued — every leg fell back to its mark. */
   live: boolean;
   asOf: string;
+  /**
+   * Does a committee signature stand behind EVERY leg of the official NAV?
+   *
+   * <p>False means there is no official NAV: `officialNavPerShare` and `driftBps` are
+   * null, no arbitrage may be shown against it, and `officialNote` names the components
+   * nobody has attested. The official number used to be summed from each component's
+   * stored `referencePrice`, which holds the attested price once a fixing is finalised
+   * and the SEED before that — so an unstruck basket rendered a confident "signed" NAV.
+   */
+  officialAttested: boolean;
+  /** Why there is no official NAV, when there is not. Null when there is one. */
+  officialNote: string | null;
 }
 
 /**

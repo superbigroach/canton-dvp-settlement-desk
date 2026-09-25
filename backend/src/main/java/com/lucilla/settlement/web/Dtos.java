@@ -843,7 +843,25 @@ public final class Dtos {
             boolean complete,
             /** False when nothing could be revalued — every leg fell back to its mark. */
             boolean live,
-            String asOf) {
+            String asOf,
+            /**
+             * Is {@code officialNavPerShare} backed by a committee signature on EVERY leg?
+             *
+             * <p>It was not, and the desk said it was. A fund's official NAV is summed from
+             * each component's {@code referencePrice}, a field the ledger keeps on the
+             * instrument. Finalising a fixing writes the attested price back into it — but on
+             * a fresh ledger it holds the SEED, and nothing downstream could tell the two
+             * apart. So on 25 Sep 2026 the desk rendered "OFFICIAL NAV 890.00 · signed ·
+             * settles create & redeem" for a basket whose components had never been attested,
+             * and advertised a +2,406 bp arbitrage against its own indicative number — an
+             * invitation to trade against a gap that existed only because one side was stale.
+             *
+             * <p>False means there is no official NAV: {@code officialNavPerShare} and
+             * {@code driftBps} are null and {@code officialNote} says which leg is missing one.
+             */
+            boolean officialAttested,
+            /** Why there is no official NAV, when there is not. Null when there is one. */
+            String officialNote) {
     }
 
     /**

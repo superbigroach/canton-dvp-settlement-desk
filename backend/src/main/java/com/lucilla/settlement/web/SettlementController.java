@@ -65,16 +65,23 @@ public class SettlementController {
     private final org.springframework.beans.factory.ObjectProvider<com.lucilla.settlement.scheduler.ScheduleStore> scheduleStore;
     private final org.springframework.beans.factory.ObjectProvider<com.lucilla.settlement.ledger.StrikeCalendars> strikeCalendars;
 
+    private final org.springframework.beans.factory.ObjectProvider<com.lucilla.settlement.benchmarks.SeriesService> series;
+
     public SettlementController(LedgerService ledger,
                                 com.lucilla.settlement.ledger.MarketData marketData,
                                 org.springframework.context.ApplicationEventPublisher events,
                                 org.springframework.beans.factory.ObjectProvider<com.lucilla.settlement.scheduler.ScheduleStore> scheduleStore,
-                                org.springframework.beans.factory.ObjectProvider<com.lucilla.settlement.ledger.StrikeCalendars> strikeCalendars) {
+                                org.springframework.beans.factory.ObjectProvider<com.lucilla.settlement.ledger.StrikeCalendars> strikeCalendars,
+                                // Optional like the two above, so the web-slice tests that build this
+                                // controller with a mocked ledger alone keep compiling. Absent, an
+                                // official NAV cannot be proven attested and is therefore not claimed.
+                                org.springframework.beans.factory.ObjectProvider<com.lucilla.settlement.benchmarks.SeriesService> series) {
         this.ledger = ledger;
         this.marketData = marketData;
         this.events = events;
         this.scheduleStore = scheduleStore;
         this.strikeCalendars = strikeCalendars;
+        this.series = series;
     }
 
     /**
@@ -2252,16 +2259,44 @@ public class SettlementController {
                     c.instrumentId(), c.unitsPerShare(), mark, officialValue, now, indicativeValue, basis));
         }
 
+        // AN OFFICIAL NAV EXISTS ONLY IF A SIGNATURE STANDS BEHIND EVERY LEG.
+        //
+        // `mark` above is the component's `referencePrice` — the field finalising a fixing
+        // writes back to. On a ledger where the committee has struck, that IS the attested
+        // number. On one where it has not, it is the seed, and the two are the same field.
+        // Summing it and calling the total "official" is how this desk came to publish
+        // "OFFICIAL NAV 890.00 · signed" for a basket nobody had ever attested.
+        //
+        // So the claim is now checked rather than assumed: a leg counts as official only
+        // when a RECOGNISED fixing exists for that instrument — recognised in the strict
+        // sense (a committee visible to the auditor with the same admin and threshold,
+        // every attestor a member, the threshold met, and not dated in the future). One leg
+        // short and there is no official NAV at all, no drift, and a note naming the gap.
+        List<String> unattested = new ArrayList<>();
+        var seriesService = series.getIfAvailable();
+        for (var c : basket.components()) {
+            boolean attested = seriesService != null
+                    && seriesService.series(c.instrumentId()).stream().anyMatch(r -> r.tier() == 1);
+            if (!attested) unattested.add(c.instrumentId());
+        }
+        boolean officialAttested = unattested.isEmpty() && complete;
+        String officialNote = officialAttested ? null
+                : unattested.isEmpty()
+                ? "a component is missing a mark, so no NAV can be summed"
+                : "no committee has attested " + String.join(", ", unattested)
+                  + " — there is no official NAV for this basket yet, only the indicative one";
+
         BigDecimal drift = null;
-        if (complete && official.signum() != 0) {
+        if (officialAttested && official.signum() != 0) {
             drift = indicative.subtract(official)
                     .multiply(new BigDecimal("10000"))
                     .divide(official, 2, java.math.RoundingMode.HALF_EVEN);
         }
         return new Dtos.IndicativeNavResponse(
                 basketId, basket.cashInstrument(),
-                complete ? official : null, complete ? indicative : null,
-                drift, legs, complete, anyLive, asOf.toString());
+                officialAttested ? official : null, complete ? indicative : null,
+                drift, legs, complete, anyLive, asOf.toString(),
+                officialAttested, officialNote);
     }
 
     /** Find a basket by id among those visible to a party, else a clear 400. */

@@ -150,7 +150,12 @@ export default function FundPanel({
   // exists is to let somebody collapse the difference — buy the cheap one, turn it
   // into the dear one. Showing the gap without showing the trade that closes it
   // would be a dashboard; this is a desk.
-  const officialNav = nav?.navPerShare ?? null;
+  // NO SIGNED MARK, NO ARBITRAGE. The gap is only meaningful against a number the
+  // committee stood behind. Against an unattested seed it is not an opportunity, it is
+  // the age of a placeholder — and on 25 Sep 2026 this strip told an AP that a basket
+  // was 2,406 bp rich and offered them a one-click "Create 10 · sell MOC" to capture
+  // 2,141.96 USDC that did not exist. `officialAttested` gates the whole strip.
+  const officialNav = inav?.officialAttested === false ? null : nav?.navPerShare ?? null;
   const indicativeNav = inav?.indicativeNavPerShare ?? null;
   const arb =
     officialNav != null && indicativeNav != null && officialNav > 0
@@ -440,15 +445,33 @@ export default function FundPanel({
                   on-chain equivalent of the iNAV an exchange puts out every ~15s.
                   A real ETF runs both; the drift is the honest measure of how stale
                   the last strike has become, and the cue to strike again. */}
+              {/* "SIGNED" IS A CLAIM, SO IT IS ONLY MADE WHEN IT IS TRUE.
+                  This read "Official NAV / share · signed · settles create & redeem" above
+                  890.00 for a basket no committee had ever attested — the number was the sum
+                  of the components' seed marks. The backend now says whether a signature
+                  stands behind every leg (`officialAttested`), and when it does not there is
+                  no official NAV to show: the row says what is missing instead of printing a
+                  figure under the word "signed". */}
               <div className="nav-line">
                 <span className="nav-label">
                   Official NAV / share
-                  <span className="nav-sub">signed · settles create &amp; redeem</span>
+                  <span className="nav-sub">
+                    {inav && !inav.officialAttested
+                      ? 'not struck yet — no committee has signed'
+                      : 'signed · settles create & redeem'}
+                  </span>
                 </span>
                 <span className="mono nav">
-                  {nav && nav.navPerShare != null ? `${fmt2(nav.navPerShare)} ${CASH}` : '—'}
+                  {inav && !inav.officialAttested
+                    ? '—'
+                    : nav && nav.navPerShare != null
+                    ? `${fmt2(nav.navPerShare)} ${CASH}`
+                    : '—'}
                 </span>
               </div>
+              {inav && !inav.officialAttested && inav.officialNote && (
+                <p className="hint subtle">{inav.officialNote}</p>
+              )}
               {inav && inav.indicativeNavPerShare != null && (
                 <div className="nav-line indicative">
                   <span className="nav-label">

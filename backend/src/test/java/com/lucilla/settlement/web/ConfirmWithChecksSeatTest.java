@@ -71,7 +71,8 @@ class ConfirmWithChecksSeatTest {
                 "CBTC", "attested", "cETH", "onchain-verifiable", "TEQ", "custodial"));
         ObjectProvider<ScheduleStore> schedules = mock(ObjectProvider.class);
         ObjectProvider<StrikeCalendars> calendars = mock(ObjectProvider.class);
-        desk = new SettlementController(ledger, mock(MarketData.class), events, schedules, calendars);
+        ObjectProvider<com.lucilla.settlement.benchmarks.SeriesService> series = mock(ObjectProvider.class);
+        desk = new SettlementController(ledger, mock(MarketData.class), events, schedules, calendars, series);
         when(ledger.resolveParty(anyString())).thenAnswer(inv -> inv.getArgument(0));
         when(ledger.fixingProposalsVisibleTo(anyString())).thenReturn(List.of(
                 proposal("p-btc", "CBTC"), proposal("p-eth", "cETH"), proposal("p-teq", "TEQ")));
