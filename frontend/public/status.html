@@ -14,6 +14,10 @@
 <meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#0A0B0F">
 <link rel="stylesheet" href="/site/site.css?v=9">
+<style>
+  /* A wide table scrolls inside itself; the PAGE never scrolls sideways on a phone. */
+  .band .wrap > table.docs { display: block; overflow-x: auto; max-width: 100%; }
+</style>
 <script defer src="/site/site.js?v=9"></script>
 <link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32.png">
 <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png">
@@ -110,7 +114,7 @@
   function age(iso){ if(!iso) return null; return Math.max(0,(Date.now()-new Date(iso).getTime())/1000); }
   function fmtAge(s){ if(s==null) return '—'; if(s<3600) return Math.round(s/60)+' min'; if(s<86400*2) return Math.round(s/3600)+' h'; return Math.round(s/86400)+' d'; }
   var overall=[];
-  get('/api/health').then(function(h){ set('[data-st-api]', h.status==='UP'); det('[data-st-api-d]', 'auth '+(h.auth||'—')+' · ledger '+(h.ledgerHost||'—')); overall.push(h.status==='UP'); })
+  get('/api/health').then(function(h){ set('[data-st-api]', h.status==='UP'); det('[data-st-api-d]', 'ledger reachable · auth '+(h.auth||'—')); overall.push(h.status==='UP'); })
     .catch(function(){ set('[data-st-api]', false); overall.push(false); });
   get('/api/diag').then(function(d){ var ok=d.ledger&&d.ledger.reachable===true; set('[data-st-ledger]', ok); det('[data-st-ledger-d]', (d.package? 'package '+d.package.packageName+' '+d.package.packageVersion+' '+(d.package.statusOnParticipant||''):'')+(d.ledger&&d.ledger.ledgerEnd!=null?' · ledger end '+d.ledger.ledgerEnd:'')); overall.push(!!ok); })
     .catch(function(){ set('[data-st-ledger]', null); det('[data-st-ledger-d]','diagnostics are admin-only on this host'); });

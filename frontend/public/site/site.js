@@ -49,7 +49,7 @@
       about: [
         'A basket fixing is Σ (unitsPerShareᵢ × fixingᵢ) over the components. It therefore requires a current fixing for every component; if one is missing, the basket NAV is not published rather than estimated.',
         'Creation and redemption of LX1 shares settle in kind, atomically, at this number. The official NAV is the number contracts settle against; the indicative value derived from live market data is informational and binding on nobody.',
-        'LX1 is a demonstration instrument on the hosted sandbox. Its components inside the fund are issued for demonstration and are not the production tokens.'
+        'LX1 is a demonstration instrument. Its components inside the fund are issued for demonstration and are not the production tokens.'
       ],
       referencing: []
     }
@@ -204,7 +204,7 @@
       var ids = ORDER.slice();
       Object.keys(byId).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
       ids.forEach(function (id) { container.appendChild(renderTile(merge(id, byId[id]), false)); });
-      if (state) { state.textContent = 'Values from the hosted sandbox via /api/benchmarks. Refreshed on load.'; state.className = 'api-state'; }
+      if (state) { state.textContent = 'Values from ETP Foundry’s own Canton DevNet validator via /api/benchmarks. Refreshed on load.'; state.className = 'api-state'; }
     }).catch(function (err) {
       if (state) {
         state.textContent = 'Live values unavailable (' + (err && err.message ? err.message : 'no response') + '). The sandbox may be cold-starting; reload in a minute.';
@@ -326,7 +326,7 @@
     getJSON('/api/benchmarks/' + encodeURIComponent(id)).then(function (api) {
       var hv0 = $('.hero-value', root); if (hv0) hv0.classList.remove('skeleton');
       paint(merge(id, api));
-      if (state) { state.textContent = 'Live from the hosted sandbox via /api/benchmarks/' + id + '.'; state.className = 'api-state'; }
+      if (state) { state.textContent = 'Live from ETP Foundry’s own Canton DevNet validator via /api/benchmarks/' + id + '.'; state.className = 'api-state'; }
     }).catch(function (err) {
       var hv = $('.hero-value', root); if (hv) hv.classList.remove('skeleton');
       if (state) { state.textContent = 'Live value unavailable (' + (err && err.message ? err.message : 'no response') + '). Static description shown.'; state.className = 'api-state down'; }
