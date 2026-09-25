@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Committee seat brief — ETP Foundry</title>
+<meta name="description" content="One page per committee seat: what you sign, what the other seats provide, how to automate it, and what happens when the committee does not agree.">
+<link rel="canonical" href="https://etpfoundry.com/brief">
+<meta name="theme-color" content="#FFFFFF">
+<link rel="stylesheet" href="/site/site.css?v=18">
+<link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32.png">
+<meta name="robots" content="noindex">
+<style>
+  .brief{max-width:860px;margin:0 auto;padding:0 clamp(18px,5vw,44px)}
+  .brief-head{padding:36px 0 22px;border-bottom:1px solid var(--line)}
+  .brief-eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:var(--ink-3)}
+  .brief h1{font-size:clamp(28px,4vw,40px);line-height:1.12;margin:10px 0 8px;letter-spacing:-0.02em;color:var(--ink-1)}
+  .brief .claim{font-size:18px;color:var(--ink-2);margin:0}
+  .brief section{padding:26px 0;border-bottom:1px solid var(--line)}
+  .brief section:last-of-type{border-bottom:0}
+  .brief h2{font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:var(--ink-3);margin:0 0 12px;font-family:var(--mono);font-weight:600}
+  .brief h3{font-size:16px;margin:0 0 6px;color:var(--ink-1)}
+  .brief p{margin:0 0 12px;line-height:1.65}
+  .cond{border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:10px;background:#fff}
+  .cond-name{font-family:var(--mono);font-size:13.5px;font-weight:600;color:var(--ink-1)}
+  .cond-rule{font-family:var(--mono);font-size:12.5px;color:#1B3FA0;background:rgba(76,130,247,0.07);
+             border:1px solid rgba(76,130,247,0.20);border-radius:8px;padding:7px 10px;margin-top:8px;overflow-wrap:anywhere}
+  .cond-fields{font-family:var(--mono);font-size:12px;color:var(--ink-3);margin-top:7px}
+  .who{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+  .who div{border:1px solid var(--line);border-radius:12px;padding:13px 15px;background:#fff}
+  .who strong{display:block;color:var(--ink-1);font-size:13.5px;margin-bottom:3px}
+  .who span{font-size:12.5px;color:var(--ink-3);line-height:1.5}
+  .who div.me{border-color:rgba(76,130,247,0.45);background:rgba(76,130,247,0.05)}
+  .kv{display:grid;grid-template-columns:150px 1fr;gap:8px 18px;font-size:14px}
+  .kv dt{color:var(--ink-3)}
+  .kv dd{margin:0;color:var(--ink-2)}
+  .seatpick{display:flex;gap:8px;flex-wrap:wrap;margin:20px 0 0}
+  .seatpick a{padding:8px 14px;border:1px solid var(--line-2);border-radius:999px;text-decoration:none;color:var(--ink-2);font-size:13.5px;background:#fff}
+  .seatpick a:hover{border-color:#4C82F7;color:#1B3FA0}
+  .brief-foot{padding:24px 0 60px;color:var(--ink-3);font-size:12.5px;line-height:1.6}
+  .printbar{display:flex;gap:10px;align-items:center;margin-top:16px}
+  @media print{
+    .printbar,.seatpick,.site-header{display:none!important}
+    .brief{max-width:none;padding:0}
+    .brief section{break-inside:avoid;padding:16px 0}
+    .cond,.who div{break-inside:avoid}
+    a{text-decoration:none;color:#000}
+    body{background:#fff}
+  }
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="/" aria-label="ETP Foundry home">ETP<span>Foundry</span></a>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="/benchmarks/">Benchmarks</a>
+      <a href="/methodology">Methodology</a>
+      <a href="/committee">Committee</a>
+      <a href="/request-access" class="btn">Request access →</a>
+    </nav>
+  </div>
+</header>
+
+<main class="brief" id="brief"></main>
+
+<script>
+/* ===========================================================================
+   The seat brief. One page a counterparty can read in four minutes and hand to
+   whoever actually owns the number inside their firm.
+
+   Every condition and rule below is COPIED FROM THE RUNNING SOFTWARE
+   (/api/signer-protocol, SIGNER_PROTOCOL v2) rather than retyped from a
+   document, so a brief can never describe a check the desk does not perform.
+   The failure and frequency rules come from the rulebook §7.
+   =========================================================================== */
+var SEATS = {
+  issuer: {
+    title: 'Issuer seat',
+    claim: 'The wrapper can be redeemed right now.',
+    who: 'Head of operations or treasury at the token issuer.',
+    analogue: 'A BMR/IOSCO contributor under a code of conduct; an LBMA Direct Participant proving ability to settle.',
+    today: 'You already publish a proof of reserve and track a redemption queue. Operations checks these daily. The numbers already exist — nobody outside your firm signs them each day.',
+    conditions: [
+      ['attestor-quorum', 'Enough attestors signed your reserve attestation.', 'quorumSigners, quorumThreshold', 'quorumSigners >= quorumThreshold'],
+      ['reserves-current', 'The reserve statement is fresh.', 'reservesAsOf', 'reservesAsOf within 24 hours of the confirmation'],
+      ['reserves-cover-supply', 'Reserves are at least the issued supply.', 'reserves, supply', 'reserves >= supply'],
+      ['redemption-queue-clear', 'The redemption queue is inside your declared limit.', 'queueDepth, maxQueueDepth', 'queueDepth <= maxQueueDepth']
+    ],
+    note: 'Only what your model can prove is asked for. An on-chain-verifiable wrapper such as cETH is asked for two conditions, not four: there is no attestor quorum to prove when the contracts are verifiable at any block.',
+    ask: 'You already publish reserves and a queue. Sign them once a day next to a lender and a venue, for free, and your token becomes something a lender can mark against.'
+  },
+  lender: {
+    title: 'Lender seat',
+    claim: 'We will carry this number on our own book.',
+    who: 'Head of risk, or whoever owns the liquidation engine, at a lending protocol or desk.',
+    analogue: 'An IBA PMOC financial-intermediary member; an LBMA participant with bilateral credit lines.',
+    today: 'You already mark this collateral independently and you already run liquidations against your mark. The seat asks you to state the mark you are already using.',
+    conditions: [
+      ['independent-mark-within-tolerance', 'Your own mark agrees with the proposal inside your declared tolerance.', 'independentMark', '|independentMark - proposal| / proposal <= your declared tolerance (recommended 25 bp)'],
+      ['liquidations-consistent', 'Liquidations you ran today are consistent with this mark.', 'liquidationsToday, worstDeviationBps', 'worstDeviationBps <= your declared liquidation tolerance'],
+      ['book-acceptance', 'You accept the number onto your book.', 'acceptedAt', 'acceptedAt is a timestamp, not in the future']
+    ],
+    note: 'You declare the tolerance. It is not imposed. A mark outside it is a refusal with a reason, which is a normal outcome and not a failure.',
+    ask: 'You already mark this collateral to make loans against it. Sign the mark you are already using, once a day, and the number becomes one the issuer and the venue stand behind too.'
+  },
+  venue: {
+    title: 'Venue seat',
+    claim: 'The mark sits where the asset actually traded.',
+    who: 'Head of market data or market operations at a venue with a book in the instrument.',
+    analogue: 'A CF Benchmarks constituent exchange; an ISR regulated electronic trading venue.',
+    today: 'You already publish a traded range and a book. The seat asks you to confirm the proposal falls inside the range your own venue printed.',
+    conditions: [
+      ['traded-range', 'The proposal is inside your traded range for the window.', 'low, high', 'low <= proposal <= high — this one is enforced by the ledger itself, not by us'],
+      ['spread-within-tolerance', 'The spread at the strike was inside tolerance.', '—', 'declared at onboarding'],
+      ['sufficient-volume', 'Enough volume traded in the window.', '—', 'declared at onboarding'],
+      ['no-prints-attested', 'If nothing traded, you attest the absence instead.', 'bestBid, bestAsk', 'bestBid <= proposal <= bestAsk when both are present']
+    ],
+    note: 'A quiet book is not a refusal. A venue with no prints attests the absence — "my book showed no trades; best bid/ask was X/Y; I do not contradict the proposal". That is a third act, distinct from confirming and refusing, and it is why this works on markets that are thin at 3am.',
+    ask: 'You already publish a traded range. Confirm once a day that the official mark sits inside it, for free, and your venue is named on every value struck against it.'
+  },
+  custodian: {
+    title: 'Custodian seat',
+    claim: 'The reserve exists, is unencumbered, and covers supply.',
+    who: 'Client-service or operations lead at the custodian holding the underlying.',
+    analogue: 'An ETF custodian sending the daily holdings file to the fund accountant; LBMA ability to settle Loco London.',
+    today: 'You already produce a daily holdings statement for this account. The seat asks you to sign the three facts that statement already contains.',
+    conditions: [
+      ['holdings-current', 'Your latest holdings statement is less than 24 hours old.', 'statementAsOf', 'statementAsOf within 24 hours of the confirmation'],
+      ['holdings-cover-supply', 'What you custody is at least the issued supply.', 'holdings, supply', 'holdings >= supply'],
+      ['no-encumbrance', 'None of it is pledged, lent or rehypothecated.', 'encumbered', 'encumbered == 0']
+    ],
+    note: 'You are the only party who can see the account. That is the whole reason the seat exists: no amount of on-chain data answers "is any of this lent out".',
+    ask: 'You already send a daily holdings file. Sign three numbers from it once a day, for free, and the fund that depends on it can prove its reserve to anyone.'
+  },
+  'transfer-agent': {
+    title: 'Transfer agent seat',
+    claim: 'Shares outstanding reconcile, and fees are accrued.',
+    who: 'The fund-accounting or transfer-agency lead for a tokenised fund.',
+    analogue: 'The ETF fund accountant and transfer agent producing the daily NAV and reconciling the register with DTC.',
+    today: 'You already reconcile the register against the units in issue each day, and you already accrue the fee. The seat asks you to sign the reconciliation you already perform.',
+    conditions: [
+      ['shares-outstanding-reconciled', 'Your register agrees with the ledger.', 'registerShares, ledgerShares', 'registerShares == ledgerShares'],
+      ['fees-accrued', 'Fees are accrued and not negative.', 'accruedFees', 'accruedFees >= 0']
+    ],
+    note: 'On a tokenised fund the ledger IS the register, so this reconciliation is cheaper than the one you run today, not dearer.',
+    ask: 'You already reconcile the register daily. Sign it, and the fund NAV becomes something an authorised participant can create and redeem against without asking you first.'
+  }
+};
+
+var ORDER = ['issuer', 'lender', 'venue', 'custodian', 'transfer-agent'];
+var LABEL = { issuer: 'Issuer', lender: 'Lender', venue: 'Venue', custodian: 'Custodian', 'transfer-agent': 'Transfer agent' };
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+  });
+}
+
+function otherSeats(key) {
+  return ORDER.filter(function (k) { return k !== key; }).map(function (k) {
+    return '<div><strong>' + esc(LABEL[k]) + '</strong><span>' + esc(SEATS[k].claim) + '</span></div>';
+  }).join('') +
+  '<div class="me"><strong>ETP Foundry</strong><span>Proposes the value, publishes it with its tier and its signers, and never signs it. The administrator is not a member of its own committee — the ledger refuses a fixing where it is.</span></div>';
+}
+
+function render(key) {
+  var s = SEATS[key];
+  var el = document.getElementById('brief');
+  if (!s) {
+    el.innerHTML =
+      '<div class="brief-head"><div class="brief-eyebrow">Committee</div>' +
+      '<h1>Seat briefs</h1>' +
+      '<p class="claim">One page each: what you sign, what the other seats provide, how to automate it, and what happens when the committee does not agree.</p>' +
+      '<div class="seatpick">' + ORDER.map(function (k) {
+        return '<a href="?seat=' + k + '">' + esc(LABEL[k]) + '</a>';
+      }).join('') + '</div></div>';
+    return;
+  }
+
+  el.innerHTML =
+  '<div class="brief-head">' +
+    '<div class="brief-eyebrow">Committee seat brief · SIGNER_PROTOCOL v2</div>' +
+    '<h1>' + esc(s.title) + '</h1>' +
+    '<p class="claim">' + esc(s.claim) + '</p>' +
+    '<div class="printbar"><button class="btn" onclick="window.print()">Print / save as PDF</button>' +
+    '<a class="btn ghost" href="/committee#' + key + '">Full detail</a></div>' +
+  '</div>' +
+
+  '<section><h2>Who holds this seat</h2>' +
+    '<h3>' + esc(s.who) + '</h3>' +
+    '<p>' + esc(s.analogue) + '</p>' +
+    '<p>' + esc(s.today) + '</p></section>' +
+
+  '<section><h2>What you sign, once a day</h2>' +
+    s.conditions.map(function (c) {
+      return '<div class="cond"><div class="cond-name">' + esc(c[0]) + '</div>' +
+             '<div>' + esc(c[1]) + '</div>' +
+             '<div class="cond-fields">you supply: ' + esc(c[2]) + '</div>' +
+             '<div class="cond-rule">' + esc(c[3]) + '</div></div>';
+    }).join('') +
+    '<p>' + esc(s.note) + '</p>' +
+    '<p><strong>A tick alone is refused.</strong> Every condition needs the numbers behind it; the desk returns an error naming the number that is missing. The point is that a signature carries evidence, not an opinion.</p>' +
+  '</section>' +
+
+  '<section><h2>What the other seats bring</h2>' +
+    '<div class="who">' + otherSeats(key) + '</div>' +
+    '<p style="margin-top:14px">Each seat asserts the one thing only it can see. No single party — including us — can produce a fixing alone.</p>' +
+  '</section>' +
+
+  '<section><h2>How often, and how long it takes</h2>' +
+    '<dl class="kv">' +
+      '<dt>Frequency</dt><dd>Once per instrument per strike. One fixing per identifier per day; a second strike for the same date is a restatement, never a second fixing.</dd>' +
+      '<dt>Your window</dt><dd>30 minutes from the proposal, by default, declared per instrument.</dd>' +
+      '<dt>Effort</dt><dd>Seconds, by hand. Zero once automated.</dd>' +
+      '<dt>Cost to you</dt><dd><strong>None. A committee seat is never charged, and never paid.</strong> That is what keeps the signature worth something.</dd>' +
+    '</dl></section>' +
+
+  '<section><h2>Automate it, and you never think about it again</h2>' +
+    '<p>Every condition is a query against a system you already run; none of them needs a human to form a view. An unpaid seat that needs daily attention becomes a rubber stamp within weeks, so the intended end state is a checker, not a person.</p>' +
+    '<p>Mint an API key in the desk under <strong>Settings → API key</strong>. Point the reference checker at your own sources — static values, an HTTP endpoint, or a command. It polls, confirms with evidence when every condition passes, refuses naming the condition when one fails, and <strong>halts and sends nothing when it cannot evaluate a condition</strong>. A halt is never a confirm, and never a refusal either.</p>' +
+    '<p>It must never widen a tolerance to make a check pass. That is the one rule.</p></section>' +
+
+  '<section><h2>What happens when the committee does not agree</h2>' +
+    '<dl class="kv">' +
+      '<dt>You disagree</dt><dd>Refuse, naming the condition and the reason. A refusal without a reason is not recorded. Refusing is not a free veto and not a failure — it is the seat working.</dd>' +
+      '<dt>K is still reached</dt><dd>The fixing stands. You may abstain on any fixing. Abstaining three times in a row without cause is reviewed.</dd>' +
+      '<dt>Fewer than K agree</dt><dd><strong>No new fixing exists.</strong> The prior recipe keeps deriving a value, published and flagged <code>CARRIED FORWARD</code> with its age on the face of it. Nothing is estimated to fill the gap.</dd>' +
+      '<dt>Three days running</dt><dd>Triggers a committee review and notification of every licensee.</dd>' +
+      '<dt>Fewer than two live inputs</dt><dd><code>NO FIXING</code>, published with the reason. We never guess.</dd>' +
+      '<dt>A move over 10%</dt><dd>Published flagged <code>EXCEPTIONAL</code> and signers are notified. We do not suppress a real move — suppression is how an administrator becomes the story.</dd>' +
+    '</dl>' +
+    '<p style="margin-top:14px">A gap is published as a gap. That is the difference between a benchmark and a price feed.</p></section>' +
+
+  '<section><h2>The ask</h2>' +
+    '<p style="font-size:17px;color:var(--ink-1)">' + esc(s.ask) + '</p></section>' +
+
+  '<div class="brief-foot">' +
+    '<p><strong>Where we are, stated plainly.</strong> ETP Foundry is not an authorised or registered benchmark administrator in any jurisdiction. No third-party committee has been seated yet and no fixing has been published for commercial use. Values are struck on our own Canton DevNet validator. Every seat today is operated by ETP Foundry, which is disclosed on every published value — the first outside signer is what changes that.</p>' +
+    '<p>Full methodology: <a href="/methodology">etpfoundry.com/methodology</a> · ' +
+    'All seats: <a href="/committee">etpfoundry.com/committee</a> · ' +
+    'Ask for a seat: <a href="/request-access">etpfoundry.com/request-access</a></p>' +
+  '</div>';
+}
+
+var key = new URLSearchParams(location.search).get('seat') || location.hash.replace('#', '');
+render(key);
+</script>
+</body>
+</html>

@@ -91,6 +91,10 @@
         "destination": "/request-access.html"
       },
       {
+        "source": "/brief",
+        "destination": "/brief.html"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }
