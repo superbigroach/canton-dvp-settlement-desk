@@ -563,7 +563,7 @@ body.home .section.hero .btn.ghost:hover{ background:rgba(232,234,237,0.12); }
 .note, .src, .cta-note{ color:var(--ink-3); }
 
 /* Cards on a light canvas: white, one hairline, one soft shadow. */
-.card, .tile, .entry, .doc, .step, .fact, .news-item, .founder, .disclosure, .hero-value{
+.card, .tile, .entry, .step, .fact, .founder, .disclosure, .hero-value, .doc .toc{
   background:#fff;
   border:1px solid var(--line);
   border-radius:16px;
@@ -571,7 +571,7 @@ body.home .section.hero .btn.ghost:hover{ background:rgba(232,234,237,0.12); }
   color:var(--ink-2);
   transition:border-color 150ms ease-out, box-shadow 150ms ease-out;
 }
-.card:hover, .tile:hover, .entry:hover, .doc:hover, .news-item:hover{
+.card:hover, .tile:hover, .entry:hover{
   border-color:var(--line-2);
   box-shadow:0 2px 6px rgba(11,13,18,0.06), 0 12px 28px -14px rgba(11,13,18,0.18);
 }
@@ -673,3 +673,41 @@ body:not(.home) .section.hero .for-row a:hover{ border-color:var(--line-2); }
 #access-status{ min-height:1.2em; margin:0; }
 .plain-ol{ margin:0; padding-left:20px; }
 .plain-ol li{ margin-bottom:8px; }
+
+/* ---- .doc IS A LAYOUT, NOT A CARD -------------------------------------
+   `.doc` is `display:grid` — the two-column methodology shell holding the
+   table of contents and the article. Styling it as a card gave it a border,
+   a background and a radius, and the article then ran 100px PAST that border:
+   the overlap on /methodology. The CARD here is the table of contents; the
+   article is just text in a column. `.news-item` was the same mistake, a list
+   row with a bottom rule, not a box. */
+.doc{ background:none; border:0; border-radius:0; box-shadow:none; padding:0; }
+.doc .toc{ padding:20px 22px; align-self:start; }
+.doc > article{ min-width:0; }
+.doc > article img,.doc > article pre,.doc > article table{ max-width:100%; }
+.doc > article pre{ overflow-x:auto; }
+.news-item{ background:none; border:0; border-radius:0; box-shadow:none; border-bottom:1px solid var(--line); }
+.news-item:hover{ box-shadow:none; }
+
+/* Two columns once there is room, and the sticky TOC that implies. */
+@media (min-width:1000px){
+  .doc{ grid-template-columns:240px minmax(0,1fr); gap:48px; align-items:start; }
+  .doc .toc{ position:sticky; top:84px; }
+}
+
+/* A WIDE TABLE SCROLLS; IT DOES NOT HYPHENATE ITSELF TO DEATH.
+   The first attempt put `overflow-wrap:anywhere` on every cell, which broke
+   words a character at a time — "Benc / hmar / k / famil / y" down the first
+   column. A data table that does not fit is a horizontal scroll, which is what
+   .tablewrap already exists for; it just needed a minimum width so the columns
+   stop collapsing before it kicks in. */
+.doc .tablewrap,.tablewrap{ overflow-x:auto; -webkit-overflow-scrolling:touch; }
+.doc table,.tablewrap table{ width:100%; min-width:520px; border-collapse:collapse; }
+.doc th,.doc td{ padding:10px 12px; vertical-align:top; }
+.doc td code,.doc td .mono{ overflow-wrap:anywhere; }
+
+/* THE GUTTER ATE THE PAGE. `.wrap` is max-width:1140px with `padding:0 6vw`,
+   and 6vw on a 2560px monitor is 153px a side — so the 1140px container gave
+   back only 833px of usable width and every page read as a narrow ribbon with
+   huge empty margins. Clamped: generous on a phone, fixed on a desktop. */
+.wrap{ padding:0 clamp(18px,5vw,44px); }
