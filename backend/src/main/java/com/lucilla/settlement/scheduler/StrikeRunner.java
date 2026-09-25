@@ -15,7 +15,15 @@ import java.time.Instant;
  * one failure the schedule exists to prevent.
  */
 @Component
-@ConditionalOnProperty(prefix = "scheduler", name = "enabled", havingValue = "true", matchIfMissing = true)
+// OFF UNLESS ASKED FOR. This used to be matchIfMissing = true, so the runner started on any
+// deployment that had not explicitly disabled it, and a single environment variable was all that
+// stood between a fresh environment and a live strike. On 25 Sep 2026 the DevNet service spent 42
+// minutes with it on: the price feed was unreachable, and had the window closed it would have
+// published a gap row saying the committee failed to reach quorum when the truth was that the desk
+// could not reach a price source. For something that publishes a public benchmark — and publishes
+// a FAILURE when it cannot price — the safe default is silence. Turn it on deliberately, per
+// environment, once the feed, the schedule and the notifications are known good.
+@ConditionalOnProperty(prefix = "scheduler", name = "enabled", havingValue = "true", matchIfMissing = false)
 public class StrikeRunner {
 
     private static final Logger log = LoggerFactory.getLogger(StrikeRunner.class);

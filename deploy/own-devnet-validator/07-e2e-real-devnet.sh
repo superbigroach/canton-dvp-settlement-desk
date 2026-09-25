@@ -181,7 +181,11 @@ cc="$(echo "$cm" | field "d.get('contractId','')")"
 # 2039-02-03 on DevNet, which is permanent and had to be filtered out of the published series.
 # A per-run session also keeps test fixings out of the published Close series entirely.
 asof="$(date -u +%F)"
-e2e_session="E2E-$(date -u +%H%M%S)"
+# The backend now accepts ONLY "Open" or "Close" as a session (LedgerCommands.session), so a
+# per-run session no longer works and this test used to 400. Use "Open": the published series
+# derives on "Close", so an Open fixing exercises the whole path without ever appearing as a
+# published value. One run per day per instrument, which is what the ledger allows anyway.
+e2e_session="Open"
 p1="$(post "/committee/$cc/propose" "{\"proposer\":\"Operator\",\"instrumentId\":\"CBTC\",\"cashInstrument\":\"USDC\",\"session\":\"$e2e_session\",\"price\":65000,\"rationale\":\"E2E: committee-attested mark\",\"asOfDate\":\"$asof\"}")"
 pc="$(echo "$p1" | field "d.get('contractId','')")"
 # 3.0.0: the administrator (Operator) proposes and never attests; members attest WITH evidence
