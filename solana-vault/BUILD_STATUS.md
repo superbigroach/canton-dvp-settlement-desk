@@ -1,7 +1,9 @@
 # Build status — 25 September 2026
 
-**The program compiles and the test suite runs.** The toolchain blocker recorded here on
-24 September is fixed; what follows is the diagnosis, the fix, and the current state.
+**The program compiles and all 82 tests pass.** The toolchain blocker recorded here on
+24 September is fixed. **It is still not deployed to devnet** — the only thing missing is
+2.6 devnet SOL for the program's rent, and the faucet is rate-limiting this IP; see
+"Not done" below. What follows is the diagnosis, the fix, and the current state.
 
 ## The blocker, correctly diagnosed
 
@@ -86,12 +88,13 @@ wsl -e bash -lc 'export PATH="$HOME/.local/share/solana/install/active_release/b
 
 ## Test state
 
-Two full runs completed, both against a local validator started by `anchor test`:
+Three full runs completed, all against a local validator started by `anchor test`:
 
 | Run | Result |
 |---|---|
-| first green build | **76 passing, 6 failing** |
-| after fixing those six | **80 passing, 2 failing** |
+| first green build | 76 passing, 6 failing |
+| after fixing those six | 80 passing, 2 failing |
+| **final** | **82 passing, 0 failing** |
 
 **All eight failures were test bugs, not program bugs.** The program's arithmetic was right
 in every case:
@@ -120,9 +123,12 @@ in every case:
    executes*, so it now asserts the program id and `AnchorError` never appear in the
    failure text.
 
-The last two of those six fixes (5 and 6) were applied but **their rerun did not complete**
-— see below — so the last honestly verified count is **80 passing, 2 failing**, with the
-two remaining failures being the two assertions that fix 5 and 6 target.
+Fix 6 is worth keeping in mind: the failure text the RPC actually returns for a bad
+precompile signature is just `Simulation failed.` with **no** mention of a signature,
+verification or a precompile, so the original regex could never have matched whatever the
+wording.
+
+All 82 tests pass. No test is skipped and none is pending.
 
 ## Not done: devnet deploy and the end-to-end exercise
 
@@ -131,27 +137,59 @@ two remaining failures being the two assertions that fix 5 and 6 target.
 on-chain, and no transaction signatures. The declared id
 `ERs1iunZ9RWCRCWTaND3B1YNBNcs1bAPZWfCU9YByc5m` is the locally generated build keypair only.
 
-The blocker is not the toolchain and not the code: **the WSL VM wedged.** Mid-run,
-`wsl.exe` stopped servicing new connections — `vmmemWSL` sat at 0 bytes and 0 CPU while ten
-`wsl.exe` clients queued forever waiting on VM creation, and one earlier invocation had
-already returned
+Two things got in the way, in order.
+
+**1. The WSL VM wedged (resolved, self-healed).** Mid-run `wsl.exe` stopped servicing new
+connections — `vmmemWSL` at 0 bytes and 0 CPU with ten `wsl.exe` clients queued forever on
+VM creation, after an earlier invocation returned
 
 ```
 The operation timed out because a response was not received from the virtual machine or
 container. Error code: Wsl/Service/CreateInstance/CreateVm/HCS_E_CONNECTION_TIMEOUT
 ```
 
-The fix for that state is `wsl --shutdown` (or `wsl -t Ubuntu`) followed by a fresh
-invocation. Nothing in `~/sv-build` is lost by it — the build artefacts, the program
-keypair and the node modules are all on the ext4 disk.
+The usual fix is `wsl --shutdown` / `wsl -t Ubuntu`. Nothing under `~/sv-build` is lost by
+it — build artefacts, the program keypair and node_modules all live on the ext4 disk.
 
-To finish, once WSL is back:
+It recovered by itself after about an hour, long enough to run the suite to 82/0 and to
+attempt the airdrops — **and then wedged a second time**, on a command that was only doing
+`curl` against a few RPC endpoints. So treat this VM as unstable under network-plus-build
+load: run one `wsl.exe` invocation at a time, and `wsl --shutdown` at the first hang instead
+of waiting it out.
 
-```bash
-wsl --shutdown          # clears the stuck VM
-wsl -e bash -lc 'export PATH="$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"   && cd ~/sv-build && anchor test'                       # confirm 82 passing
-# then the Devnet deploy block in README.md
+**2. The devnet faucet, which is the current blocker.** The deploy needs **2.53673356 SOL**
+of rent for the program data account (`solana rent 499229`) plus fees, call it 2.6 SOL. The
+fresh devnet-only keypair
+
 ```
+~/.config/solana/etp-devnet.json   ->   85AWg8nG877shP6dB65awTLvZLo31ZbQWnBeySqCyHK5
+```
+
+is at **0 SOL**. Seventeen `solana airdrop` attempts (twelve at 2 SOL, five at 1 SOL, spaced
+12-20 s) every one returned
+
+```
+Error: airdrop request failed. This can happen when the rate limit is reached.
+```
+
+`api.devnet.solana.com` throttles per IP and this one is exhausted; it can stay that way for
+hours. Fallbacks, in order of preference:
+
+* wait and retry `solana airdrop 2 -k ~/.config/solana/etp-devnet.json --url devnet`;
+* <https://faucet.solana.com> — 5 SOL per period, needs a GitHub sign-in;
+* fund `85AWg8nG877shP6dB65awTLvZLo31ZbQWnBeySqCyHK5` with ~3 devnet SOL from any wallet
+  that has some.
+
+Once it has the SOL the rest is the `README.md` → Devnet deploy block verbatim; nothing else
+is known to be missing.
+
+### A note on the buffer keypair
+
+`solana program deploy` **without** `--buffer` generates an ephemeral buffer keypair and, if
+the deploy fails, prints its 12-word seed phrase to the terminal. That happened once here
+(an unfunded, zero-balance, devnet-only buffer that was never created on-chain — no funds
+were ever at risk), which is why the documented command now passes an explicit
+`--buffer /tmp/etp-buffer.json`. Do that, so a failed deploy cannot echo a seed phrase.
 
 ## Rules that still hold
 

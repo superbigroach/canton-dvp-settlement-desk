@@ -246,10 +246,16 @@ the repo never points at a live cluster by default. **Never mainnet-beta.**
 ```bash
 # inside WSL, from ~/sv-build
 solana-keygen new --no-bip39-passphrase --silent -o ~/.config/solana/etp-devnet.json
-solana airdrop 2 --url devnet -k ~/.config/solana/etp-devnet.json   # repeat; ~3.5 SOL of
-                                                                    # rent for a 499 KB .so
+solana airdrop 2 --url devnet -k ~/.config/solana/etp-devnet.json   # repeat; needs ~2.6 SOL
+# rent-exempt minimum for the 499 KB program's data account is 2.53673356 SOL
+# (`solana rent 499229`), plus fees. The public devnet faucet is aggressively
+# rate-limited per IP: `airdrop request failed ... rate limit` can persist for hours.
+# https://faucet.solana.com (GitHub sign-in) is the fallback.
 anchor build
-anchor deploy --provider.cluster devnet --provider.wallet ~/.config/solana/etp-devnet.json
+# NOTE: pass an explicit --buffer. `solana program deploy` without one generates an
+# ephemeral buffer keypair and PRINTS ITS 12-WORD SEED PHRASE if the deploy fails.
+solana-keygen new --no-bip39-passphrase --silent -o /tmp/etp-buffer.json
+solana program deploy target/deploy/etp_basket_vault.so   --program-id target/deploy/etp_basket_vault-keypair.json   --buffer /tmp/etp-buffer.json -k ~/.config/solana/etp-devnet.json --url devnet
 anchor idl init --provider.cluster devnet --provider.wallet ~/.config/solana/etp-devnet.json   -f target/idl/etp_basket_vault.json ERs1iunZ9RWCRCWTaND3B1YNBNcs1bAPZWfCU9YByc5m
 
 # then exercise it end to end and write deployments/devnet.json
