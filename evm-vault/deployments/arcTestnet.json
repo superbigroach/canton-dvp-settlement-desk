@@ -1,0 +1,164 @@
+{
+  "network": "arcTestnet",
+  "chainId": "5042002",
+  "explorer": "https://testnet.arcscan.app",
+  "vault": "0xF4dAf5BEeEEc381A5f0c0264440d31D8d4bb1451",
+  "deployer": "0x10e3868214DAe0479276fa8d2082FB7805aeb647",
+  "admin": "0x10e3868214DAe0479276fa8d2082FB7805aeb647",
+  "feeRecipient": "0x10e3868214DAe0479276fa8d2082FB7805aeb647",
+  "instrumentId": "0x5bf06a2243dc39f60484e931e5df61e4afd45a4f4e3d4c0a2ea25d95e6863b14",
+  "instrumentLabel": "MOCK-ETP-ARC-TESTNET-DEMO",
+  "vaultName": "MOCK ETP Basket (test only)",
+  "vaultSymbol": "mBSKT",
+  "constituents": [
+    "0xe0B324A4a18065CA7cd775ebd3e7aa35c3842542",
+    "0xA1E23ACCD39B0884Ec1E54d94e336773F7E237C9"
+  ],
+  "unitsPerShare": [
+    "2000000000000000000",
+    "100000000"
+  ],
+  "mocks": [
+    {
+      "address": "0xe0B324A4a18065CA7cd775ebd3e7aa35c3842542",
+      "name": "MOCK Apple (test only)",
+      "symbol": "mAAPL",
+      "decimals": 18,
+      "unitsPerShare": "2000000000000000000"
+    },
+    {
+      "address": "0xA1E23ACCD39B0884Ec1E54d94e336773F7E237C9",
+      "name": "MOCK T-Bill (test only)",
+      "symbol": "mTBILL",
+      "decimals": 6,
+      "unitsPerShare": "100000000"
+    }
+  ],
+  "oneShareRepresents": "2.0 mAAPL + 100.0 mTBILL",
+  "attestors": [
+    "0x142A5FE0A9f680a196E4BCDAfFf7DDb68BE9EF57",
+    "0xca20766770F8e01d328ceB7119226e0d5CdDd363",
+    "0x1D1e853DDF9c28878FACbE0bd9d5B18c0e20285C"
+  ],
+  "threshold": "2",
+  "fees": {
+    "createFeeBps": "0",
+    "redeemFeeBps": "0",
+    "managementFeeBps": "0"
+  },
+  "registry": null,
+  "blocks": {
+    "startBlock": 63858043,
+    "mockA": 63858046,
+    "mockB": 63858049,
+    "vault": 63858052,
+    "create": 63858084,
+    "redeem": 63858090,
+    "postNav": 63858105,
+    "endBlock": 63858108
+  },
+  "exercise": {
+    "sharesCreated": "1000000000000000000000",
+    "sharesRedeemed": "250000000000000000000",
+    "vaultHoldingsAfterCreate": {
+      "mAAPL": "2000000000000000000000",
+      "mTBILL": "100000000000"
+    },
+    "vaultHoldingsAfterRedeem": {
+      "mAAPL": "1500000000000000000000",
+      "mTBILL": "75000000000"
+    },
+    "navPerShare": "1234560000000000000000",
+    "navAsOfDate": "20721",
+    "navTier": 1,
+    "fixingRef": "0x3c11ed7afb00d99864cffc0b321719b40e3a9199be4b91115c54352269e60ac6",
+    "fixingRefPreimage": "TEST-FIXING-NOT-A-CANTON-ATTESTATION:arcTestnet:MOCK-ETP-ARC-TESTNET-DEMO:2026-09-25T02:12:18.259Z",
+    "fixingRefIsATestReference": true,
+    "negatives": [
+      {
+        "label": "postNav with 1 of 2 required signatures",
+        "reason": "InsufficientSignatures(1, 2)",
+        "txHash": "0x2b11e768dff8200520743e1f641261dda6c4024e5ae289e0a63e01a879310f03"
+      },
+      {
+        "label": "postNav with tier = 0 (seed value) and 2 valid signatures",
+        "reason": "TierNotAccepted(0, 1)",
+        "txHash": "0xcaa4bf82a9b04f26c612bd15fe3bd55829cddda01e1d343420093a45a2633bfd"
+      }
+    ]
+  },
+  "transactions": [
+    {
+      "step": "deploy MockERC20 mAAPL",
+      "hash": "0xda5daf867924ec5066f0f64661fafa4ea9ef924c2d68f3fddcaad14af1b1be0c",
+      "block": 63858046
+    },
+    {
+      "step": "deploy MockERC20 mTBILL",
+      "hash": "0x92bdc9922c657955dd404fe992ee88b1d0a91169b0641becb138e2ddd26bb7e0",
+      "block": 63858049
+    },
+    {
+      "step": "deploy EtpBasketVault",
+      "hash": "0xdf96918154eabc871b61ed148c3b2e5d735202757c51a813372aa7a5c0a8d644",
+      "block": 63858052
+    },
+    {
+      "step": "setAttestors(3, threshold 2)",
+      "hash": "0xd3c1f627e3beb9b70137d0d2d56f8a6b97d79bbb2491e1d9b6642a2f0fe37c3b",
+      "block": 63858054
+    },
+    {
+      "step": "grantRole(AP_ROLE, deployer)",
+      "hash": "0xb522912691e55fb994a2912f657a271b2b73bc3d2ca7ed264ee55857fb777e90",
+      "block": 63858059
+    },
+    {
+      "step": "mint mAAPL",
+      "hash": "0x98fec80c494c49bc16201ab21f87bda782e89bf2b5fd835558c0b7ebbc34536f",
+      "block": 63858064
+    },
+    {
+      "step": "mint mTBILL",
+      "hash": "0x70bc048458d90bc056aa9785975ff4b9a67ea6ee11f3af088530d9215efcdb79",
+      "block": 63858069
+    },
+    {
+      "step": "approve mAAPL",
+      "hash": "0x36128db6644f052345bddd2ad129ffdc23211e8200c9cb387b67bbb8b084417b",
+      "block": 63858074
+    },
+    {
+      "step": "approve mTBILL",
+      "hash": "0x4fa5a1a16b6325af268a5bcaf67ac784dcd17e996bf001497f5e8d6ca3daeec4",
+      "block": 63858078
+    },
+    {
+      "step": "create 1000.0 shares",
+      "hash": "0xc9d1dd595a2cef8df1192d0c1a84c213c65f5b2e557b80db3abf025eb937c98d",
+      "block": 63858084
+    },
+    {
+      "step": "redeem 250.0 shares",
+      "hash": "0x62c4f0a49ee9933161e82abcf5656309132822dd3fe2156d86ad3967031c06b2",
+      "block": 63858090
+    },
+    {
+      "step": "NEGATIVE postNav with 1 of 2 required signatures (reverted on-chain)",
+      "hash": "0x2b11e768dff8200520743e1f641261dda6c4024e5ae289e0a63e01a879310f03",
+      "block": 63858096
+    },
+    {
+      "step": "NEGATIVE postNav with tier = 0 (seed value) and 2 valid signatures (reverted on-chain)",
+      "hash": "0xcaa4bf82a9b04f26c612bd15fe3bd55829cddda01e1d343420093a45a2633bfd",
+      "block": 63858101
+    },
+    {
+      "step": "postNav (2-of-3)",
+      "hash": "0x822b69e4f046b9370b5ca406253bd95b6da23124526bb0831d3d1fc07a8845f0",
+      "block": 63858105
+    }
+  ],
+  "mocksWarning": "The constituents are MockERC20 tokens minted by scripts/e2e-testnet.ts. No real tokenised equity exists on Arc Testnet. This is a testnet demonstration, never a real basket.",
+  "deployedAt": "2026-09-25T02:12:25.947Z"
+}

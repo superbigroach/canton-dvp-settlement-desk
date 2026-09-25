@@ -260,6 +260,92 @@ Then post a fixing:
 VAULT_ADDRESS=0x... BENCHMARK_ID=LX1 ATTESTOR_PRIVATE_KEYS=0x..,0x.. npm run post-nav:base-sepolia
 ```
 
+## Deployed to Arc Testnet and Base Sepolia
+
+A full end-to-end run (deploy -> configure -> create -> redeem -> two refused
+NAV postings -> one attested NAV) was executed on both testnets on 2026-09-25 by
+`scripts/e2e-testnet.ts`. Every address, block number and tx hash is in
+[`deployments/arcTestnet.json`](deployments/arcTestnet.json) and
+[`deployments/baseSepolia.json`](deployments/baseSepolia.json).
+
+**Arc Testnet** — chainId 5042002, explorer base **https://testnet.arcscan.app**
+(301-redirects, path intact, to `https://explorer.testnet.arc.io`):
+
+| What | Address |
+|---|---|
+| `EtpBasketVault` "MOCK ETP Basket (test only)" / `mBSKT` | [`0xF4dAf5BEeEEc381A5f0c0264440d31D8d4bb1451`](https://testnet.arcscan.app/address/0xF4dAf5BEeEEc381A5f0c0264440d31D8d4bb1451) |
+| `MockERC20` "MOCK Apple (test only)" / `mAAPL`, 18 dp | [`0xe0B324A4a18065CA7cd775ebd3e7aa35c3842542`](https://testnet.arcscan.app/address/0xe0B324A4a18065CA7cd775ebd3e7aa35c3842542) |
+| `MockERC20` "MOCK T-Bill (test only)" / `mTBILL`, 6 dp | [`0xA1E23ACCD39B0884Ec1E54d94e336773F7E237C9`](https://testnet.arcscan.app/address/0xA1E23ACCD39B0884Ec1E54d94e336773F7E237C9) |
+
+**Base Sepolia** — chainId 84532, explorer base **https://sepolia.basescan.org**:
+
+| What | Address |
+|---|---|
+| `EtpBasketVault` "MOCK ETP Basket (test only)" / `mBSKT` | [`0xcdd1B8e6b2406F45c7177E6916f3f66CA6503e63`](https://sepolia.basescan.org/address/0xcdd1B8e6b2406F45c7177E6916f3f66CA6503e63) |
+| `MockERC20` "MOCK Apple (test only)" / `mAAPL`, 18 dp | [`0xe8CF891AcA30dAb742AC3F38c9C076ea1f8F8B93`](https://sepolia.basescan.org/address/0xe8CF891AcA30dAb742AC3F38c9C076ea1f8F8B93) |
+| `MockERC20` "MOCK T-Bill (test only)" / `mTBILL`, 6 dp | [`0x3FF4adFEb818Da7c5E6550b6c3307cE60c183B99`](https://sepolia.basescan.org/address/0x3FF4adFEb818Da7c5E6550b6c3307cE60c183B99) |
+
+Identical configuration on both chains: one share (`1e18` units of `mBSKT`)
+represents **2 mAAPL + 100 mTBILL**, i.e. `unitsPerShare =
+[2000000000000000000, 100000000]` - 18 dp for the first, **6 dp for the second**,
+each in that token's own base units. Committee: the three attestors from `.env`,
+threshold 2. All fees 0. `maxTier` left at the default 1 (`TIER_ATTESTED`). The
+`instrumentId` differs per chain (`keccak256("MOCK-ETP-ARC-TESTNET-DEMO")` vs
+`keccak256("MOCK-ETP-BASE-SEPOLIA-DEMO")`) so each record is self-describing.
+
+What both runs proved, asserted on-chain rather than assumed: `create(1000)`
+moved exactly 2,000 mAAPL + 100,000 mTBILL into the vault and minted exactly
+1,000 `mBSKT`; `redeem(250)` returned exactly 500 mAAPL + 25,000 mTBILL in kind
+and burned exactly 250 shares, leaving the vault with 1,500 mAAPL + 75,000
+mTBILL against 750 shares; a `postNav` carrying 1 of 2 required signatures
+reverted `InsufficientSignatures(1, 2)` and one carrying `tier = 0` reverted
+`TierNotAccepted(0, 1)` (each landed on-chain as a `status: 0` transaction, so
+the gate is visible in the explorer and not only in an `eth_call`); a 2-of-3
+signed fixing then posted and reads back as `navPerShare() = 1234.56` with
+`latestFixingRef() = (<the test ref>, tier 1)`.
+
+Re-run it (it deploys a **fresh** set each time - it does not reuse the above):
+
+```bash
+cd evm-vault
+npx hardhat run scripts/e2e-testnet.ts --network arcTestnet
+npx hardhat run scripts/e2e-testnet.ts --network baseSepolia
+```
+
+Needs `DEPLOYER_PRIVATE_KEY`, `ATTESTOR_PRIVATE_KEYS` (at least `NAV_THRESHOLD`
+of them) and `NAV_THRESHOLD` in `.env`, plus native gas in the deployer. Arc's
+gas token is USDC (faucet https://faucet.circle.com) and the run above cost
+about 0.20 of it; Base Sepolia's is ETH and the run cost about 0.00008 ETH.
+`CONSTITUENTS` / `UNITS_PER_SHARE` are **not** read: the script deploys its own
+mocks so the run is self-contained. It refuses mainnet chain ids exactly like
+`deploy.ts` and `post-nav.ts`.
+
+Two things the runs taught us about the endpoints. `https://sepolia.base.org` is
+a **pool of load-balanced nodes**: a `latest` read issued immediately after a
+receipt can hit a node that has not applied that block and return the previous
+value (a `create()` that mined with status 1 and four logs was followed by
+`balanceOf(vault) == 0`, and `AP_ROLE()` once returned `0x`). Every assertion in
+the script therefore re-reads until it settles or a 60s deadline passes, and
+receipts are awaited by polling, never by re-sending. A first Base Sepolia
+attempt aborted on exactly that stale read, so the deployer also owns an earlier,
+**abandoned** Base Sepolia set (vault `0xF4dAf5BEeEEc381A5f0c0264440d31D8d4bb1451`,
+created 1,000 shares, no NAV ever posted) - `deployments/baseSepolia.json` records
+the complete second run, not that one.
+
+> **WARNING - this is a testnet demonstration, never a real basket.** The two
+> constituents are `MockERC20` tokens with open minting, deployed and minted by
+> the script itself; no real tokenised equity exists on Arc Testnet or Base
+> Sepolia, and nothing here is Apple stock or a Treasury bill. The NAV posted is
+> an invented number and its `fixingRef` is a synthesised string
+> (`TEST-FIXING-NOT-A-CANTON-ATTESTATION:...`), **not** a Canton attestation -
+> the live desk currently publishes only tier-0 seed values with a null
+> `fixingCid`, which `scripts/post-nav.ts` correctly refuses to relay. All three
+> attestor keys live in one `.env`, which collapses K-of-N to 1-of-1 and is fine
+> only because this is a demonstration. The share token is a security: a real
+> basket goes live only under a licensed issuer's own deployment procedure, with
+> real constituents, a committee that holds its own keys, and an
+> `IHolderRegistry`.
+
 ## Not built (deliberately)
 
 * **Cash creation / redemption** — would need the NAV to price a USDC leg,
