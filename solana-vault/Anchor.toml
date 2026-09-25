@@ -7,10 +7,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-etp_basket_vault = "HQ99NqzmrGn88vJJvKeqE22B7zezHZMQNYX3LxBxHSnV"
+etp_basket_vault = "ERs1iunZ9RWCRCWTaND3B1YNBNcs1bAPZWfCU9YByc5m"
 
 [programs.devnet]
-etp_basket_vault = "HQ99NqzmrGn88vJJvKeqE22B7zezHZMQNYX3LxBxHSnV"
+etp_basket_vault = "ERs1iunZ9RWCRCWTaND3B1YNBNcs1bAPZWfCU9YByc5m"
 
 [registry]
 url = "https://api.apr.dev"

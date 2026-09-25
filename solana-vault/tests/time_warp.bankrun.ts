@@ -197,7 +197,7 @@ describe("etp_basket_vault (bankrun, warped clock)", () => {
       await warp(Number(elapsed));
       await accrue(f);
       const expected = (supply * 50n * elapsed) / (10_000n * SECONDS_PER_YEAR);
-      expect(expected).to.eq(507_476n); // 1234567891 * 50 * 2592000 / 315360000000 = 507476.7...
+      expect(expected).to.eq(507_356n); // 1234567891 * 50 * 2592000 / 315360000000 = 507356.7...
       expect(await tokenBalance(env, f.feeShareAccount)).to.eq(expected);
       expect(await tokenBalance(env, f.apShareAccount)).to.eq(1_234_567_891n);
     });
@@ -236,18 +236,24 @@ describe("etp_basket_vault (bankrun, warped clock)", () => {
     });
 
     it("dust below one base unit is carried, not discarded: the timestamp does not advance", async () => {
-      // 1 share at 50 bps: one base unit of fee needs 1e9*50*t/(1e4*31536000) >= 1  ->  t >= 6307.2 s
+      // 1 share = 1e9 base units. At 50 bps p.a. the fee is 1e9*50*t/(1e4*31536000)
+      // base units, i.e. ~0.1585 per second, so one WHOLE base unit needs t >= 6.31 s.
+      // (An earlier version of this test read the formula as if 1 share were 1 base unit
+      // and warped 6000 s, which is already 951 units -- nowhere near dust.)
       const f = await deployVault(env, { createFeeBps: 0, managementFeeBps: 50 });
       await createIx(env, f, SHARE_UNIT, f.apShareAccount).rpc();
       const ts0 = bnToBigint((await program.account.vault.fetch(f.vault)).lastAccrualTs);
-      await warp(6000);
+      await warp(6);
       await accrue(f);
+      // 6 s -> 0.951 base units -> floors to zero, so nothing is minted AND the
+      // timestamp must stay put, otherwise the dust would be silently discarded.
       expect(await tokenBalance(env, f.feeShareAccount)).to.eq(0n);
       expect(bnToBigint((await program.account.vault.fetch(f.vault)).lastAccrualTs)).to.eq(ts0);
-      await warp(400);
+      await warp(1);
       await accrue(f);
+      // 7 s from ts0 -> 1.109 base units -> 1 is minted and the clock finally advances.
       expect(await tokenBalance(env, f.feeShareAccount)).to.eq(1n);
-      expect(bnToBigint((await program.account.vault.fetch(f.vault)).lastAccrualTs)).to.eq(ts0 + 6400n);
+      expect(bnToBigint((await program.account.vault.fetch(f.vault)).lastAccrualTs)).to.eq(ts0 + 7n);
     });
   });
 

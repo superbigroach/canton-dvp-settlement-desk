@@ -142,8 +142,8 @@ export default function Shell() {
         </main>
       </div>
       <footer className="foot">
-        ETP Foundry is not a regulated benchmark administrator. Values shown are struck on a hosted sandbox unless the
-        page says otherwise; tier and age are shown on every published value.
+        ETP Foundry is not a regulated benchmark administrator. Values are struck on ETP Foundry's own Canton DevNet
+        validator; no third-party committee has been seated yet, so tier and age are shown on every published value.
       </footer>
     </div>
   );

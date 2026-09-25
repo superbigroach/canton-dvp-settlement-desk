@@ -111,7 +111,7 @@ export default function Login() {
         {error && <div className="banner error" role="alert"><span>{error}</span></div>}
       </div>
       <p className="login-foot muted">
-        Not a regulated benchmark administrator · values are struck on a hosted sandbox · <a href="/">etpfoundry.com</a>
+        Not a regulated benchmark administrator · values are struck on our own Canton DevNet validator · <a href="/">etpfoundry.com</a>
       </p>
     </div>
   );

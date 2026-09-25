@@ -14,7 +14,7 @@ committee-attested NAV, expressed in Anchor.
 | **Relay** (anyone) | post a signed fixing with `post_nav` |
 | **Holders** | hold/transfer shares; may be restricted by the allow-list |
 
-Program id (devnet + localnet): `HQ99NqzmrGn88vJJvKeqE22B7zezHZMQNYX3LxBxHSnV`
+Declared program id: `ERs1iunZ9RWCRCWTaND3B1YNBNcs1bAPZWfCU9YByc5m` (the keypair `anchor build` generated; **not yet deployed to devnet**)
 
 ## Layout
 
@@ -33,6 +33,7 @@ solana-vault/
 │   ├── helpers.ts                   # provider-agnostic token helpers, fixtures, fixing signer
 │   ├── etp_basket_vault.ts          # validator suite (anchor test)
 │   └── time_warp.bankrun.ts         # clock-warped suite (timelock, fee accrual) via solana-bankrun
+├── scripts/e2e-devnet.ts            # devnet end-to-end exercise -> deployments/devnet.json
 └── migrations/deploy.ts
 ```
 
@@ -195,18 +196,28 @@ very slow.
 
 ```bash
 # toolchain used
-solana-cli 2.1.22 (Agave), anchor-cli 0.31.1, cargo 1.86 (host), node 22, npm 10
-# platform-tools v1.47 (rustc 1.84) — the v1.43 default's cache on this machine is
-# a partial extraction with no lib/rustlib, so the build passes --tools-version.
+solana-cli 2.2.12 (Agave), anchor-cli 0.31.1, cargo 1.86 (host), node 22, npm 10
+# platform-tools v1.47, rustc 1.84.1 — which is what Agave 2.2.12 pins by default
 
 npm install                                   # .npmrc sets legacy-peer-deps (anchor-bankrun peer range)
-anchor build --no-idl -- --tools-version v1.47
-anchor idl build -o target/idl/etp_basket_vault.json -t target/types/etp_basket_vault.ts
-anchor test --skip-build                      # starts a local validator, runs both suites
+anchor build                                  # program + IDL + TS types
+anchor test                                   # starts a local validator, runs both suites
 ```
 
-On a machine whose default platform-tools are healthy, plain `anchor build && anchor test`
-works too.
+**If `anchor build` fails with `error[E0463]: can't find crate for 'core'`** — including on
+the *build scripts* of trivial crates — the active Agave release is pinning a
+platform-tools version whose cache extraction is incomplete (no `rust/lib/rustlib`). That
+is a toolchain installation fault, not a dependency-version problem. Fix it by moving to a
+release that pins a complete one:
+
+```bash
+agave-install init 2.2.12          # pins platform-tools v1.47 (rustc 1.84.1)
+rustup toolchain uninstall solana  # drop the stale link to the old sysroot
+```
+
+Repointing the `…/sdk/sbf/dependencies/platform-tools` symlink by hand does **not** work:
+`cargo-build-sbf` recreates it from its own pinned version on every build. The full
+diagnosis is in `BUILD_STATUS.md`.
 
 ### Toolchain notes (why Cargo.lock is pinned)
 
@@ -224,23 +235,56 @@ print([p['name']+' '+p['version'] for p in m['packages'] if p.get('edition')=='2
 
 ## Devnet deploy
 
+> **Not deployed yet.** The program compiles and the suites run against a local validator,
+> but nothing has been published to devnet and there is no `deployments/devnet.json`. When
+> there is, this section gets the program id, the vault PDA, the mock mints and the
+> transaction signatures — and the warning below stays.
+
+`Anchor.toml` deliberately keeps `cluster = "localnet"`; devnet is selected per command, so
+the repo never points at a live cluster by default. **Never mainnet-beta.**
+
 ```bash
-# inside WSL
-solana config set --url https://api.devnet.solana.com
-solana airdrop 2                              # repeat as needed; program rent ~2-3 SOL
-anchor build --no-idl -- --tools-version v1.47 && anchor idl build -o target/idl/etp_basket_vault.json -t target/types/etp_basket_vault.ts
-anchor deploy --provider.cluster devnet       # uses target/deploy/etp_basket_vault-keypair.json
-anchor idl init --provider.cluster devnet -f target/idl/etp_basket_vault.json HQ99NqzmrGn88vJJvKeqE22B7zezHZMQNYX3LxBxHSnV
+# inside WSL, from ~/sv-build
+solana-keygen new --no-bip39-passphrase --silent -o ~/.config/solana/etp-devnet.json
+solana airdrop 2 --url devnet -k ~/.config/solana/etp-devnet.json   # repeat; ~3.5 SOL of
+                                                                    # rent for a 499 KB .so
+anchor build
+anchor deploy --provider.cluster devnet --provider.wallet ~/.config/solana/etp-devnet.json
+anchor idl init --provider.cluster devnet --provider.wallet ~/.config/solana/etp-devnet.json   -f target/idl/etp_basket_vault.json ERs1iunZ9RWCRCWTaND3B1YNBNcs1bAPZWfCU9YByc5m
+
+# then exercise it end to end and write deployments/devnet.json
+ANCHOR_PROVIDER_URL=https://api.devnet.solana.com ANCHOR_WALLET=~/.config/solana/etp-devnet.json   npx ts-node scripts/e2e-devnet.ts
 ```
 
 The program keypair lives at `target/deploy/etp_basket_vault-keypair.json` (git-ignored,
-never printed). If you build on another machine you get a new keypair: run
+never printed). Build on another machine and you get a different one: run
 `anchor keys sync` to rewrite `declare_id!` and `Anchor.toml`, then rebuild.
 
-To stand up a series on devnet, script the same calls the tests make:
+### `scripts/e2e-devnet.ts`
+
+The Solana counterpart of `../evm-vault/scripts/e2e-testnet.ts`. It refuses to run against
+anything whose **genesis hash** is not devnet's, then: mints two mock constituents
+(`MOCK Apple (test only)` / `mAAPL`, 6 dp, 2.0 per share; `MOCK T-Bill (test only)` /
+`mTBILL`, 6 dp, 100.0 per share), initialises a vault with all fees at zero so the in-kind
+arithmetic is exact, sets a 2-of-3 attestor committee, grants the AP role, creates 1000
+shares in kind, redeems 250, and posts a NAV signed by two of the three through the Ed25519
+instruction-introspection path. Every constituent, share and supply balance is asserted
+exactly before and after create and redeem. It then proves two negatives on-chain — a
+posting one signature short (`InsufficientAttestations`) and one with `tier = 0`
+(`SeedTierRefused`) — checks that neither refused posting altered `latest_nav`, and writes
+everything, with `https://explorer.solana.com/...?cluster=devnet` links, to
+`deployments/devnet.json`.
+
+**What it is not:** the constituents are throwaway SPL mints with no issuer and no on-chain
+name (the labels live in `deployments/devnet.json`, not in token metadata), the
+`navPerShare` is an invented number, and `fixingRef` is the sha256 of a test string that is
+**not a Canton attestation**.
+
+To stand up a series by hand instead, script the same calls the tests make:
 `initialize_vault` → `set_ap` → create the vault's constituent ATAs
 (`getAssociatedTokenAddressSync(mint, vault, true, programId)`) → optionally
 `init_holder_registry` + `set_holder_registry(true)` + `set_holder_allowed`.
+
 
 ## Tests
 
@@ -259,6 +303,13 @@ fee over one year / partial period / zero rate / rate change settlement / dust c
 NAV date window as the clock advances.
 
 Both suites run under `anchor test`.
+
+A committee of three or more must pack its signatures into **one** Ed25519 instruction
+(`ed25519IxMulti` / `signedByPacked` in `tests/helpers.ts`): three separate
+`Ed25519Program.createInstructionWithPublicKey` instructions each repeat the 146-byte
+canonical message, and together with `post_nav` that is 1424 bytes against the 1232-byte
+transaction limit. `nav::verify_attestations` iterates `num_signatures` within an
+instruction, so packing is the supported shape, and it is what a real relay has to do.
 
 ## What is not built
 

@@ -408,6 +408,48 @@ export function ed25519Ix(signer: Keypair, message: Buffer): TransactionInstruct
   });
 }
 
+/** One Ed25519 native-program instruction carrying SEVERAL signatures over the SAME
+ *  message, with a single shared copy of the message body.
+ *
+ *  WHY this exists: `Ed25519Program.createInstructionWithPublicKey` emits one instruction
+ *  per signature, each repeating the 146-byte NAV message, and three of those plus
+ *  `post_nav` overflows the 1232-byte legacy transaction limit (measured: 1424 bytes).
+ *  The precompile and `nav::verify_attestations` both iterate `num_signatures` offsets
+ *  within one instruction, so packing is the supported shape — and it is what a real
+ *  relay must do for a committee larger than two.
+ *
+ *  Layout (agave `ed25519_instruction.rs`): num_signatures u8, padding u8, then one
+ *  14-byte offsets record per signature, then the pubkeys, the signatures, and the
+ *  message. Every instruction index is 0xFFFF, i.e. "this instruction". */
+export function ed25519IxMulti(signers: Keypair[], message: Buffer): TransactionInstruction {
+  const SELF = 0xffff;
+  const n = signers.length;
+  const headerLen = 2 + n * 14;
+  const pubkeysAt = headerLen;
+  const sigsAt = pubkeysAt + n * 32;
+  const messageAt = sigsAt + n * 64;
+  const data = Buffer.alloc(messageAt + message.length);
+
+  data.writeUInt8(n, 0);
+  data.writeUInt8(0, 1);
+  signers.forEach((signer, i) => {
+    const o = 2 + i * 14;
+    data.writeUInt16LE(sigsAt + i * 64, o); // signature_offset
+    data.writeUInt16LE(SELF, o + 2); // signature_instruction_index
+    data.writeUInt16LE(pubkeysAt + i * 32, o + 4); // public_key_offset
+    data.writeUInt16LE(SELF, o + 6); // public_key_instruction_index
+    data.writeUInt16LE(messageAt, o + 8); // message_data_offset (shared)
+    data.writeUInt16LE(message.length, o + 10); // message_data_size
+    data.writeUInt16LE(SELF, o + 12); // message_instruction_index
+
+    Buffer.from(signer.publicKey.toBytes()).copy(data, pubkeysAt + i * 32);
+    Buffer.from(nacl.sign.detached(message, signer.secretKey)).copy(data, sigsAt + i * 64);
+  });
+  message.copy(data, messageAt);
+
+  return new TransactionInstruction({ keys: [], programId: Ed25519Program.programId, data });
+}
+
 export function fixingArgs(f: Fixing) {
   return {
     instrumentId: Array.from(f.instrumentId),
@@ -459,6 +501,13 @@ export function postNavIx(env: Env, f: VaultFixture, fixing: Fixing, edIxs: Tran
 export function signedBy(env: Env, f: VaultFixture, fixing: Fixing, signers: Keypair[]) {
   const msg = navMessage(env.program.programId, f.vault, fixing);
   return signers.map((s) => ed25519Ix(s, msg));
+}
+
+/** Same as `signedBy`, but packs every signature into ONE Ed25519 instruction. Required
+ *  for three or more attestors: see `ed25519IxMulti`. */
+export function signedByPacked(env: Env, f: VaultFixture, fixing: Fixing, signers: Keypair[]) {
+  const msg = navMessage(env.program.programId, f.vault, fixing);
+  return [ed25519IxMulti(signers, msg)];
 }
 
 // ------------------------------------------------------------------------------------

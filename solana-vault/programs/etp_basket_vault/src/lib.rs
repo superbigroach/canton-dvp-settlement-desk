@@ -31,7 +31,7 @@ use events::*;
 use nav::{canonical_nav_message, verify_attestations, NavFixingArgs};
 use state::*;
 
-declare_id!("HQ99NqzmrGn88vJJvKeqE22B7zezHZMQNYX3LxBxHSnV");
+declare_id!("ERs1iunZ9RWCRCWTaND3B1YNBNcs1bAPZWfCU9YByc5m");
 
 #[program]
 pub mod etp_basket_vault {
