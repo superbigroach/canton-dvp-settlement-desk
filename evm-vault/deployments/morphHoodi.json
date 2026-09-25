@@ -1,0 +1,164 @@
+{
+  "network": "morphHoodi",
+  "chainId": "2910",
+  "explorer": "https://explorer-hoodi.morph.network",
+  "vault": "0x8C1066c4BDC00Bb70aBD1b32Fa64Ee0E79099A4b",
+  "deployer": "0x10e3868214DAe0479276fa8d2082FB7805aeb647",
+  "admin": "0x10e3868214DAe0479276fa8d2082FB7805aeb647",
+  "feeRecipient": "0x10e3868214DAe0479276fa8d2082FB7805aeb647",
+  "instrumentId": "0x00837189b0a871b43112055dcf0c34cb9a2ad36255e9f98f21b12fc2615b96e8",
+  "instrumentLabel": "MOCK-ETP-morphHoodi-DEMO",
+  "vaultName": "MOCK ETP Basket (test only)",
+  "vaultSymbol": "mBSKT",
+  "constituents": [
+    "0x424B5BeD028F733761a235f8b7482575a7296C4e",
+    "0x76e61eDF3EB114212672Be16335CFbdA27793bF9"
+  ],
+  "unitsPerShare": [
+    "2000000000000000000",
+    "100000000"
+  ],
+  "mocks": [
+    {
+      "address": "0x424B5BeD028F733761a235f8b7482575a7296C4e",
+      "name": "MOCK Apple (test only)",
+      "symbol": "mAAPL",
+      "decimals": 18,
+      "unitsPerShare": "2000000000000000000"
+    },
+    {
+      "address": "0x76e61eDF3EB114212672Be16335CFbdA27793bF9",
+      "name": "MOCK T-Bill (test only)",
+      "symbol": "mTBILL",
+      "decimals": 6,
+      "unitsPerShare": "100000000"
+    }
+  ],
+  "oneShareRepresents": "2.0 mAAPL + 100.0 mTBILL",
+  "attestors": [
+    "0x142A5FE0A9f680a196E4BCDAfFf7DDb68BE9EF57",
+    "0xca20766770F8e01d328ceB7119226e0d5CdDd363",
+    "0x1D1e853DDF9c28878FACbE0bd9d5B18c0e20285C"
+  ],
+  "threshold": "2",
+  "fees": {
+    "createFeeBps": "0",
+    "redeemFeeBps": "0",
+    "managementFeeBps": "0"
+  },
+  "registry": null,
+  "blocks": {
+    "startBlock": 9454550,
+    "mockA": 9454552,
+    "mockB": 9454553,
+    "vault": 9454555,
+    "create": 9454563,
+    "redeem": 9454565,
+    "postNav": 9454569,
+    "endBlock": 9454569
+  },
+  "exercise": {
+    "sharesCreated": "1000000000000000000000",
+    "sharesRedeemed": "250000000000000000000",
+    "vaultHoldingsAfterCreate": {
+      "mAAPL": "2000000000000000000000",
+      "mTBILL": "100000000000"
+    },
+    "vaultHoldingsAfterRedeem": {
+      "mAAPL": "1500000000000000000000",
+      "mTBILL": "75000000000"
+    },
+    "navPerShare": "1234560000000000000000",
+    "navAsOfDate": "20721",
+    "navTier": 1,
+    "fixingRef": "0xa36cea3ce35a25141a1d46b2e2182b4e6fb3f84b85a14a9f58e8118785f26745",
+    "fixingRefPreimage": "TEST-FIXING-NOT-A-CANTON-ATTESTATION:morphHoodi:MOCK-ETP-morphHoodi-DEMO:2026-09-25T15:01:47.396Z",
+    "fixingRefIsATestReference": true,
+    "negatives": [
+      {
+        "label": "postNav with 1 of 2 required signatures",
+        "reason": "InsufficientSignatures(1, 2)",
+        "txHash": "0xfb22e7c3f31f4fd546de8f8a39c14002f5202d52263b17b9a2dec113a0a11a24"
+      },
+      {
+        "label": "postNav with tier = 0 (seed value) and 2 valid signatures",
+        "reason": "TierNotAccepted(0, 1)",
+        "txHash": "0x3918c32ac8168f1ee9eacb2dd25277dd239514d015cf49c2eb21806aaef4f253"
+      }
+    ]
+  },
+  "transactions": [
+    {
+      "step": "deploy MockERC20 mAAPL",
+      "hash": "0xeabf3de43589cf1c46d52896cdcc828a8b816f1f6887bab893c14e4b670b673b",
+      "block": 9454552
+    },
+    {
+      "step": "deploy MockERC20 mTBILL",
+      "hash": "0xb94ab818520947b8382821a695cda2a641ba9ea6b748b196c488b85d3c65316d",
+      "block": 9454553
+    },
+    {
+      "step": "deploy EtpBasketVault",
+      "hash": "0xfd9bbdeb27b905f58c2e23a8ffe4475daad2825630a4185550756b88d14dd3e6",
+      "block": 9454555
+    },
+    {
+      "step": "setAttestors(3, threshold 2)",
+      "hash": "0x8f3e5393a03279abf9a928ccb63db94ece0e8cf6cacce4c8b1b37e1cb963aa20",
+      "block": 9454556
+    },
+    {
+      "step": "grantRole(AP_ROLE, deployer)",
+      "hash": "0x8e3f237bd12ec127bc010a5ecdf078fef0b5738593ab8d6ab84d66c3f1b78e9f",
+      "block": 9454557
+    },
+    {
+      "step": "mint mAAPL",
+      "hash": "0xbccce02f0792169ae51c126fffdb771cdcf2f7e8f7eef049918917c4ae398e63",
+      "block": 9454558
+    },
+    {
+      "step": "mint mTBILL",
+      "hash": "0xa545ee0cd05a85a61b52cdbcb92682f67725e24f7af690c2d52d2c31c8b37a1a",
+      "block": 9454559
+    },
+    {
+      "step": "approve mAAPL",
+      "hash": "0x91ec2c8eb679ed31c756fb36c298d05157915292f3f64ab09f9bf6c29292767e",
+      "block": 9454560
+    },
+    {
+      "step": "approve mTBILL",
+      "hash": "0xdcd46df68fecace0f4674fb660d290d171bd662670ea288d021849867ccfed22",
+      "block": 9454561
+    },
+    {
+      "step": "create 1000.0 shares",
+      "hash": "0x8cf62c9cd8b890b10077c1aa1debe0d0733c92c1d68ba0ca458451b655db0177",
+      "block": 9454563
+    },
+    {
+      "step": "redeem 250.0 shares",
+      "hash": "0x5422e58c4f9e7914ccf76d4a41086293c484a3965634a248d30d4cdcdd2c91b9",
+      "block": 9454565
+    },
+    {
+      "step": "NEGATIVE postNav with 1 of 2 required signatures (reverted on-chain)",
+      "hash": "0xfb22e7c3f31f4fd546de8f8a39c14002f5202d52263b17b9a2dec113a0a11a24",
+      "block": 9454567
+    },
+    {
+      "step": "NEGATIVE postNav with tier = 0 (seed value) and 2 valid signatures (reverted on-chain)",
+      "hash": "0x3918c32ac8168f1ee9eacb2dd25277dd239514d015cf49c2eb21806aaef4f253",
+      "block": 9454568
+    },
+    {
+      "step": "postNav (2-of-3)",
+      "hash": "0x3e61af86b0c255e570bda4f4bc9c5374de5f0b3a54e0351511787d63da6bc062",
+      "block": 9454569
+    }
+  ],
+  "mocksWarning": "The constituents are MockERC20 tokens minted by scripts/e2e-testnet.ts. No real tokenised equity exists on morphHoodi (chainId 2910). This is a testnet demonstration, never a real basket.",
+  "deployedAt": "2026-09-25T15:01:51.784Z"
+}

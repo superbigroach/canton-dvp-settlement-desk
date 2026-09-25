@@ -33,14 +33,38 @@ import type { Interface, Wallet } from "ethers";
 import * as fs from "fs";
 import * as path from "path";
 
-// Ethereum, Base, Arbitrum One, Polygon, Optimism, Arc mainnet, Robinhood Chain.
-const MAINNET_CHAIN_IDS = new Set<bigint>([1n, 8453n, 42161n, 137n, 10n, 5042001n, 4663n]);
+// Every mainnet this repo has ever been pointed at a testnet of. Adding a
+// network to hardhat.config.ts means adding its MAINNET id here in the same
+// commit: Ethereum 1, Base 8453, Arbitrum One 42161, Polygon 137, Optimism 10,
+// Arc 5042001, Robinhood Chain 4663, BNB Smart Chain 56, Avalanche C-Chain
+// 43114, Ink 57073, Mantle 5000, Morph 2818.
+const MAINNET_CHAIN_IDS = new Set<bigint>([
+  1n,
+  8453n,
+  42161n,
+  137n,
+  10n,
+  5042001n,
+  4663n,
+  56n,
+  43114n,
+  57073n,
+  5000n,
+  2818n,
+]);
 
 /** Explorer bases, keyed by chain id (same sources as hardhat.config.ts). */
 const EXPLORERS: Record<string, string> = {
   "5042002": "https://testnet.arcscan.app", // 301-redirects to https://explorer.testnet.arc.io
   "84532": "https://sepolia.basescan.org",
   "46630": "https://explorer.testnet.chain.robinhood.com",
+  "421614": "https://sepolia.arbiscan.io",
+  "97": "https://testnet.bscscan.com",
+  "43113": "https://testnet.snowtrace.io",
+  "763373": "https://explorer-sepolia.inkonchain.com",
+  "5003": "https://sepolia.mantlescan.xyz", // explorer.sepolia.mantle.xyz 301s here
+  "11155111": "https://sepolia.etherscan.io",
+  "2910": "https://explorer-hoodi.morph.network", // Morph Hoodi, NOT the dead Holesky one
 };
 
 // ---------------------------------------------------------------------------
@@ -593,8 +617,10 @@ async function main() {
       negatives,
     },
     transactions: txs,
+    // Name the ACTUAL network. This string used to hardcode "Arc Testnet",
+    // which made every non-Arc record say something false about itself.
     mocksWarning:
-      "The constituents are MockERC20 tokens minted by scripts/e2e-testnet.ts. No real tokenised equity exists on Arc Testnet. This is a testnet demonstration, never a real basket.",
+      `The constituents are MockERC20 tokens minted by scripts/e2e-testnet.ts. No real tokenised equity exists on ${network.name} (chainId ${chainId}). This is a testnet demonstration, never a real basket.`,
     deployedAt: new Date().toISOString(),
   };
   const outDir = path.join(__dirname, "..", "deployments");

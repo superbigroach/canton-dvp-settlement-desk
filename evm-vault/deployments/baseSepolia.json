@@ -159,6 +159,6 @@
       "block": 47267324
     }
   ],
-  "mocksWarning": "The constituents are MockERC20 tokens minted by scripts/e2e-testnet.ts. No real tokenised equity exists on Arc Testnet. This is a testnet demonstration, never a real basket.",
+  "mocksWarning": "The constituents are MockERC20 tokens minted by scripts/e2e-testnet.ts. No real tokenised equity exists on baseSepolia (chainId 84532). This is a testnet demonstration, never a real basket.",
   "deployedAt": "2026-09-25T02:22:18.192Z"
 }

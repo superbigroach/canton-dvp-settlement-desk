@@ -24,8 +24,25 @@ import { ethers, network } from "hardhat";
 import * as fs from "fs";
 import * as path from "path";
 
-// Ethereum, Base, Arbitrum One, Polygon, Optimism, Arc mainnet, Robinhood Chain.
-const MAINNET_CHAIN_IDS = new Set<bigint>([1n, 8453n, 42161n, 137n, 10n, 5042001n, 4663n]);
+// Every mainnet this repo has ever been pointed at a testnet of. Adding a
+// network to hardhat.config.ts means adding its MAINNET id here in the same
+// commit: Ethereum 1, Base 8453, Arbitrum One 42161, Polygon 137, Optimism 10,
+// Arc 5042001, Robinhood Chain 4663, BNB Smart Chain 56, Avalanche C-Chain
+// 43114, Ink 57073, Mantle 5000, Morph 2818.
+const MAINNET_CHAIN_IDS = new Set<bigint>([
+  1n,
+  8453n,
+  42161n,
+  137n,
+  10n,
+  5042001n,
+  4663n,
+  56n,
+  43114n,
+  57073n,
+  5000n,
+  2818n,
+]);
 
 function req(name: string): string {
   const v = process.env[name];

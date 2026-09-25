@@ -1,13 +1,13 @@
 {
-  "network": "robinhoodTestnet",
-  "chainId": "46630",
-  "explorer": "https://explorer.testnet.chain.robinhood.com",
+  "network": "inkSepolia",
+  "chainId": "763373",
+  "explorer": "https://explorer-sepolia.inkonchain.com",
   "vault": "0xF4dAf5BEeEEc381A5f0c0264440d31D8d4bb1451",
   "deployer": "0x10e3868214DAe0479276fa8d2082FB7805aeb647",
   "admin": "0x10e3868214DAe0479276fa8d2082FB7805aeb647",
   "feeRecipient": "0x10e3868214DAe0479276fa8d2082FB7805aeb647",
-  "instrumentId": "0xfaf138d5c64e501e1d817ce9c98116348a616eef382800cfe5ed241020a9c0d6",
-  "instrumentLabel": "MOCK-ETP-ROBINHOOD-TESTNET-DEMO",
+  "instrumentId": "0x275e2a1204e8ede6ff4cb97f1c96221f79a5cc9b63546f04700dc39a86f5e539",
+  "instrumentLabel": "MOCK-ETP-inkSepolia-DEMO",
   "vaultName": "MOCK ETP Basket (test only)",
   "vaultSymbol": "mBSKT",
   "constituents": [
@@ -48,14 +48,14 @@
   },
   "registry": null,
   "blocks": {
-    "startBlock": 123921426,
-    "mockA": 123921434,
-    "mockB": 123921448,
-    "vault": 123921466,
-    "create": 123921564,
-    "redeem": 123921581,
-    "postNav": 123921626,
-    "endBlock": 123921632
+    "startBlock": 61344054,
+    "mockA": 61344058,
+    "mockB": 61344059,
+    "vault": 61344062,
+    "create": 61344073,
+    "redeem": 61344077,
+    "postNav": 61344085,
+    "endBlock": 61344085
   },
   "exercise": {
     "sharesCreated": "1000000000000000000000",
@@ -71,94 +71,94 @@
     "navPerShare": "1234560000000000000000",
     "navAsOfDate": "20721",
     "navTier": 1,
-    "fixingRef": "0x411265b4cac1cd90a42871e3c1b1b4f272ee05fa58bcd8a2f4108246b67b9049",
-    "fixingRefPreimage": "TEST-FIXING-NOT-A-CANTON-ATTESTATION:robinhoodTestnet:MOCK-ETP-ROBINHOOD-TESTNET-DEMO:2026-09-25T03:42:20.032Z",
+    "fixingRef": "0xb38a5fbfee63c59aa67ec6210de6de2049a5cb84796cd818a5beda4288128a0f",
+    "fixingRefPreimage": "TEST-FIXING-NOT-A-CANTON-ATTESTATION:inkSepolia:MOCK-ETP-inkSepolia-DEMO:2026-09-25T14:42:55.635Z",
     "fixingRefIsATestReference": true,
     "negatives": [
       {
         "label": "postNav with 1 of 2 required signatures",
         "reason": "InsufficientSignatures(1, 2)",
-        "txHash": "0xf820ff61a7f313f36813af34ba92fd48f54d3d5861f8981d9a527f318631f74c"
+        "txHash": "0x60e9fa103e4bf9cd3455b1bf52826cfaab6d8e1129cfe74becaa4dcc7cc91e96"
       },
       {
         "label": "postNav with tier = 0 (seed value) and 2 valid signatures",
         "reason": "TierNotAccepted(0, 1)",
-        "txHash": "0x5158e3375b2e6c387d75521271432ed51f76bc181b2aa8db74a6037746a33643"
+        "txHash": "0xa35fb2bcd10dbc9364914b53fff4db23e87d115ab5003d78baec7f87ae123302"
       }
     ]
   },
   "transactions": [
     {
       "step": "deploy MockERC20 mAAPL",
-      "hash": "0xcae4b7818f6a919b3e2a5318d705a42f99c1afbd8332f9c4463f9fc02b4472a7",
-      "block": 123921434
+      "hash": "0x54ca9fecb60eb2e2038a8818dab97e3d3b79f18f1037deefe903349d2d1eb162",
+      "block": 61344058
     },
     {
       "step": "deploy MockERC20 mTBILL",
-      "hash": "0x2c271f7557851e9fc7c2732ad248c30ce32c2b953191471b6913892984eb7727",
-      "block": 123921448
+      "hash": "0xf961906a14da24aef48ae1b2ad385c421ebf0005f14082c553c215b6b7c1e735",
+      "block": 61344059
     },
     {
       "step": "deploy EtpBasketVault",
-      "hash": "0xa1f6be8a888bd5e5206793178a52e0d10c390a7fa13c6ced930fb0bb2ab4fc79",
-      "block": 123921466
+      "hash": "0x0afeb2d06c69ad5f06a44296d98a6585d567d77a4bfc6b253eda2e103ae865e7",
+      "block": 61344062
     },
     {
       "step": "setAttestors(3, threshold 2)",
-      "hash": "0x30aec29a3d5df62329ff7350999dfd03f25c014d8c820f09177b2f967c44eaa8",
-      "block": 123921483
+      "hash": "0xb16d58b638ee8ac23fde59028df4bd52819b979d02a11a8c5f1fc829c4a8f7d0",
+      "block": 61344063
     },
     {
       "step": "grantRole(AP_ROLE, deployer)",
-      "hash": "0x0b48655252f0598c783f0123b41a35521e7990c9c4badf05a1c9ecf25baee012",
-      "block": 123921495
+      "hash": "0xb167b7f5f5e7849c8b9db547b017663ba28fe436a91277b55be153d85c119c38",
+      "block": 61344066
     },
     {
       "step": "mint mAAPL",
-      "hash": "0x19e4324f0656be0b7595e657a5577cd5f34c44f437b6a493e2d36831f6c1cb61",
-      "block": 123921509
+      "hash": "0xde5a01331fbf30873694c45c9b1604f6f54b17b261e89a0359a74f09981827b7",
+      "block": 61344068
     },
     {
       "step": "mint mTBILL",
-      "hash": "0xe3907ddbdf2ad2e4517e25ebeb07d6f9f25450368daa8d0cbf27216705c7d59d",
-      "block": 123921520
+      "hash": "0x583c779cfc67b6a0e7b662be77b126c8bed71dc58a3b144072990b8aac5bfc7c",
+      "block": 61344069
     },
     {
       "step": "approve mAAPL",
-      "hash": "0xecf6833921a13b7959263350f448488c8ade6e05fd04dbf4af7b09a3c59f9c81",
-      "block": 123921532
+      "hash": "0x15336bf1433dea6e39d0063929a21210574e1269591e041f1bc4c33e50b95002",
+      "block": 61344070
     },
     {
       "step": "approve mTBILL",
-      "hash": "0x9dfd1d4a96a419554e3e4338123993679fa2778fbd84c5a13aac7397ce110c31",
-      "block": 123921548
+      "hash": "0x6cc5ea5381178d76e27332bc5698aa78d208e087ad8a75b43c8cab8769610f45",
+      "block": 61344071
     },
     {
       "step": "create 1000.0 shares",
-      "hash": "0x8e96cb07dae84af5c096b3f3230a46dc2ae7ef3fa3a419142cad9b4a2278b862",
-      "block": 123921564
+      "hash": "0xe29cba9fac4018bd09c55dd952c9d904a4f2038d3867065581a88f464938a52d",
+      "block": 61344073
     },
     {
       "step": "redeem 250.0 shares",
-      "hash": "0x5f86967db544d57bfa7f0986602adb17a40db0cc86e1ef626aa393cf75fa389c",
-      "block": 123921581
+      "hash": "0xf451833b18beee974b35661b3cd66618aa1de232fdb14172b821e62b85cce6b2",
+      "block": 61344077
     },
     {
       "step": "NEGATIVE postNav with 1 of 2 required signatures (reverted on-chain)",
-      "hash": "0xf820ff61a7f313f36813af34ba92fd48f54d3d5861f8981d9a527f318631f74c",
-      "block": 123921596
+      "hash": "0x60e9fa103e4bf9cd3455b1bf52826cfaab6d8e1129cfe74becaa4dcc7cc91e96",
+      "block": 61344081
     },
     {
       "step": "NEGATIVE postNav with tier = 0 (seed value) and 2 valid signatures (reverted on-chain)",
-      "hash": "0x5158e3375b2e6c387d75521271432ed51f76bc181b2aa8db74a6037746a33643",
-      "block": 123921612
+      "hash": "0xa35fb2bcd10dbc9364914b53fff4db23e87d115ab5003d78baec7f87ae123302",
+      "block": 61344084
     },
     {
       "step": "postNav (2-of-3)",
-      "hash": "0xa4a80953ef81490040624c3c084409136747008e36aae82516fae90a8e877172",
-      "block": 123921626
+      "hash": "0x962b929d34a6194a8acd450bc798b4d1b0fbe44b3f32852f343ff25b64ab62cc",
+      "block": 61344085
     }
   ],
-  "mocksWarning": "The constituents are MockERC20 tokens minted by scripts/e2e-testnet.ts. No real tokenised equity exists on robinhoodTestnet (chainId 46630). This is a testnet demonstration, never a real basket.",
-  "deployedAt": "2026-09-25T03:42:26.659Z"
+  "mocksWarning": "The constituents are MockERC20 tokens minted by scripts/e2e-testnet.ts. No real tokenised equity exists on inkSepolia (chainId 763373). This is a testnet demonstration, never a real basket.",
+  "deployedAt": "2026-09-25T14:43:03.411Z"
 }

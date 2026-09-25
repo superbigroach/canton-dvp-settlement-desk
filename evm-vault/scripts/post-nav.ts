@@ -35,7 +35,25 @@
 import { ethers, network } from "hardhat";
 
 // Ethereum, Base, Arbitrum One, Polygon, Optimism, Arc mainnet, Robinhood Chain.
-const MAINNET_CHAIN_IDS = new Set<bigint>([1n, 8453n, 42161n, 137n, 10n, 5042001n, 4663n]);
+// Same list as scripts/deploy.ts and scripts/e2e-testnet.ts: Ethereum 1, Base
+// 8453, Arbitrum One 42161, Polygon 137, Optimism 10, Arc 5042001, Robinhood
+// Chain 4663, BNB Smart Chain 56, Avalanche C-Chain 43114, Ink 57073, Mantle
+// 5000, Morph 2818. A new network in hardhat.config.ts adds its mainnet id to
+// all three sets in the same commit.
+const MAINNET_CHAIN_IDS = new Set<bigint>([
+  1n,
+  8453n,
+  42161n,
+  137n,
+  10n,
+  5042001n,
+  4663n,
+  56n,
+  43114n,
+  57073n,
+  5000n,
+  2818n,
+]);
 
 type ApiFixing = {
   price: number | string;
