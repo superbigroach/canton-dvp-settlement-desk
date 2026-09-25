@@ -75,6 +75,16 @@ const config: HardhatUserConfig = {
       accounts: getAccounts(),
       chainId: 46630,
     },
+    // Arbitrum One holds the largest COUNT of tokenised equities of any chain (4,925
+    // instruments, $167M), almost all of it Bitget's "Reality Tokenized" range. Today none
+    // of it is withdrawable, so nothing can enter a vault there — but that restriction sits
+    // behind a 3-of-5 Safe and can be lifted, so the config is here and ready rather than
+    // being written the week a counterparty says yes. chainId verified by eth_chainId.
+    arbitrumSepolia: {
+      url: process.env.ARBITRUM_SEPOLIA_RPC_URL || "https://sepolia-rollup.arbitrum.io/rpc",
+      accounts: getAccounts(),
+      chainId: 421614,
+    },
   },
   etherscan: {
     apiKey: process.env.ETHERSCAN_API_KEY || "",
