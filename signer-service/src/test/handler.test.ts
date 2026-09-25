@@ -468,3 +468,54 @@ test('a 5xx from CrossDesk is not recorded, so the next poll retries', async () 
   await handleProposal(deps, proposal());
   assert.equal(calls.filter((c) => c.path.endsWith('/confirm')).length, 2);
 });
+
+test('a 403 "no signer seat" is a credential problem, not a verdict: not recorded, the next poll retries', async () => {
+  // The desk refuses a confirm from a credential with no seat (an admin key used directly on a
+  // host running AUTH_MODE=firebase). Recording it would mean the seat never confirms again even
+  // after the key is fixed - the one failure mode that cannot be recovered from a state file.
+  const calls: Call[] = [];
+  const deps: HandlerDeps = { config: venueConfig(), client: fakeClient(calls, 403), state: new State(tmpState()), protocol: v2lookup('venue') };
+  await handleProposal(deps, proposal());
+  assert.equal(deps.state.size(), 0, '403 is not terminal');
+  await handleProposal(deps, proposal());
+  assert.equal(calls.filter((c) => c.path.endsWith('/confirm')).length, 2, 'retried');
+});
+
+test('a 401 and a 429 retry; a 422 and a 409 are terminal', async () => {
+  for (const status of [401, 429]) {
+    const deps: HandlerDeps = { config: venueConfig(), client: fakeClient([], status), state: new State(tmpState()), protocol: v2lookup('venue') };
+    await handleProposal(deps, proposal());
+    assert.equal(deps.state.size(), 0, `${status} must not be recorded`);
+  }
+  for (const status of [422, 409]) {
+    const deps: HandlerDeps = { config: venueConfig(), client: fakeClient([], status), state: new State(tmpState()), protocol: v2lookup('venue') };
+    await handleProposal(deps, proposal());
+    assert.equal(deps.state.get('00aa:0')?.decision, 'rejected', `${status} is the desk's verdict`);
+  }
+});
+
+test('X-Act-As rides alongside the credential so one admin key can drive every seat', async () => {
+  const calls: Call[] = [];
+  const seen: Array<Record<string, string>> = [];
+  const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+    seen.push(init?.headers as Record<string, string>);
+    calls.push({ method: init?.method ?? 'GET', path: String(url).replace(/^https?:\/\/[^/]+/, '') });
+    return new Response(
+      JSON.stringify({ version: 'SIGNER_PROTOCOL v2', roles: [{ key: 'venue', conditions: [], requiresObservedRange: true }] }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
+  }) as typeof fetch;
+  const client = new CrossDeskClient({ baseUrl: 'https://x.test', apiKey: 'ck_admin', actAs: 'venue@sandbox.crossdesk', fetchImpl });
+  assert.deepEqual(client.authHeaders(), { authorization: 'Bearer ck_admin', 'x-act-as': 'venue@sandbox.crossdesk' });
+  assert.equal(client.actingAs, 'venue@sandbox.crossdesk');
+  await client.signerProtocol('CBTC');
+  assert.equal(seen[0]['x-act-as'], 'venue@sandbox.crossdesk');
+  assert.equal(seen[0].authorization, 'Bearer ck_admin');
+  // the sandbox header path carries it too
+  const sandbox = new CrossDeskClient({ baseUrl: 'https://x.test', sandboxUser: 'admin@x', actAs: 'lender@sandbox.crossdesk', fetchImpl });
+  assert.deepEqual(sandbox.authHeaders(), { 'x-sandbox-user': 'admin@x', 'x-act-as': 'lender@sandbox.crossdesk' });
+  // and without it nothing changes
+  const plain = new CrossDeskClient({ baseUrl: 'https://x.test', apiKey: 'ck_x', fetchImpl });
+  assert.deepEqual(plain.authHeaders(), { authorization: 'Bearer ck_x' });
+  assert.equal(plain.actingAs, undefined);
+});

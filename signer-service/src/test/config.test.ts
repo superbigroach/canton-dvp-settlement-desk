@@ -153,3 +153,16 @@ test('the real runner never puts the command line into the error (exec would)', 
     return true;
   });
 });
+
+test('crossdesk.actAs comes from the yaml or CROSSDESK_ACT_AS, and needs a credential behind it', () => {
+  const c = parseConfig({ crossdesk: { baseUrl: 'https://x', apiKey: 'ck_admin', actAs: 'venue@sandbox.crossdesk' }, seat: 'venue', instruments: ['CBTC'] }, {});
+  assert.equal(c.crossdesk.actAs, 'venue@sandbox.crossdesk');
+  const fromEnv = parseConfig({ crossdesk: { baseUrl: 'https://x', apiKey: 'ck_admin' }, seat: 'venue', instruments: ['CBTC'] }, { CROSSDESK_ACT_AS: 'lender@sandbox.crossdesk' });
+  assert.equal(fromEnv.crossdesk.actAs, 'lender@sandbox.crossdesk');
+  const off = parseConfig({ crossdesk: { baseUrl: 'https://x', apiKey: 'ck_admin' }, seat: 'venue', instruments: ['CBTC'] }, {});
+  assert.equal(off.crossdesk.actAs, undefined, 'absent by default');
+  assert.throws(
+    () => parseConfig({ crossdesk: { baseUrl: 'https://x', actAs: 'venue@sandbox.crossdesk' }, seat: 'venue', instruments: ['CBTC'] }, {}),
+    /apiKey|sandboxUser/,
+  );
+});

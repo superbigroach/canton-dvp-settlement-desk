@@ -34,6 +34,13 @@ export interface Config {
     baseUrl: string;
     apiKey?: string;
     sandboxUser?: string;
+    /**
+     * `X-Act-As: <email>`, admin credentials only. On a host running AUTH_MODE=firebase whose
+     * roster seats have no Firebase identity (the DevNet deployment), one admin key plus this
+     * header is how a seat is driven: the desk gives the request that user's role, party, seat
+     * and instruments. Leave it unset whenever the credential IS the seat.
+     */
+    actAs?: string;
     webhookSecret?: string;
     poll: { enabled: boolean; intervalSeconds: number };
     timeoutMs: number;
@@ -130,6 +137,10 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env):
       'one of crossdesk.apiKey (CROSSDESK_API_KEY) or crossdesk.sandboxUser (CROSSDESK_SANDBOX_USER) is required',
     );
   }
+  const actAs = str(cd.actAs) ?? str(env.CROSSDESK_ACT_AS);
+  if (actAs && !apiKey && !sandboxUser) {
+    throw new Error('crossdesk.actAs needs a credential to act with (crossdesk.apiKey or crossdesk.sandboxUser)');
+  }
   const webhookSecret = str(cd.webhookSecret) ?? str(env.CROSSDESK_WEBHOOK_SECRET);
   const poll = cd.poll ?? {};
 
@@ -175,6 +186,7 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env):
       baseUrl,
       apiKey,
       sandboxUser,
+      actAs,
       webhookSecret,
       poll: {
         enabled: bool(poll.enabled, true),

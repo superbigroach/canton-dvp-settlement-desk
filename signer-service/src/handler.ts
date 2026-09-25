@@ -269,6 +269,18 @@ export async function evaluateProposal(deps: HandlerDeps, p: Proposal): Promise<
 
 const inFlight = new Set<string>();
 
+/**
+ * Is this HTTP failure the desk's verdict on THIS proposal, or a problem with how we are
+ * talking to it? A 422 (evidence refused) or a 409 (no longer open) is terminal: sending the
+ * same thing again produces the same answer. A 401/403/404/429 is not - the credential, the
+ * seat mapping or the rate limit is wrong, and recording it would mean the seat never
+ * confirms even once an operator fixes it. Those retry on the next poll.
+ */
+function isTerminalRejection(status: number): boolean {
+  if (status < 400 || status >= 500) return false;
+  return ![401, 403, 404, 408, 429].includes(status);
+}
+
 /** Evaluate, act, record. Safe to call from the poller and the webhook for the same proposal. */
 export async function handleProposal(deps: HandlerDeps, p: Proposal): Promise<Decision | null> {
   const { config, client, state } = deps;
@@ -310,7 +322,7 @@ export async function handleProposal(deps: HandlerDeps, p: Proposal): Promise<De
       const r = await client.confirm(p.cid, d.checks, d.evidence);
       d.http = { status: r.status, body: r.body };
       const ok = r.ok;
-      if (ok || (r.status >= 400 && r.status < 500)) {
+      if (ok || isTerminalRejection(r.status)) {
         state.record(key, { cid: p.cid, instrument: p.instrument, decision: ok ? 'confirm' : 'rejected', at: new Date().toISOString(), httpStatus: r.status, detail: ok ? undefined : summarize(r.body) });
       }
       log[ok ? 'info' : 'error']('decision', {
@@ -324,7 +336,7 @@ export async function handleProposal(deps: HandlerDeps, p: Proposal): Promise<De
     const f = d.failed!;
     const r = await client.refuse(p.cid, f.condition, f.reason);
     d.http = { status: r.status, body: r.body };
-    if (r.ok || (r.status >= 400 && r.status < 500)) {
+    if (r.ok || isTerminalRejection(r.status)) {
       state.record(key, { cid: p.cid, instrument: p.instrument, decision: r.ok ? 'refuse' : 'rejected', at: new Date().toISOString(), httpStatus: r.status, detail: r.ok ? `${f.condition}: ${f.reason}` : summarize(r.body) });
     }
     log[r.ok ? 'info' : 'error']('decision', {

@@ -42,6 +42,19 @@ async function preflight(config: Config, client: CrossDeskClient, cache: Protoco
   if (me.seat && me.seat !== config.seat) {
     throw new Error(`the credential holds the '${me.seat}' seat but signer.yml says '${config.seat}'`);
   }
+  // NO SEAT IS NOT A WARNING, IT IS A WALL. `POST /api/proposals/{cid}/confirm` requires a
+  // signer SEAT, so a credential without one (an admin key used directly, which is the easy
+  // mistake on a host running AUTH_MODE=firebase) reaches every proposal, evaluates it, and is
+  // then refused 403 "your user has no signer seat" - and the 4xx is recorded as terminal, so
+  // the proposal is never retried after the credential is fixed. Fail at start instead.
+  if (!me.seat) {
+    throw new Error(
+      `the credential maps to '${me.email ?? me.uid}' (role ${me.role}) with no signer seat, so every confirm `
+      + `would be refused. Use a credential issued to the ${config.seat} seat, or - on a host whose roster `
+      + `seats have no sign-in of their own - keep the admin key and set crossdesk.actAs to the ${config.seat} `
+      + `user's e-mail (sent as X-Act-As).`,
+    );
+  }
   const notMine = config.instruments.filter((i) => me.instruments && !me.instruments.some((x) => x.toLowerCase() === i.toLowerCase()));
   if (notMine.length) log.warn('preflight', { note: `credential is not a signer for ${notMine.join(', ')}; those proposals will not be visible` });
 
@@ -87,6 +100,7 @@ async function preflight(config: Config, client: CrossDeskClient, cache: Protoco
     as: me.email ?? me.uid,
     party: me.party,
     authMode: client.authMode,
+    actingAs: client.actingAs,
     instruments: Object.fromEntries(config.instruments.map((i) => [i, {
       reserveModel: perInstrument[i].model,
       conditions: perInstrument[i].role.conditions.map((c) => ({ name: c.name, evidenceDeclared: c.evidence !== undefined, fields: Object.keys(config.conditions[c.name] ?? {}) })),

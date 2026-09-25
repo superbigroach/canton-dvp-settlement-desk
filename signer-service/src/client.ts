@@ -65,6 +65,14 @@ export interface ClientOptions {
   baseUrl: string;
   apiKey?: string;
   sandboxUser?: string;
+  /**
+   * `X-Act-As: <email>` - an ADMIN credential takes that roster user's role, party, seat and
+   * instruments for the request (AuthFilter.ACT_AS_HEADER). This is the only way to drive a
+   * seat against a host running AUTH_MODE=firebase whose roster seats have no Firebase
+   * identity of their own: one admin key, one header per seat. A non-admin credential
+   * sending it is refused outright, so it is never a privilege escalation.
+   */
+  actAs?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }
@@ -78,19 +86,26 @@ export class CrossDeskClient {
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
   readonly authMode: 'apikey' | 'sandbox-header';
+  /** The roster user this client is acting as via X-Act-As, if any - for /health and the logs. */
+  readonly actingAs?: string;
 
   constructor(private readonly opts: ClientOptions) {
     this.base = opts.baseUrl.replace(/\/+$/, '');
     this.timeoutMs = opts.timeoutMs ?? 15000;
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.authMode = opts.apiKey ? 'apikey' : 'sandbox-header';
+    this.actingAs = opts.actAs;
   }
 
   /** API key wins when both are set: the key is the production path, the header is the sandbox's. */
   authHeaders(): Record<string, string> {
-    if (this.opts.apiKey) return { authorization: `Bearer ${this.opts.apiKey}` };
-    if (this.opts.sandboxUser) return { 'x-sandbox-user': this.opts.sandboxUser };
-    return {};
+    const out: Record<string, string> = {};
+    if (this.opts.apiKey) out.authorization = `Bearer ${this.opts.apiKey}`;
+    else if (this.opts.sandboxUser) out['x-sandbox-user'] = this.opts.sandboxUser;
+    // Sent alongside the credential, never instead of it: the desk requires a signed-in
+    // admin behind it and 403s anyone else.
+    if (this.opts.actAs) out['x-act-as'] = this.opts.actAs;
+    return out;
   }
 
   private async request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<HttpResult<T>> {
