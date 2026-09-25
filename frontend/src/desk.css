@@ -231,3 +231,134 @@ button.ghost.wide { width: 100%; margin-top: 0; padding: 11px 14px; }
   .proposal-actions .primary { width: 100%; }
   .stat-value { font-size: 19px; }
 }
+
+/* =====================================================================
+   PORTAL DESIGN LAYER — DESIGN.md §4, §5
+   =====================================================================
+   WHY THIS EXISTS. styles.css carries 375 styled classes and nearly all of
+   them serve the operator desk. desk.css was a 233-line shell. So the pages
+   a COUNTERPARTY uses — sign, funds, fund admin, audit — rendered plain
+   <table> elements with no table styling whatsoever, inside cards with no
+   header treatment. The one person whose opinion decides whether we win, a
+   custodian at a counterparty signing a daily attestation, saw the least
+   designed part of the product.
+
+   Everything below is additive. No existing rule is changed, so the operator
+   desk is untouched.
+   ===================================================================== */
+
+/* ---- Tables in the portal --------------------------------------------
+   The default for any set of things (DESIGN.md §5). Numbers right, mono and
+   tabular so a changing digit does not reflow the row; the header is a label,
+   not a heading, so it is small, uppercase and muted. */
+.page table { width: 100%; border-collapse: collapse; margin: 2px 0; }
+.page thead th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 10px 10px 8px;
+  border-bottom: 1px solid var(--border-2);
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 1;
+}
+.page tbody td {
+  padding: 11px 10px;
+  border-bottom: 1px solid rgba(30, 33, 43, 0.6);
+  font-size: 13.5px;
+  vertical-align: top;
+}
+.page tbody tr:last-child td { border-bottom: none; }
+.page tbody tr { transition: background 150ms ease-out; }
+.page tbody tr:hover { background: rgba(76, 130, 247, 0.045); }
+.page th.num, .page td.num { text-align: right; }
+.page td.num, .page td.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+/* A value that IS attested is the only gold thing on the screen. */
+.page td.official { color: var(--gold); font-weight: 600; }
+
+/* The small second line under a cell — the party behind an id, the state
+   under a strike time. Never competes with the value above it. */
+.page .basis {
+  font-size: 11.5px;
+  color: var(--faint);
+  margin-top: 3px;
+  line-height: 1.45;
+}
+.page .basis.warn-text { color: #f0b6b6; }
+
+/* ---- Cards ------------------------------------------------------------
+   A card in the portal states what it is before it states anything else.
+   `.card > .page-head` gives a section title + one-line hint + right-aligned
+   action without another wrapper element. */
+.page .card > .page-head { margin-bottom: 10px; }
+.page .card > .page-head h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  color: var(--text);
+  flex: 1 1 100%;
+}
+.page .card > .page-head .hint { flex: 1 1 320px; font-size: 12.5px; }
+
+/* ---- The job, and the manual (DESIGN.md §4) --------------------------
+   A disclosure section that sits BELOW the work. Collapsed, it is one quiet
+   line; open, it is ordinary content. */
+.page .card.reference { border-style: dashed; border-color: var(--border-2); background: transparent; }
+.page .card.reference > .page-head h2 { font-size: 14px; color: var(--muted); }
+
+/* ---- Empty states -----------------------------------------------------
+   Always name the thing that would make it non-empty (DESIGN.md §5). */
+.page .empty {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.6;
+  border: 1px dashed var(--border-2);
+  border-radius: var(--radius-sm);
+  background: rgba(18, 20, 26, 0.5);
+}
+
+/* ---- A reloading list keeps its rows (DESIGN.md §6, rule 8) ----------- */
+.page .reloading { opacity: 0.55; transition: opacity 150ms ease-out; pointer-events: none; }
+
+/* ---- Stat tiles -------------------------------------------------------
+   The instrument reading. Mono and tabular, because these are numbers and
+   they change in place. */
+.page .stat { transition: border-color 150ms ease-out; }
+.page .stat:hover { border-color: var(--border-2); }
+.page .stat-value {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.page .stat-value.gold, .page .stat.gold .stat-value { color: var(--gold); }
+
+/* ---- Links and actions ------------------------------------------------ */
+.page a.link, .page button.link { transition: color 150ms ease-out; }
+.page .pill.asset {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-2);
+  background: var(--surface-2);
+  color: var(--text);
+  display: inline-block;
+}
+
+/* ---- Density on a laptop ---------------------------------------------- */
+@media (max-width: 900px) {
+  .page thead th { position: static; }
+  .page tbody td { padding: 10px 8px; font-size: 13px; }
+}

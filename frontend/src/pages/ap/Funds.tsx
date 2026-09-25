@@ -1,6 +1,7 @@
 // AP portal · Funds — one row per fund I am an authorised participant of.
 import { Link } from 'react-router-dom';
 import { desk, type ApFund } from '../../desk';
+import AssetFixingStatus from '../../components/AssetFixingStatus';
 import { fmtN, fmtQty, fmtTs, isOfficial, LoadState, TierTag, useAsync } from '../../components/ui';
 
 export default function Funds() {
@@ -49,6 +50,12 @@ export default function Funds() {
           </table>
         </div>
       </LoadState>
+      {/* The NAV in the table above is only as good as the fixings underneath it, and the
+          table cannot show that. An AP deciding whether to deal wants to know whether
+          today's value is signed, how old it is, and whether a strike is overdue. */}
+      <AssetFixingStatus
+        only={Array.from(new Set((funds.data ?? []).flatMap((f) => f.components.map((c) => c.instrumentId))))}
+      />
     </div>
   );
 }

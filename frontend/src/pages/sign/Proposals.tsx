@@ -28,7 +28,6 @@ export default function Proposals() {
         <button type="button" className="ghost small" onClick={list.reload}>Refresh</button>
       </div>
       {protoError && <div className="banner warn" role="status"><span>Signer protocol not loaded — {protoError}. Conditions come from the proposal itself.</span></div>}
-      <SeatGuide />
       {/* A background reload (after a confirm or a refusal the ledger answered) must not unmount
           the cards: before 24 Sep 2026 `loading` alone swapped the whole list for "Loading…", so
           a 422 the card had just rendered was wiped by its own onRefresh before anyone read it. */}
@@ -38,6 +37,10 @@ export default function Proposals() {
           {open.map((p) => <ProposalCard key={p.cid} proposal={p} role={role} onChanged={replace} onRefresh={list.reload} />)}
         </div>
       </LoadState>
+      {/* THE JOB FIRST, THE MANUAL AFTER. The guide used to sit here, above the list, so a
+          signer with a proposal waiting scrolled past the whole reference section to reach
+          it. It is collapsed by default now and lives below the work. */}
+      <SeatGuide />
     </div>
   );
 }

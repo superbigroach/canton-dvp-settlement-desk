@@ -13,10 +13,27 @@ import {
   type GuideCondition, type GuideRole,
 } from '../../seatGuide';
 
-const OPEN_KEY = 'sign.seatGuide.open';
+// v2 because the DEFAULT changed, and the old key holds an explicit '1' for everyone who
+// ever loaded the page — leaving it would pin the guide open forever for exactly the
+// people who have already read it.
+const OPEN_KEY = 'sign.seatGuide.open.v2';
 
+/**
+ * CLOSED BY DEFAULT, opened once and remembered.
+ *
+ * This used to default open, so every signer met ~190 lines of reference — what the seat
+ * asserts, a TradFi analogue, the failure policy, a 25-line signer.yml skeleton, a 20-line
+ * example request body and the L1/L2/L3 trust ladder — ABOVE the thing they came to do.
+ * On a day with a proposal waiting they scrolled past all of it; on a day without one they
+ * scrolled past all of it to reach "nothing waiting for your signature".
+ *
+ * The material is not filler: a seat that does not understand what it is asserting is worse
+ * than no seat. But it is read once and referred to occasionally, and the job is done daily
+ * in thirty seconds. Daily work goes first; reference opens on request and stays open for
+ * whoever wants it there.
+ */
 function readOpen(): boolean {
-  try { return localStorage.getItem(OPEN_KEY) !== '0'; } catch { return true; }
+  try { return localStorage.getItem(OPEN_KEY) === '1'; } catch { return false; }
 }
 function writeOpen(v: boolean): void {
   try { localStorage.setItem(OPEN_KEY, v ? '1' : '0'); } catch { /* per-viewer convenience only */ }
@@ -75,9 +92,16 @@ export default function SeatGuide() {
   if (!seat) return null;
 
   return (
-    <section className="card" aria-labelledby="seat-guide-h">
+    // `reference` (DESIGN.md §5): dashed, transparent, quieter than a working card — it
+    // reads as the manual sitting under the work rather than as another task.
+    <section className={`card${open ? '' : ' reference'}`} aria-labelledby="seat-guide-h">
       <div className="card-head">
-        <h2 id="seat-guide-h">Your seat{role ? ` · ${role.title}` : ` · ${seat}`}</h2>
+        <h2 id="seat-guide-h">
+          Your seat{role ? ` · ${role.title}` : ` · ${seat}`}
+          {!open && <span className="hint" style={{ marginLeft: 10, fontWeight: 400 }}>
+            what you assert, what happens when a check fails, and how to automate it
+          </span>}
+        </h2>
         <button type="button" className="ghost small" aria-expanded={open} aria-controls="seat-guide-body" onClick={toggle}>
           {open ? 'Hide guide' : 'Show guide'}
         </button>
