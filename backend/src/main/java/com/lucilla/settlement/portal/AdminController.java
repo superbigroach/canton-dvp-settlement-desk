@@ -140,6 +140,29 @@ public class AdminController {
         return out;
     }
 
+    /**
+     * The configured roster label for a full party id — "Bank" for
+     * {@code bank-crossdesk::1220…} — matching on the full id first and on the hint
+     * second, so it works whether the committee stored an id or a label.
+     *
+     * <p>Empty when the party is not one this desk is configured with, which is the case
+     * a real counterparty seat will eventually be: then the caller keeps the hint, which
+     * is still the most informative thing available.
+     */
+    private java.util.Optional<String> rosterLabelOf(String party) {
+        List<LedgerService.PartyView> roster;
+        try {
+            roster = ledger.listParties();
+        } catch (RuntimeException e) {
+            return java.util.Optional.empty();
+        }
+        String hint = LedgerService.labelOf(party);
+        return roster.stream()
+                .filter(p -> p.party().equals(party) || LedgerService.labelOf(p.party()).equals(hint))
+                .map(LedgerService.PartyView::label)
+                .findFirst();
+    }
+
     private Map<String, Object> committeeView(LedgerService.CommitteeView c) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("contractId", c.contractId());
@@ -151,9 +174,18 @@ public class AdminController {
         List<Map<String, Object>> seats = new ArrayList<>();
         for (String m : c.members()) {
             String label = LedgerService.labelOf(m);
+            // THE NAME THE LEDGER USES IS NOT THE NAME THE ROSTER USES, and this page
+            // silently compared them. `labelOf` returns the party-id hint —
+            // `bank-crossdesk::1220…` -> "bank-crossdesk" — while users.yml stores the
+            // configured label, "Bank". `users.byParty("bank-crossdesk")` therefore never
+            // matched anything, so every seat on the Committees page read "none —
+            // automated only or unassigned" and the SEAT column was blank, on a desk whose
+            // roster had all five seats filled. Resolve through the configured roster
+            // first; fall back to the hint when a party is not one of ours.
+            String rosterLabel = rosterLabelOf(m).orElse(label);
             Map<String, Object> seat = new LinkedHashMap<>();
             seat.put("party", label);
-            List<UserRecord> us = users.byParty(label);
+            List<UserRecord> us = users.byParty(rosterLabel);
             seat.put("seat", us.stream().map(UserRecord::getSeat).filter(s -> s != null && !s.isBlank())
                     .findFirst().orElse(null));
             // types.ts CommitteeSeat.users: string[] (e-mails); the richer rows ride alongside.

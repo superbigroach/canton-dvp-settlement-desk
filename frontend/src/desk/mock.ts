@@ -326,6 +326,11 @@ export const mockClient: DeskClient = {
     return receipts.filter((r) => m.role === 'admin' || r.party === m.party);
   },
 
+  fundList: async () => {
+    await wait();
+    return [{ id: fund.id, name: fund.name, administrator: 'Bank', cash: fund.cash }];
+  },
+
   fundDashboard: async (id) => {
     await wait();
     if (id !== fund.id) throw new ApiError(`no fund ${id}`, 404);

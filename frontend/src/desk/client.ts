@@ -131,6 +131,8 @@ export const realClient = {
   apReceipts: () => call<Receipt[]>('/ap/receipts'),
 
   // fund admin
+  /** The funds this caller administers, from the ledger — not from the roster. */
+  fundList: () => call<{ id: string; name: string; administrator: string; cash: string }[]>('/fund/funds'),
   fundDashboard: (id: string) => call<FundDashboard>(`/fund/${encodeURIComponent(id)}/dashboard`),
 
   // admin

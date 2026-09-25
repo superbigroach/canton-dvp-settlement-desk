@@ -66,7 +66,7 @@ users:
     role: signer
     seat: transfer-agent
     party: TransferAgent
-    instruments: [CBTC, cETH, LX1]
+    instruments: [CBTC, cETH]
     org: Transfer agent (sandbox stand-in for the fund administrator)
     displayName: Transfer-agent seat
 
@@ -87,10 +87,15 @@ users:
   - uid: sandbox-fund
     email: fund@sandbox.crossdesk
     role: fund_admin
-    party: Bank             # Bank administers LX1 (see DemoSeed)
-    instruments: [LX1]
-    org: LX1 administrator (sandbox)
-    displayName: LX1 fund administrator
+    party: Bank             # Bank administers the demo basket (see DemoSeed)
+    # NO HARDCODED FUND. This said `instruments: [LX1]`, and LX1 is the LOCAL demo
+    # basket DEMO_SEED_FUND creates — false on the DevNet participant, so the fund
+    # administrator's dashboard was the string "no fund 'LX1'". The portal now asks
+    # GET /api/fund/funds which funds this party administers, which is a fact about
+    # the ledger rather than a field somebody typed here.
+    instruments: []
+    org: Fund administrator (sandbox)
+    displayName: Fund administrator
 
   - uid: sandbox-auditor
     email: auditor@sandbox.crossdesk

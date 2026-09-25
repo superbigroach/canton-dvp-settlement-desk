@@ -41,13 +41,71 @@ public class FundController {
         this.users = users;
     }
 
+    /**
+     * The funds this caller actually administers — an {@code admin} sees every fund.
+     *
+     * <p>WHY THIS EXISTS. The class comment has always said "a {@code fund_admin} sees the
+     * funds its party administers", but there was no route that answered it, so the portal
+     * picked a fund id out of the roster and fell back to a constant, {@code LX1}. {@code LX1}
+     * is the LOCAL demo basket that {@code DEMO_SEED_FUND} creates; on the DevNet participant
+     * that flag is false, so it has never existed there. The fund administrator's entire
+     * dashboard was therefore the string "no fund 'LX1'" — on a participant carrying a real
+     * basket the same party does administer.
+     *
+     * <p>{@code /api/ap/} is gated to {@code AP}, so the portal could not borrow that list.
+     * The answer belongs here anyway: administering a fund is a fact about the ledger, not a
+     * field somebody typed into a roster.
+     */
+    /**
+     * The caller's party as the LEDGER spells it — {@code bank-crossdesk} for a roster
+     * entry that says {@code Bank}.
+     *
+     * <p>The roster stores a configured label; a contract stores a full party id whose hint
+     * is the allocation name. Comparing them directly, as this controller did, can only ever
+     * fail: {@code labelOf("Bank")} is {@code "Bank"} and the basket's administrator reads
+     * {@code "bank-crossdesk"}. The access check on {@code dashboard} therefore refused a
+     * fund administrator their own fund — invisible only because the fund id in the roster
+     * (LX1) 404'd first, so the 403 behind it never had a chance to fire.
+     *
+     * <p>Resolving through {@link LedgerService#resolveParty} is what turns one into the
+     * other, and it is the same mistake fixed in AdminController's seat lookup on the
+     * Committees page the same day.
+     */
+    private String myLedgerLabel(Principal me) {
+        if (!me.hasParty()) return null;
+        try {
+            return LedgerService.labelOf(ledger.resolveParty(me.party()));
+        } catch (RuntimeException e) {
+            return LedgerService.labelOf(me.party());
+        }
+    }
+
+    @GetMapping("/api/fund/funds")
+    public List<Map<String, Object>> funds(HttpServletRequest req) {
+        Principal me = CurrentUser.require(req);
+        String mine = myLedgerLabel(me);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (var b : ledger.basketsVisibleTo(ledger.resolveParty("Auditor"))) {
+            String adminLabel = LedgerService.labelOf(b.administrator());
+            if (!me.isAdmin() && (mine == null || !mine.equalsIgnoreCase(adminLabel))) continue;
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", b.basketId());
+            row.put("name", b.description());
+            row.put("administrator", adminLabel);
+            row.put("cash", b.cashInstrument());
+            out.add(row);
+        }
+        return out;
+    }
+
     @GetMapping("/api/fund/{id}/dashboard")
     public Map<String, Object> dashboard(HttpServletRequest req, @PathVariable String id) {
         Principal me = CurrentUser.require(req);
         var b = ap.basketOr404(id);
         String adminLabel = LedgerService.labelOf(b.administrator());
         if (!me.isAdmin()) {
-            if (!me.hasParty() || !LedgerService.labelOf(me.party()).equalsIgnoreCase(adminLabel)) {
+            String mine = myLedgerLabel(me);
+            if (mine == null || !mine.equalsIgnoreCase(adminLabel)) {
                 throw AuthException.forbidden("fund " + id + " is administered by " + adminLabel
                         + "; your party is " + me.party());
             }

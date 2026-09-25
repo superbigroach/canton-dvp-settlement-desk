@@ -7,13 +7,41 @@ import LineChart from '../../components/LineChart';
 import { fmtN, fmtQty, fmtTs, LoadState, shortCid, Stat, TierTag, useAsync } from '../../components/ui';
 import { ReceiptTable } from '../ap/Receipts';
 
-const DEFAULT_FUND = 'LX1';
-
 export default function FundDashboard() {
   const { id } = useParams();
   const { me } = useAuth();
-  const fundId = id || me?.instruments?.[0] || DEFAULT_FUND;
-  const d = useAsync<Dash>(() => desk.fundDashboard(fundId), [fundId]);
+
+  // WHICH FUND, ANSWERED BY THE LEDGER. This used to be
+  // `id || me?.instruments?.[0] || 'LX1'`. LX1 is the LOCAL demo basket that
+  // DEMO_SEED_FUND creates, and that flag is false on the DevNet participant — so the
+  // roster named a fund that had never existed there and the whole dashboard was the
+  // string "no fund 'LX1'", on a participant carrying a real basket this same party
+  // administers. Ask which funds the caller administers, prefer the route id, then a
+  // roster instrument that is actually one of them, then simply the first one.
+  const list = useAsync(() => desk.fundList(), []);
+  const funds = list.data ?? [];
+  const rosterPick = me?.instruments?.find((i) => funds.some((f) => f.id === i));
+  const fundId = id || rosterPick || funds[0]?.id || '';
+
+  const d = useAsync<Dash>(
+    () => (fundId ? desk.fundDashboard(fundId) : Promise.reject(new Error('no fund'))),
+    [fundId],
+  );
+
+  if (!list.loading && !list.error && funds.length === 0) {
+    return (
+      <div className="page">
+        <div className="page-head">
+          <h1>Fund admin</h1>
+          <p className="hint">
+            No fund on this ledger is administered by your party yet. A fund appears here as
+            soon as one is defined with your party as its administrator.
+          </p>
+          <button type="button" className="ghost small" onClick={list.reload}>Refresh</button>
+        </div>
+      </div>
+    );
+  }
   const data = d.data;
   const last = data?.series[0];
   const points = data ? [...data.series].reverse().map((r) => ({ x: r.date, y: r.price, tier: r.tier, tierLabel: r.tierLabel, restated: r.restated })) : [];
