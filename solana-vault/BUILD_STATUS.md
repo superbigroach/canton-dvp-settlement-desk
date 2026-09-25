@@ -157,7 +157,7 @@ attempt the airdrops — **and then wedged a second time**, on a command that wa
 load: run one `wsl.exe` invocation at a time, and `wsl --shutdown` at the first hang instead
 of waiting it out.
 
-**2. The devnet faucet, which is the current blocker.** The deploy needs **2.53673356 SOL**
+**2. The devnet faucet (RESOLVED 25 Sep — the payer now holds 5.0 SOL).** The deploy needs **2.53673356 SOL**
 of rent for the program data account (`solana rent 499229`) plus fees, call it 2.6 SOL. The
 fresh devnet-only keypair
 
@@ -165,8 +165,8 @@ fresh devnet-only keypair
 ~/.config/solana/etp-devnet.json   ->   85AWg8nG877shP6dB65awTLvZLo31ZbQWnBeySqCyHK5
 ```
 
-is at **0 SOL**. Seventeen `solana airdrop` attempts (twelve at 2 SOL, five at 1 SOL, spaced
-12-20 s) every one returned
+was at 0 SOL for the whole session. Seventeen `solana airdrop` attempts (twelve at 2 SOL,
+five at 1 SOL, spaced 12-20 s) every one returned
 
 ```
 Error: airdrop request failed. This can happen when the rate limit is reached.
@@ -180,8 +180,19 @@ hours. Fallbacks, in order of preference:
 * fund `85AWg8nG877shP6dB65awTLvZLo31ZbQWnBeySqCyHK5` with ~3 devnet SOL from any wallet
   that has some.
 
-Once it has the SOL the rest is the `README.md` → Devnet deploy block verbatim; nothing else
-is known to be missing.
+It has since been funded out of band to **5.0 SOL**, so this is no longer the blocker.
+
+**3. The WSL VM wedged again, and that is where it stands.** With the payer funded, the
+deploy still could not be attempted: `wsl.exe` stopped responding a second time and has not
+recovered. Even `\\wsl.localhost\Ubuntu\...` hangs, which is the 9p server inside the VM not
+answering, so the built `.so` cannot even be copied out to Windows, and Windows has no
+`cargo-build-sbf` to rebuild it. There is no route to a deploy until the VM is reset, and
+`wsl --shutdown` is denied to the agents working on this.
+
+Once the VM is reset the rest is the `README.md` → Devnet deploy block verbatim; nothing
+else is known to be missing. `scripts/e2e-devnet.ts` now posts its first NAV through the
+**packed** single-instruction Ed25519 path and a second through the unpacked
+one-instruction-per-signature path, so a devnet run covers both shapes.
 
 ### A note on the buffer keypair
 

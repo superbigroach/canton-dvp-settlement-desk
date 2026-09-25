@@ -128,6 +128,44 @@ function ed25519Ix(signer: Keypair, message: Buffer): TransactionInstruction {
   });
 }
 
+/** ONE Ed25519 instruction carrying SEVERAL signatures over the SAME message, with a
+ *  single shared copy of the message body.
+ *
+ *  A committee of three or more has to use this: `createInstructionWithPublicKey` emits one
+ *  instruction per signature, each repeating the 146-byte canonical message, and three of
+ *  those plus `post_nav` is 1424 bytes against the 1232-byte transaction limit. Both the
+ *  native precompile and `nav::verify_attestations` iterate `num_signatures` offsets inside
+ *  one instruction, so this is the supported shape and what a real relay must do.
+ *
+ *  Layout (agave `ed25519_instruction.rs`): num_signatures u8, padding u8, one 14-byte
+ *  offsets record per signature, then pubkeys, signatures, message. Instruction indices are
+ *  0xFFFF = "this instruction". */
+function ed25519IxMulti(signers: Keypair[], message: Buffer): TransactionInstruction {
+  const SELF = 0xffff;
+  const n = signers.length;
+  const pubkeysAt = 2 + n * 14;
+  const sigsAt = pubkeysAt + n * 32;
+  const messageAt = sigsAt + n * 64;
+  const data = Buffer.alloc(messageAt + message.length);
+
+  data.writeUInt8(n, 0);
+  data.writeUInt8(0, 1);
+  signers.forEach((signer, i) => {
+    const o = 2 + i * 14;
+    data.writeUInt16LE(sigsAt + i * 64, o);
+    data.writeUInt16LE(SELF, o + 2);
+    data.writeUInt16LE(pubkeysAt + i * 32, o + 4);
+    data.writeUInt16LE(SELF, o + 6);
+    data.writeUInt16LE(messageAt, o + 8);
+    data.writeUInt16LE(message.length, o + 10);
+    data.writeUInt16LE(SELF, o + 12);
+    Buffer.from(signer.publicKey.toBytes()).copy(data, pubkeysAt + i * 32);
+    Buffer.from(nacl.sign.detached(message, signer.secretKey)).copy(data, sigsAt + i * 64);
+  });
+  message.copy(data, messageAt);
+  return new TransactionInstruction({ keys: [], programId: Ed25519Program.programId, data });
+}
+
 // ---------------------------------------------------------------------------------------
 
 async function main() {
@@ -425,11 +463,11 @@ async function main() {
       .instruction();
 
   const msg = navMessage(programId, vault, fixing);
-  await send("post_nav", [
-    ed25519Ix(attestors[0], msg),
-    ed25519Ix(attestors[1], msg),
-    await postNavIxFor(fixing),
-  ]);
+  // PACKED: both signatures in one Ed25519 instruction. This is the shape a committee of
+  // three or more is forced into by the 1232-byte transaction limit, so exercise it here.
+  const packedIx = ed25519IxMulti([attestors[0], attestors[1]], msg);
+  console.log(`  packed Ed25519 ix: 2 signatures in 1 instruction, ${packedIx.data.length} bytes of data`);
+  await send("post_nav", [packedIx, await postNavIxFor(fixing)]);
   const v = await program.account.vault.fetch(vault);
   assertEq(BigInt(v.latestNav.navPerShare.toString()), NAV_PER_SHARE, "latestNav.navPerShare");
   if (v.latestNav.asOfDate !== asOfDate) fail("latestNav.asOfDate mismatch");
@@ -482,10 +520,38 @@ async function main() {
   );
 
   // The refused postings must not have touched the accepted record.
+  const afterNegatives = await program.account.vault.fetch(vault);
+  if (afterNegatives.latestNav.asOfDate !== asOfDate) fail("a refused posting changed latestNav");
+  if (afterNegatives.latestNav.tier !== 1) fail("a refused posting changed latestNav.tier");
+  assertEq(BigInt(afterNegatives.latestNav.navPerShare.toString()), NAV_PER_SHARE, "latestNav.navPerShare after refusals");
+  console.log(`  latestNav unchanged after both refusals: asOfDate ${afterNegatives.latestNav.asOfDate}, tier ${afterNegatives.latestNav.tier}, nav ${afterNegatives.latestNav.navPerShare.toString()}`);
+
+  // ---- 8b. the UNPACKED path, and that a refusal did not poison the date ------------
+  // Same as_of_date the two refusals used. It must now be accepted, which shows the
+  // refusals left no state behind, and it covers the one-instruction-per-signature shape
+  // that a committee of two can still use.
+  console.log("
+-- second posting, separate Ed25519 instructions ----------------------");
+  const nextFixing = { ...fixing, asOfDate: asOfDate + 1, navPerShare: NAV_PER_SHARE + 10_000_000n };
+  const nextMsg = navMessage(programId, vault, nextFixing);
+  await send("post_nav_2", [
+    ed25519Ix(attestors[0], nextMsg),
+    ed25519Ix(attestors[2], nextMsg), // a different pair, to show any K of N works
+    await postNavIxFor(nextFixing),
+  ]);
   const after = await program.account.vault.fetch(vault);
-  if (after.latestNav.asOfDate !== asOfDate) fail("a refused posting changed latestNav");
-  if (after.latestNav.tier !== 1) fail("a refused posting changed latestNav.tier");
-  console.log(`  latestNav unchanged after both refusals: asOfDate ${after.latestNav.asOfDate}, tier ${after.latestNav.tier}`);
+  assertEq(BigInt(after.latestNav.navPerShare.toString()), nextFixing.navPerShare, "second latestNav.navPerShare");
+  if (after.latestNav.asOfDate !== asOfDate + 1) fail("second posting asOfDate mismatch");
+  if (after.latestNav.attestorCount !== 2) fail(`second posting recorded ${after.latestNav.attestorCount} attestors`);
+  console.log(`  accepted: navPerShare ${after.latestNav.navPerShare.toString()}  asOfDate ${after.latestNav.asOfDate}  attestors ${after.latestNav.attestorCount}`);
+  console.log(`  ${EXPLORER("tx", txs["post_nav_2"])}`);
+
+  // and the first fixing is now stale
+  const neg3 = await mustFail(
+    "re-posting the FIRST fixing after a newer one was accepted",
+    [ed25519IxMulti([attestors[0], attestors[1]], msg), await postNavIxFor(fixing)],
+    "StaleFixing",
+  );
 
   // ---- 9. record it ----------------------------------------------------------------
   const out = {
@@ -563,7 +629,21 @@ async function main() {
         fixingRefPreimage,
         fixingRefIsATestReference: true,
       },
-      negatives: [neg1, neg2],
+      navSecondPosting: {
+        navPerShare: (NAV_PER_SHARE + 10_000_000n).toString(),
+        asOfDate: asOfDate + 1,
+        tier: 1,
+        attestorsRecorded: after.latestNav.attestorCount,
+        signedBy: "attestors[0] + attestors[2], one Ed25519 instruction each (unpacked)",
+      },
+      ed25519Shapes: {
+        firstPosting: "PACKED - 2 signatures in a single Ed25519 instruction",
+        secondPosting: "UNPACKED - one Ed25519 instruction per signature",
+        note:
+          "A committee of 3+ MUST pack: 3 separate instructions plus post_nav is 1424 bytes " +
+          "against the 1232-byte transaction limit.",
+      },
+      negatives: [neg1, neg2, neg3],
     },
     transactions: Object.fromEntries(
       Object.entries(txs).map(([k, sig]) => [k, { signature: sig, explorer: EXPLORER("tx", sig) }]),
