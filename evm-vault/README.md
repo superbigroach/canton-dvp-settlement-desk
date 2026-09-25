@@ -21,7 +21,7 @@ evm-vault/
     mocks/MockHolderRegistry.sol   allowlist registry
   scripts/deploy.ts                env-parameterised testnet deploy
   scripts/post-nav.ts              reference relay: ETP Foundry API -> signed fixing -> postNav
-  test/EtpBasketVault.test.ts      58 tests
+  test/EtpBasketVault.test.ts      67 tests
   hardhat.config.ts                solc 0.8.24 / OZ 5 / ethers v6; baseSepolia + arcTestnet + robinhoodTestnet
 ```
 
@@ -202,7 +202,7 @@ the timelock would otherwise keep shrinking them).
 cd evm-vault
 npm install
 npx hardhat compile
-npx hardhat test        # 58 passing
+npx hardhat test        # 67 passing
 ```
 
 Toolchain: Solidity 0.8.24 (`evmVersion: cancun` — OZ 5.6's `Bytes.sol` uses
