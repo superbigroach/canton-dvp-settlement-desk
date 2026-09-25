@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Request access — ETP Foundry</title>
+<meta name="description" content="The ETP Foundry desk is invitation-only: a seat is issued to a named person, never self-registered. Tell us who you are and which seat you want, and we will reply.">
+<link rel="canonical" href="https://etpfoundry.com/request-access">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="ETP Foundry">
+<meta property="og:title" content="Request access — ETP Foundry">
+<meta property="og:description" content="A committee seat is issued to a named person, never self-registered. Tell us who you are and which seat you want.">
+<meta property="og:url" content="https://etpfoundry.com/request-access">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#FFFFFF">
+<link rel="stylesheet" href="/site/site.css?v=15">
+<script defer src="/site/site.js?v=12"></script>
+<link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32.png">
+<link rel="apple-touch-icon" href="/brand/apple-touch-icon.png">
+<meta property="og:image" content="https://etpfoundry.com/brand/og.png">
+<meta name="robots" content="index,follow">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="/" aria-label="ETP Foundry home">ETP<span>Foundry</span></a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <a href="/benchmarks/">Benchmarks</a>
+      <a href="/methodology">Methodology</a>
+      <a href="/committee">Committee</a>
+      <a href="/licensing">Licensing</a>
+      <a href="/about">About</a>
+      <a href="/desk/login" class="btn">Sign in →</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="section hero" aria-labelledby="ra-h">
+  <div class="wrap">
+    <div class="kicker"><span>Request access</span> <span class="rule"></span></div>
+    <h1 id="ra-h">A seat is issued to a person,<br>never self-registered.</h1>
+    <p class="lede">
+      That is the whole point of the desk: a fixing is worth what it costs to forge, and an
+      account anybody can create is worth nothing. So tell us who you are and which seat you
+      want, and a person will read it and reply.
+    </p>
+  </div>
+</section>
+
+<section class="section plain">
+  <div class="wrap g2">
+
+    <form class="card" id="access-form" novalidate>
+      <h2>Tell us who you are</h2>
+
+      <label class="field">
+        <span>Your name</span>
+        <input name="name" type="text" autocomplete="name" maxlength="120" required>
+      </label>
+
+      <label class="field">
+        <span>Work e-mail</span>
+        <input name="email" type="email" autocomplete="email" maxlength="160" required>
+        <small class="field-hint">A seat is bound to this address. Use the one your firm knows you by.</small>
+      </label>
+
+      <label class="field">
+        <span>Firm</span>
+        <input name="firm" type="text" autocomplete="organization" maxlength="160" required>
+      </label>
+
+      <label class="field">
+        <span>What you want</span>
+        <select name="seat">
+          <option value="">Choose one…</option>
+          <option value="issuer">Issuer seat — I issue the wrapped asset</option>
+          <option value="custodian">Custodian seat — I hold the reserve</option>
+          <option value="venue">Venue seat — I run a market in it</option>
+          <option value="lender">Lender seat — I take it as collateral</option>
+          <option value="transfer-agent">Transfer-agent seat</option>
+          <option value="ap">Authorised participant — I create and redeem</option>
+          <option value="fund-admin">Fund administrator</option>
+          <option value="licence">A data or index licence</option>
+          <option value="other">Something else</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Anything we should know</span>
+        <textarea name="message" rows="4" maxlength="1200"
+          placeholder="Which asset, which fund, what you need the number for."></textarea>
+      </label>
+
+      <button class="btn big" type="submit">Send request</button>
+      <p class="note" id="access-status" role="status" aria-live="polite"></p>
+    </form>
+
+    <div>
+      <div class="card">
+        <h3>What happens next</h3>
+        <ol class="plain-ol">
+          <li>A person reads it. There is one of us, so it will be read the same day.</li>
+          <li>If a seat makes sense, we put your address on the roster and you sign in with Google.</li>
+          <li>Your seat's conditions, evidence fields and API key appear on your own page.</li>
+        </ol>
+      </div>
+
+      <div class="card">
+        <h3>What we will tell you honestly</h3>
+        <p>
+          No third-party committee has been seated yet, no fixing has been published for
+          commercial use, and every seat today is operated by ETP Foundry — which is disclosed
+          on every published value. We are not an authorised benchmark administrator in any
+          jurisdiction.
+        </p>
+        <p class="note">
+          If you are evaluating us as a vendor, ask for the controls register: it lists every
+          control a risk team asks about, including the ones not in place.
+        </p>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <p class="note">
+      ETP Foundry is not an authorised or registered benchmark administrator in any jurisdiction.
+      Values are struck on ETP Foundry's own Canton DevNet validator.
+      <a href="/">Home</a> · <a href="/about">About</a> · <a href="/methodology">Methodology</a>
+    </p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var form = document.getElementById('access-form');
+  var out = document.getElementById('access-status');
+  if (!form) return;
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var btn = form.querySelector('button[type=submit]');
+    var data = {};
+    ['name', 'email', 'firm', 'seat', 'message'].forEach(function (k) {
+      var el = form.elements[k];
+      data[k] = el ? String(el.value || '').trim() : '';
+    });
+    if (!data.name || !data.email || !data.firm) {
+      out.textContent = 'Name, work e-mail and firm are needed.';
+      return;
+    }
+    btn.disabled = true;
+    out.textContent = 'Sending…';
+    fetch('/api/access-request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (b) { return { ok: r.ok, b: b }; });
+    }).then(function (res) {
+      if (res.ok) {
+        form.querySelectorAll('input,textarea,select').forEach(function (el) { el.value = ''; });
+        out.textContent = res.b.note || 'Thanks — we will be in touch.';
+      } else {
+        btn.disabled = false;
+        out.textContent = (res.b && res.b.message) || 'That did not send. E-mail us instead and we will pick it up.';
+      }
+    }).catch(function () {
+      btn.disabled = false;
+      out.textContent = 'That did not send — check your connection and try again.';
+    });
+  });
+}());
+</script>
+</body>
+</html>

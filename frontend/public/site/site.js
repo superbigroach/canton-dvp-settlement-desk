@@ -20,7 +20,7 @@
   'use strict';
 
   /* ---- static catalogue: what the site says about each product even when the
-          API is down. Ids match FixingSchedule (CBTC, cETH, LX1). ------------- */
+          API is down. Ids match FixingSchedule (CBTC, cETH). ------------- */
   var CATALOGUE = {
     CBTC: {
       id: 'CBTC', name: 'CBTC Close', kind: 'wrapped', identifier: 'CDX-CBTC-D',
@@ -30,7 +30,7 @@
         'A wrapped asset is not the asset it wraps. cBTC carries custody and redemption risk that no bitcoin benchmark prices, and it settles contracts that need one struck moment. The CBTC Close carries two inputs, not one: the benchmark print (a public bitcoin reference price nobody argues about) and the par factor the committee attested. The struck price is their product, and a pair that does not reconcile cannot exist on the ledger.',
         'The par factor is the only number in the fixing that no external benchmark administrator produces. It is the issuer’s redemption integrity, the lender’s book acceptance and the venue’s observed range, condensed into one signed ratio.'
       ],
-      referencing: [{ id: 'LX1', name: 'LX1 NAV' }]
+      referencing: []
     },
     cETH: {
       id: 'cETH', name: 'cETH Close', kind: 'wrapped', identifier: 'CDX-CETH-D',
@@ -40,21 +40,10 @@
         'cETH is a claim on ether held elsewhere. Its benchmark input is a public ether reference price; its judgement input is the par factor the committee attests. Both are signed, both are published, and the struck price is their product.',
         'Where a component fixing is missing, any basket that references it is not published. A gap is published as a gap; a fixing is never estimated to fill one.'
       ],
-      referencing: [{ id: 'LX1', name: 'LX1 NAV' }]
-    },
-    LX1: {
-      id: 'LX1', name: 'LX1 NAV', kind: 'fund', identifier: 'CDX-LX1-D',
-      publishTime: '16:00', timezone: 'Europe/London', quotedIn: 'USDC',
-      description: 'The official net asset value per share of LX1, a demonstration basket fund holding cETH and CBTC. Computed as the sum of units per share multiplied by each component’s current fixing, and published immediately after its components.',
-      about: [
-        'A basket fixing is Σ (unitsPerShareᵢ × fixingᵢ) over the components. It therefore requires a current fixing for every component; if one is missing, the basket NAV is not published rather than estimated.',
-        'Creation and redemption of LX1 shares settle in kind, atomically, at this number. The official NAV is the number contracts settle against; the indicative value derived from live market data is informational and binding on nobody.',
-        'LX1 is a demonstration instrument. Its components inside the fund are issued for demonstration and are not the production tokens.'
-      ],
       referencing: []
     }
   };
-  var ORDER = ['CBTC', 'cETH', 'LX1'];
+  var ORDER = ['CBTC', 'cETH'];
 
   /* Tier labels follow the production waterfall (PRODUCT-PLAN §4). */
   var TIER = {

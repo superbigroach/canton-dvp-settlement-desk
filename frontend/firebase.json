@@ -87,6 +87,10 @@
         "destination": "/about.html"
       },
       {
+        "source": "/request-access",
+        "destination": "/request-access.html"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }

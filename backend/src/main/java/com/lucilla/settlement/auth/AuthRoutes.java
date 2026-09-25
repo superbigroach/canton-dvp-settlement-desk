@@ -41,6 +41,10 @@ public final class AuthRoutes {
             // `publish: true`. The full register, which is mostly a list of what is NOT in
             // place, stays behind /api/admin/readiness.
             "/api/readiness",
+            // The one way in for somebody who is not already a seat. Public by
+            // necessity: a visitor has no credential and no roster entry yet. It
+            // records a request and creates nothing.
+            "/api/access-request",
             "/api/signer-protocol", "/api/fixing-schedule");
     private static final List<String> PUBLIC_PREFIX = List.of(
             "/api/benchmarks/", "/api/series/");

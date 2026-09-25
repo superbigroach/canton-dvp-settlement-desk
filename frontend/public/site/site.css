@@ -426,6 +426,30 @@ td.restated{color:var(--warn)}
   --ink-3:#6B7280;
   --line:#E5E7EB;
   --line-2:#D6DAE1;
+
+  /* REDEFINE THE DARK TOKENS RATHER THAN OVERRIDE EVERY COMPONENT.
+     The 399 rules above reference --text, --surface, --border and friends, and
+     those were near-white text on near-black surfaces. Overriding component by
+     component was whack-a-mole: it left a dark sidebar on the methodology page
+     and pale-grey figures on white wherever a rule said `color:var(--text)`.
+     Repointing the tokens flips every one of those rules at once, and anything
+     added later inherits the light theme for free. The hero puts them back to
+     their dark values inside its own container, which is the only place a dark
+     surface still exists on this site. */
+  --ink:#FFFFFF;
+  --surface:#FFFFFF;
+  --surface-2:#F7F8FA;
+  --border:#E5E7EB;
+  --border-2:#D6DAE1;
+  --text:#0B0D12;
+  --muted:#6B7280;
+  --faint:#9AA1AC;
+  --gold:#B07E16;
+  --good:#0F7A4F;
+  --bad:#B03A3A;
+  --warn:#9A6B00;
+  --grid:rgba(11,13,18,0.05);
+
   /* ONE gradient, on the primary action and a single accent word. Blue into
      indigo, close to the accent already in the desk, so the app and the site
      stay recognisably the same brand. */
@@ -476,8 +500,14 @@ body{ background:var(--canvas); color:var(--ink-2); }
    Obol's move, and the one that makes a white page feel designed rather than
    empty: the hero is not the page, it is a dark card sitting ON the page, with
    the gradient living inside it where it cannot shout. */
-.section.hero{ padding:28px 0 64px; background:transparent; }
-.section.hero > .wrap{
+body.home .section.hero{ padding:28px 0 64px; background:transparent; }
+body.home .section.hero > .wrap{
+  /* The one dark surface left on the site, so it restores the dark token values
+     locally instead of every child needing its own override. */
+  --text:#E8EAED; --muted:#9AA3B2; --faint:#6F7684;
+  --surface:rgba(232,234,237,0.06); --surface-2:rgba(232,234,237,0.10);
+  --border:rgba(232,234,237,0.14); --border-2:rgba(232,234,237,0.24);
+  --gold:#E6B450;
   position:relative;
   max-width:1180px;
   padding:clamp(40px,6vw,84px) clamp(28px,5vw,72px);
@@ -491,7 +521,7 @@ body{ background:var(--canvas); color:var(--ink-2); }
   box-shadow:0 1px 2px rgba(11,13,18,0.06), 0 30px 70px -28px rgba(11,13,18,0.45);
 }
 /* A faint grid inside the container — an instrument surface, not decoration. */
-.section.hero > .wrap::before{
+body.home .section.hero > .wrap::before{
   content:"";
   position:absolute; inset:0; pointer-events:none;
   background-image:linear-gradient(rgba(232,234,237,0.05) 1px,transparent 1px),
@@ -500,27 +530,27 @@ body{ background:var(--canvas); color:var(--ink-2); }
   -webkit-mask-image:radial-gradient(760px 420px at 70% 20%,#000,transparent 75%);
   mask-image:radial-gradient(760px 420px at 70% 20%,#000,transparent 75%);
 }
-.section.hero > .wrap > *{ position:relative; }
-.section.hero h1{ color:#F3F5F8; letter-spacing:-0.02em; }
+body.home .section.hero > .wrap > *{ position:relative; }
+body.home .section.hero h1{ color:#F3F5F8; letter-spacing:-0.02em; }
 /* ONE gradient phrase. A highlight, not a paint job. */
-.section.hero h1 em{
+body.home .section.hero h1 em{
   font-style:normal;
   background:linear-gradient(135deg,#7FA6FF 0%,#A78BFA 100%);
   -webkit-background-clip:text; background-clip:text; color:transparent;
 }
-.section.hero .lede{ color:#B9BFCB; }
-.section.hero .cta-note{ color:#6F7684; }
-.section.hero .pill{ background:rgba(232,234,237,0.07); border-color:rgba(232,234,237,0.16); color:#C9CFDA; }
-.section.hero .for-label{ color:#6F7684; }
-.section.hero .for-row a{
+body.home .section.hero .lede{ color:#B9BFCB; }
+body.home .section.hero .cta-note{ color:#6F7684; }
+body.home .section.hero .pill{ background:rgba(232,234,237,0.07); border-color:rgba(232,234,237,0.16); color:#C9CFDA; }
+body.home .section.hero .for-label{ color:#6F7684; }
+body.home .section.hero .for-row a{
   background:rgba(232,234,237,0.05);
   border-color:rgba(232,234,237,0.14);
   color:#D4D9E2;
   transition:background 150ms ease-out, border-color 150ms ease-out;
 }
-.section.hero .for-row a:hover{ background:rgba(232,234,237,0.10); border-color:rgba(232,234,237,0.26); }
-.section.hero .btn.ghost{ background:rgba(232,234,237,0.06); border-color:rgba(232,234,237,0.20); color:#E8EAED; }
-.section.hero .btn.ghost:hover{ background:rgba(232,234,237,0.12); }
+body.home .section.hero .for-row a:hover{ background:rgba(232,234,237,0.10); border-color:rgba(232,234,237,0.26); }
+body.home .section.hero .btn.ghost{ background:rgba(232,234,237,0.06); border-color:rgba(232,234,237,0.20); color:#E8EAED; }
+body.home .section.hero .btn.ghost:hover{ background:rgba(232,234,237,0.12); }
 
 /* ---- the light sections below ---------------------------------------- */
 .section{ background:transparent; }
@@ -576,5 +606,70 @@ body{ background:var(--canvas); color:var(--ink-2); }
 /* ---- phone ------------------------------------------------------------ */
 @media (max-width:860px){
   .site-nav{ background:#fff; border:1px solid var(--line); box-shadow:0 12px 32px -12px rgba(11,13,18,0.25); }
-  .section.hero > .wrap{ border-radius:20px; padding:36px 22px; }
+  body.home .section.hero > .wrap{ border-radius:20px; padding:36px 22px; }
 }
+
+/* ---- INNER-PAGE HERO -------------------------------------------------
+   The big dark container is a LANDING-PAGE device (body.home). Every other
+   page's hero holds real content — value tiles, tables, document lists — and
+   putting a white card inside a dark card gave pale grey numbers on white:
+   84,001.06 in a colour nobody could read. An inner page is light all the way
+   down, with the hero as a generous opening block rather than a card. */
+body:not(.home) .section.hero{ padding:56px 0 40px; background:transparent; }
+body:not(.home) .section.hero > .wrap{ background:none; box-shadow:none; border-radius:0; padding-left:0; padding-right:0; }
+body:not(.home) .section.hero h1{ color:var(--ink-1); letter-spacing:-0.015em; }
+body:not(.home) .section.hero .lede,
+body:not(.home) .section.hero p{ color:var(--ink-2); }
+body:not(.home) .section.hero .cta-note,
+body:not(.home) .section.hero .for-label{ color:var(--ink-3); }
+body:not(.home) .section.hero .pill{ background:#fff; border:1px solid var(--line); color:var(--ink-2); }
+body:not(.home) .section.hero .for-row a{ background:#fff; border:1px solid var(--line); color:var(--ink-2); }
+body:not(.home) .section.hero .for-row a:hover{ border-color:var(--line-2); }
+
+/* ---- BENCHMARK TILES ON LIGHT ----------------------------------------
+   The tile internals were written for a dark card, so on white the figure a
+   visitor came to read — 83,994.85 — rendered pale grey on white. The number is
+   the point of the page; it gets the strongest ink on it. */
+.tile .id{ color:var(--ink-3); }
+.tile .name{ color:var(--ink-1); font-weight:600; }
+.tile .value{ color:var(--ink-1); font-weight:600; letter-spacing:-0.01em; }
+.tile .value small{ color:var(--ink-3); }
+.tile .meta,.tile .meta span{ color:var(--ink-3); }
+.tile .desc{ color:var(--ink-2); }
+/* Gold is still, and only, attestation. */
+.tile .value.official{ color:#B07E16; }
+.tile .attested{ color:#B07E16; }
+/* Not yet attested: amber, and it reads as provisional rather than as an error. */
+.tile .pending{ color:#9A6B00; }
+.tile .stale,.tile .missed{ color:#B03A3A; }
+.tile:hover .value{ color:#000; }
+
+/* ---- REQUEST ACCESS FORM ---------------------------------------------
+   The desk is invitation-only, so a visitor who is not already a seat had
+   nowhere to go: the site said "Sign in" and nothing else, which answers
+   "how do I use this" with "you cannot, and we will not say why". */
+.g2{ display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:18px; align-items:start; }
+.g2 > div{ display:flex; flex-direction:column; gap:18px; }
+#access-form{ display:flex; flex-direction:column; gap:14px; padding:24px; }
+#access-form h2{ margin:0 0 2px; font-size:18px; }
+.field{ display:flex; flex-direction:column; gap:6px; }
+.field > span{
+  font-size:11px; font-weight:600; letter-spacing:0.08em;
+  text-transform:uppercase; color:var(--ink-3);
+}
+.field input,.field select,.field textarea{
+  width:100%; padding:11px 12px;
+  font-family:var(--ui); font-size:14.5px; color:var(--ink-1);
+  background:#fff; border:1px solid var(--line-2); border-radius:10px;
+  transition:border-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+.field textarea{ resize:vertical; min-height:96px; }
+.field input:focus,.field select:focus,.field textarea:focus{
+  outline:none; border-color:#4C82F7; box-shadow:0 0 0 3px rgba(76,130,247,0.15);
+}
+.field-hint{ font-size:12px; color:var(--ink-3); }
+#access-form .btn{ align-self:flex-start; margin-top:4px; }
+#access-form .btn[disabled]{ opacity:0.6; cursor:default; }
+#access-status{ min-height:1.2em; margin:0; }
+.plain-ol{ margin:0; padding-left:20px; }
+.plain-ol li{ margin-bottom:8px; }
