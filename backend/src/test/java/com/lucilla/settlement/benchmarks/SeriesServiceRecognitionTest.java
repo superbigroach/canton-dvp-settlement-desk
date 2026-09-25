@@ -29,7 +29,10 @@ class SeriesServiceRecognitionTest {
     static final List<String> COMMITTEE = List.of("Issuer::1", "Bank::1", "Venue::1");
 
     LedgerService ledger = mock(LedgerService.class);
-    SeriesService service = new SeriesService(ledger, JsonlEventStore.inMemory(), ScheduleStore.inMemory());
+    // A mock, not a real one: these tests exercise recognition, which never asks for a
+    // price, and a test that can reach a trading venue is a test that can fail on a train.
+    SeriesService service = new SeriesService(ledger, JsonlEventStore.inMemory(), ScheduleStore.inMemory(),
+            mock(com.lucilla.settlement.ledger.MarketData.class));
 
     static LedgerService.CommitteeView committee(String cid, String admin, List<String> members, long threshold) {
         return new LedgerService.CommitteeView(cid, admin, members, threshold, "Auditor::1", "cBTC committee");

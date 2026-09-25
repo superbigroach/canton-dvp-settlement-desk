@@ -2,6 +2,7 @@ package com.lucilla.settlement.benchmarks;
 
 import com.lucilla.settlement.events.EventStore;
 import com.lucilla.settlement.ledger.LedgerCommands;
+import com.lucilla.settlement.ledger.MarketData;
 import com.lucilla.settlement.ledger.LedgerService;
 import com.lucilla.settlement.scheduler.ScheduleStore;
 import com.lucilla.settlement.scheduler.StrikeSchedule;
@@ -26,13 +27,16 @@ public class SeriesService {
     private final LedgerService ledger;
     private final EventStore events;
     private final ScheduleStore schedules;
+    private final MarketData marketData;
     /** When this desk came up — the "as of" of a seed mark, which the ledger does not date. */
     private final Instant bootedAt = Instant.now();
 
-    public SeriesService(LedgerService ledger, EventStore events, ScheduleStore schedules) {
+    public SeriesService(LedgerService ledger, EventStore events, ScheduleStore schedules,
+                         MarketData marketData) {
         this.ledger = ledger;
         this.events = events;
         this.schedules = schedules;
+        this.marketData = marketData;
     }
 
     public List<SeriesRow> series(String instrumentId) {
@@ -46,6 +50,8 @@ public class SeriesService {
         // The seed: the instrument's own published mark (a fund: its NAV from components).
         BigDecimal seed = null;
         String seedNote = null;
+        String seedLabel = null;
+        Instant seedAsOf = bootedAt;
         Optional<LedgerService.InstrumentView> inst = ledger.instrumentsVisibleTo(ledger.resolveParty("Issuer"))
                 .stream().filter(i -> i.id().equalsIgnoreCase(instrumentId)).findFirst();
         if (inst.isPresent()) {
@@ -55,9 +61,37 @@ public class SeriesService {
             seedNote = fund
                     ? "derived: Σ units per share × component marks — not itself an attested fixing"
                     : "issuer's published reference mark at seed — not an attested fixing";
+
+            // A LIVE NUMBER BEATS A STORED ONE, and neither is attested.
+            //
+            // WHY. Until the committee strikes, the bottom row of the series is all a consumer
+            // has. It used to be `referencePrice` — a figure written onto the instrument when it
+            // was created and never touched since, which on 25 Sep 2026 meant this desk published
+            // "65,000" for CBTC while bitcoin traded at 83,906. Nobody had attested either number,
+            // so the tier was honest; the VALUE was three months stale and simply wrong, and it
+            // is the number a prospect sees first.
+            //
+            // So when the venues answer, the tier-0 row is the live composite median, dated now,
+            // and labelled `indicative` rather than `seed`. It is still worth nothing — no
+            // signature stands behind it and the label says so — but it is a real observation of
+            // a real market instead of a leftover. The stored mark remains the fallback for when
+            // every venue is down, because a stale number a consumer can see is stale beats no
+            // number at all.
+            if (!fund) {
+                var live = marketData.compositeOf(inst.get().id());
+                if (live.isPresent()) {
+                    seed = live.get().price();
+                    seedAsOf = Instant.now();
+                    seedLabel = "indicative";
+                    seedNote = live.get().sourceLabel() + "; venues "
+                            + live.get().spreadBps().toPlainString() + " bps apart — live market "
+                            + "observation, binding on nobody and attested by nobody"
+                            + (live.get().singleSource() ? "; ONLY ONE VENUE ANSWERED" : "");
+                }
+            }
         }
-        return SeriesDerivation.derive(instrumentId, session, fixings, events.all(), seed, bootedAt,
-                seedNote, zone, LedgerService::labelOf, committeeSize);
+        return SeriesDerivation.derive(instrumentId, session, fixings, events.all(), seed, seedAsOf,
+                seedNote, seedLabel, zone, LedgerService::labelOf, committeeSize);
     }
 
     /** The newest row, if any. */

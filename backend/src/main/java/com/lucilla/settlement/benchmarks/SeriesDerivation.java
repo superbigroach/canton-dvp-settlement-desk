@@ -24,7 +24,11 @@ import java.util.function.Function;
  *       {@code superseded} when another corrects it;</li>
  *   <li>a {@code fixing.fallback} event is a tier 3/4 row; a {@code fixing.missed} event
  *       is a tier 5 row with no price;</li>
- *   <li>the seed mark, when given, is a tier 0 row at the bottom.</li>
+ *   <li>the seed mark, when given, is a tier 0 row at the bottom. {@code seedLabel} names
+ *       what that number actually is — a live composite of trading venues reads as
+ *       {@code indicative}, a stale figure stored on the instrument reads as {@code seed} —
+ *       because "nobody signed it" and "nobody has seen it since boot" are different
+ *       admissions and a consumer is owed the second one.</li>
  * </ul>
  */
 public final class SeriesDerivation {
@@ -35,7 +39,7 @@ public final class SeriesDerivation {
             String instrumentId, String session,
             List<LedgerService.NavFixingView> fixings,
             List<FixingEvent> events,
-            BigDecimal seedMark, Instant seedAsOf, String seedNote,
+            BigDecimal seedMark, Instant seedAsOf, String seedNote, String seedLabel,
             ZoneId zone, Function<String, String> label, int committeeSize) {
 
         List<SeriesRow> rows = new ArrayList<>();
@@ -75,7 +79,8 @@ public final class SeriesDerivation {
         }
         if (seedMark != null && seedAsOf != null) {
             rows.add(new SeriesRow(dateOf(seedAsOf, zone), seedAsOf.toString(), seedMark, null, null,
-                    0, 0, committeeSize, List.of(), null, false, SeriesRow.labelFor(0), session, null,
+                    0, 0, committeeSize, List.of(), null, false,
+                    seedLabel == null ? SeriesRow.labelFor(0) : seedLabel, session, null,
                     seedNote));
         }
         rows.sort(Comparator.comparing(SeriesRow::instant).reversed());

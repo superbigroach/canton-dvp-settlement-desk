@@ -193,6 +193,10 @@ public class PublicBenchmarkController {
             case "benchmark-x-factor" -> "derived from benchmark print";
             case "carried-forward" -> "carried forward";
             case "missed" -> "missed";
+            // Both are tier 0 and neither is worth anything, but a consumer is owed the
+            // difference: "indicative" is a market we just looked at, "seed" is a figure
+            // stored on the instrument that nobody has refreshed.
+            case "indicative" -> "indicative — live market observation, not attested";
             case "seed" -> "seed value, not attested";
             default -> r.tierLabel();
         };

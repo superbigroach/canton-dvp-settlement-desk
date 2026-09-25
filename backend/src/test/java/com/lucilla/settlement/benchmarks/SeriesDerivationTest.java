@@ -48,7 +48,7 @@ class SeriesDerivationTest {
                                 Map.of("referencePrice", "64870", "wrapperFactor", "1.0")),
                         event(FixingEvent.Kinds.FIXING_MISSED, "CBTC", d3, null, 5, Map.of()),
                         event(FixingEvent.Kinds.PROPOSAL_CREATED, "CBTC", d3, "1", null, Map.of())),
-                new BigDecimal("65000"), seed, "seed", LONDON, LedgerService::labelOf, 3);
+                new BigDecimal("65000"), seed, "seed", null, LONDON, LedgerService::labelOf, 3);
 
         assertEquals(4, rows.size());
         assertEquals(List.of(5, 3, 1, 0), rows.stream().map(SeriesRow::tier).toList(), "newest first");
@@ -87,7 +87,7 @@ class SeriesDerivationTest {
                 List.of(
                         fixing("orig", "CBTC", d1, "65000", null, null, null, List.of("A::1", "B::1")),
                         fixing("fix", "CBTC", d1b, "65100", null, null, "orig", List.of("A::1", "C::1"))),
-                List.of(), null, null, null, LONDON, LedgerService::labelOf, 3);
+                List.of(), null, null, null, null, LONDON, LedgerService::labelOf, 3);
         assertEquals(2, rows.size());
         assertEquals("fix", rows.get(0).fixingCid());
         assertTrue(rows.get(0).restated());
@@ -103,7 +103,7 @@ class SeriesDerivationTest {
         var open = new LedgerService.NavFixingView("o", List.of("A::1", "B::1"), 2, "CBTC", "USDC", "Open",
                 BigDecimal.TEN, "r", BigDecimal.ZERO, "NONE", d1, List.of(), d1, "committee", null, null, null, null, "Issuer::1", d1.atZone(LONDON).toLocalDate(), List.of("A::1", "B::1"));
         List<SeriesRow> rows = SeriesDerivation.derive("CBTC", "Close", List.of(open), List.of(),
-                null, null, null, LONDON, LedgerService::labelOf, 0);
+                null, null, null, null, LONDON, LedgerService::labelOf, 0);
         assertTrue(rows.isEmpty(), "an Open fixing is not the Close series");
     }
 }

@@ -25,6 +25,25 @@ java {
     targetCompatibility = JavaVersion.VERSION_17
 }
 
+// READ THE SOURCE AS UTF-8, ALWAYS AND EVERYWHERE.
+//
+// Without this javac uses the PLATFORM default, which is windows-1252 on a Windows
+// build host and UTF-8 in the Docker image — so the same commit produced different
+// bytes depending on who built it. On 25 Sep 2026 a Windows-built jar shipped every
+// em-dash in every published string as "â€”": the public /api/series note read
+// "...binding on nobody â€” attested by nobody" on the live site. The strings are full
+// of typographic characters (— × Σ ≥) because they are read by people, so the encoding
+// is not a detail. Pinned here rather than in a JAVA_TOOL_OPTIONS somebody must remember.
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+tasks.withType(Test).configureEach {
+    systemProperty 'file.encoding', 'UTF-8'
+}
+tasks.withType(Javadoc).configureEach {
+    options.encoding = 'UTF-8'
+}
+
 repositories {
     mavenCentral()
 }
