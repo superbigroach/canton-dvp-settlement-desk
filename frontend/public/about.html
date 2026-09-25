@@ -88,6 +88,81 @@
   </div>
 </section>
 
+<section class="band" aria-labelledby="stack-h">
+  <div class="wrap">
+    <div class="kicker"><span>Where we sit</span> <span class="rule"></span></div>
+    <h2 id="stack-h">Four firms do this today. On a ledger they collapse into one.</h2>
+    <p class="lede">The question we are asked most is whether we are a benchmark administrator like
+      CF Benchmarks or ICE. We are that, and three other things, and the clearest way to show it is
+      the service-provider list of the largest bitcoin ETF — where the index provider and the
+      administrator are two different companies doing two different jobs.</p>
+    <table class="docs">
+      <thead><tr><th>What has to happen, every day</th><th>Who does it in a traditional fund</th><th>Here</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>Publish a defensible price</strong> for the asset</td>
+          <td>a benchmark administrator — <strong>CF Benchmarks</strong> for BlackRock's IBIT,
+            <strong>CoinDesk Indices</strong> for Grayscale's GBTC, <strong>ICE Benchmark Administration</strong>
+            for the LBMA Gold Price</td>
+          <td>ETP Foundry</td>
+        </tr>
+        <tr>
+          <td><strong>Strike the NAV</strong>, keep the books, accrue the fees</td>
+          <td>a fund administrator — <strong>BNY Mellon</strong> for IBIT and GBTC,
+            <strong>Fidelity Service Company</strong> for FBTC</td>
+          <td>ETP Foundry</td>
+        </tr>
+        <tr>
+          <td><strong>Keep the register</strong> and process creations and redemptions</td>
+          <td>a transfer agent — <strong>State Street</strong> for FBTC, <strong>BNY Mellon</strong>
+            and Continental Stock Transfer for GBTC</td>
+          <td>ETP Foundry</td>
+        </tr>
+        <tr>
+          <td><strong>Hold the assets</strong> and settle the swap</td>
+          <td>a custodian — <strong>Coinbase Custody</strong> and <strong>Anchorage</strong> for IBIT,
+            <strong>Fidelity Digital Assets</strong> for FBTC</td>
+          <td>unchanged: the issuer keeps its own custodian. We never hold anyone's assets</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="src">Every name and role above is taken from those funds' own prospectuses and annual
+      reports. Bundling is already normal in traditional finance — BNY Mellon is both administrator and
+      transfer agent for GBTC, and Fidelity's index provider, custodian and administrator are all
+      affiliates, disclosed as a conflict. The cure there is disclosure, not separation.</p>
+
+    <h3 style="margin-top:34px">So what is actually different here</h3>
+    <div class="grid g3">
+      <div class="card">
+        <h3>Their committee governs. Ours signs.</h3>
+        <p>ICE and CF both have oversight committees. They meet quarterly, review the methodology and
+          read the error log. <strong>No committee in traditional finance signs each daily value.</strong>
+          The administrator computes it and publishes it. Ours signs every fixing, and the signers are
+          parties who lose money if the number is wrong.</p>
+      </div>
+      <div class="card">
+        <h3>Their method needs a market. Ours does not.</h3>
+        <p>ICE runs a real auction; CF averages trades across named exchanges. Both are better than any
+          committee <em>when the market is open</em> — which for a tokenised equity is about 32 of the
+          168 hours in a week. When nothing trades, an auction has no bidders and an average has nothing
+          to average. A committee can attest the absence and publish a number with an honest band.</p>
+      </div>
+      <div class="card">
+        <h3>Their record is a document. Ours is a contract.</h3>
+        <p>A traditional administrator's assurance is its name and its minutes. Here the rules are
+          enforced by the ledger: the administrator signs every proposal and can never be a member, at
+          least two members must agree, and a venue must supply a range containing the price or formally
+          attest that nothing traded. Nobody — including us — can manufacture a committee fixing.</p>
+      </div>
+    </div>
+    <p style="margin-top:22px">One line, then: <strong>we are the benchmark administrator, the fund
+      administrator and the transfer agent, in one piece of software, with the number attested by the
+      parties who carry the risk.</strong> We are not the issuer, so we never need their licence. We are
+      not the venue, so we never price what we trade. We are not the custodian, so we never hold anyone's
+      assets. That is what makes us safe for all three to use at once.</p>
+  </div>
+</section>
+
 <section class="section" aria-labelledby="not-h">
   <div class="wrap">
     <div class="kicker"><span>What ETP Foundry is not</span> <span class="rule"></span></div>
