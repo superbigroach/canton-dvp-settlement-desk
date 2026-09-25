@@ -1412,8 +1412,15 @@ export default function App() {
         </section>
       </main>
 
+      {/* WHERE THIS IS RUNNING, AND NOWHERE TO HIDE IT. This footer read "Live against a
+          local Canton sandbox" on etpfoundry.com for a day after the desk was switched to
+          the real DevNet validator — the fourth place a stale "sandbox" claim survived a
+          grep, because it renders and does not appear in any HTML file. It is now derived
+          from the host rather than written down, so it cannot go stale again. */}
       <footer className="foot">
-        Live against a local Canton sandbox via the Daml Java bindings · cash{' '}
+        Live against {window.location.hostname === 'localhost'
+          ? 'a local Canton sandbox'
+          : "ETP Foundry's own Canton DevNet validator"} via the Daml Java bindings · cash{' '}
         <code>USDC</code> · assets <code>DEMO:AAPL</code> <code>cETH</code> <code>CBTC</code> ·
         contract-id plumbing auto-resolved server-side.
       </footer>

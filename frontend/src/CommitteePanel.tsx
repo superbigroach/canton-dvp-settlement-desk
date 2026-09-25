@@ -76,16 +76,35 @@ export default function CommitteePanel({ parties, instruments, asset, flash }: P
   // THE SEATS PERSIST WITH THE COMMITTEE. A refresh used to reset the chips to the
   // default trio while the cid still pointed at a committee with different members,
   // so the buttons offered "Auditor confirms" against a committee Auditor is not on.
-  const MEMBERS_KEY = 'crossdesk.committeeMembers';
+  // VERSIONED, because the default changed and the old one is cached in every browser
+  // that has ever opened this page. Bumping the key retires the stale 2-of-3 trio instead
+  // of leaving it pinned forever behind a value nobody remembers setting — the first
+  // attempt at this change shipped a panel reading "Stand up 3-of-3" against the OLD
+  // three members, which is a worse claim than what it replaced.
+  const MEMBERS_KEY = 'crossdesk.committeeMembers.v2';
   const [members, setMembers] = useState<string[]>(() => {
     try {
       const raw = window.localStorage.getItem(MEMBERS_KEY);
       const arr = raw ? (JSON.parse(raw) as unknown) : null;
       if (Array.isArray(arr) && arr.every((x) => typeof x === 'string') && arr.length) return arr;
+      window.localStorage.removeItem('crossdesk.committeeMembers');
     } catch {
       /* fall through to the default */
     }
-    return ['Issuer', 'Bank', 'Auditor'];
+    // THE FIVE SEATS, AND WHY THE AUDITOR IS NOT ONE OF THEM.
+    //
+    // This defaulted to ['Issuer','Bank','Auditor'] at 2-of-3, which is wrong twice over.
+    // The Auditor is the party that OBSERVES every fixing — it is the observer on the
+    // NavFixing contract precisely so it can review what the committee did. Putting it in
+    // the attestor set makes the reviewer a signatory of the thing it reviews, which is
+    // the one arrangement an oversight function cannot have. It also understated the
+    // desk: the roster, the rulebook and the parties allocated on DevNet are all five
+    // seats (issuer, lender, venue, custodian, transfer agent) at 3-of-5, and a panel
+    // offering 2-of-3 quietly proposes the weaker claim as the default.
+    //
+    // The administrator (Operator) is absent for a separate reason the ledger enforces:
+    // NavFixing's `ensure` requires `admin notElem members`. It administers; it never signs.
+    return ['Issuer', 'Bank', 'Venue', 'Custodian', 'TransferAgent'];
   });
   useEffect(() => {
     try {
@@ -94,7 +113,7 @@ export default function CommitteePanel({ parties, instruments, asset, flash }: P
       /* private browsing */
     }
   }, [members]);
-  const [threshold, setThreshold] = useState<number>(2);
+  const [threshold, setThreshold] = useState<number>(3);   // 3-of-5, matching the roster
   const [admin] = useState<string>('Issuer');
   // THE COMMITTEE IS A CONTRACT ON THE LEDGER; ONLY THE POINTER WAS IN MEMORY.
   // Standing one up creates a real OperatorCommittee that outlives the tab, but the
