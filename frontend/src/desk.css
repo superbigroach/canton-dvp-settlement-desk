@@ -362,3 +362,351 @@ button.ghost.wide { width: 100%; margin-top: 0; padding: 11px 14px; }
   .page thead th { position: static; }
   .page tbody td { padding: 10px 8px; font-size: 13px; }
 }
+
+/* =====================================================================
+   DESK LIGHT THEME — DESIGN.md, 25 Sep 2026
+   =====================================================================
+   The site went light; the desk stayed dark and the two stopped looking
+   like one product. This flips the desk to match.
+
+   THE METHOD IS THE TOKENS, NOT THE COMPONENTS. styles.css carries 375
+   rules that reference --text, --surface, --border and friends, and those
+   were near-white on near-black. Fixing components one at a time on the
+   marketing site was whack-a-mole — a dark sidebar survived a full pass,
+   and figures rendered pale grey on white wherever a rule said
+   `color:var(--text)`. Repointing the tokens flips all 375 at once, and
+   anything added later inherits the theme for free.
+
+   GRADIENT CONTAINERS, USED ON PURPOSE. A light page needs dark anchors or
+   it reads as an empty document. The gradient panels are where the desk
+   states a FACT — the value, who you are, what this instrument is worth —
+   and they are the same blue-to-indigo as the site so the two halves of
+   the brand are recognisably one thing.
+
+   GOLD STILL MEANS ATTESTED. Darkened to #A97612 for contrast on white;
+   same signal, same discipline, still the only gold on any screen.
+   ===================================================================== */
+
+:root{
+  /* ---- repointed tokens: every existing rule follows these ---------- */
+  --bg:        #F4F6F9;
+  --surface:   #FFFFFF;
+  --surface-2: #F7F8FA;
+  --border:    #E5E7EB;
+  --border-2:  #D6DAE1;
+  --text:      #0B0D12;
+  --muted:     #5B6472;
+  --faint:     #8A93A1;
+  --accent:    #4C82F7;
+  --accent-dk: #3C6BD6;
+  --gold:      #A97612;
+  --buy:       #0F7A4F;
+  --buy-dk:    #0C6340;
+  --sell:      #B03A3A;
+  --sell-dk:   #8F2E2E;
+  --shadow:    0 1px 2px rgba(11,13,18,0.05), 0 8px 24px -14px rgba(11,13,18,0.20);
+
+  /* ---- the brand gradient, shared with the marketing site ----------- */
+  --grad:      linear-gradient(135deg,#4C82F7 0%,#6D5DF6 55%,#8B5CF6 100%);
+  --grad-dark: linear-gradient(168deg,#141722 0%,#0B0D12 62%);
+  color-scheme:light;
+}
+
+body{
+  color:var(--text);
+  /* A faintly tinted canvas rather than pure white, so a white card has an
+     edge without needing a heavier border. */
+  background:
+    radial-gradient(1100px 560px at 82% -10%, rgba(109,93,246,0.07), transparent 60%),
+    radial-gradient(820px 460px at 4% 104%, rgba(76,130,247,0.06), transparent 58%),
+    var(--bg);
+  background-attachment:fixed;
+}
+
+/* ---- shell chrome ---------------------------------------------------- */
+.shell-top{
+  background:rgba(255,255,255,0.88);
+  backdrop-filter:saturate(180%) blur(12px);
+  -webkit-backdrop-filter:saturate(180%) blur(12px);
+  border:1px solid var(--border);
+  border-radius:16px;
+  box-shadow:0 1px 2px rgba(11,13,18,0.04);
+}
+.shell-top .brand-name{color:var(--text)}
+.shell-top .brand-sub,.who-line{color:var(--muted)}
+.shell-top .logo{
+  background:var(--grad);
+  color:#fff;
+  border-radius:10px;
+  box-shadow:0 4px 14px -4px rgba(76,130,247,0.55);
+}
+.nav-link{color:var(--muted);transition:background 150ms ease-out,color 150ms ease-out}
+.nav-link:hover{background:var(--surface-2);color:var(--text)}
+.nav-link.on{
+  background:#fff;color:var(--text);
+  border:1px solid var(--border);
+  box-shadow:0 1px 2px rgba(11,13,18,0.05);
+  font-weight:600;
+}
+.nav-sub{border-left:1px solid var(--border)}
+.nav-sub-link{color:var(--muted)}
+.nav-sub-link.on{color:var(--accent);border-left-color:var(--accent);font-weight:600}
+
+/* ---- buttons --------------------------------------------------------- */
+.primary,button.primary,.btn.primary{
+  background:var(--grad);
+  color:#fff;
+  border:0;
+  font-weight:600;
+  box-shadow:0 1px 2px rgba(11,13,18,0.08), 0 6px 18px -6px rgba(76,130,247,0.55);
+  transition:transform 150ms ease-out,box-shadow 150ms ease-out,filter 150ms ease-out;
+}
+.primary:hover:not(:disabled){
+  transform:translateY(-1px);
+  box-shadow:0 2px 4px rgba(11,13,18,0.10), 0 10px 26px -8px rgba(76,130,247,0.65);
+  filter:saturate(110%);
+}
+.primary:active:not(:disabled){transform:translateY(0)}
+.primary:disabled{opacity:0.5;box-shadow:none}
+.ghost,button.ghost{
+  background:#fff;color:var(--text);
+  border:1px solid var(--border-2);
+  transition:background 150ms ease-out,border-color 150ms ease-out;
+}
+.ghost:hover:not(:disabled){background:var(--surface-2);border-color:var(--faint)}
+
+/* ---- cards ----------------------------------------------------------- */
+.card{
+  background:var(--surface);
+  border:1px solid var(--border);
+  box-shadow:0 1px 2px rgba(11,13,18,0.04);
+  transition:border-color 150ms ease-out,box-shadow 150ms ease-out;
+}
+.card:hover{box-shadow:0 2px 6px rgba(11,13,18,0.05), 0 14px 30px -18px rgba(11,13,18,0.22)}
+.card h2{color:var(--text)}
+
+/* ---- inputs ---------------------------------------------------------- */
+input,select,textarea{
+  background:#fff;
+  color:var(--text);
+  border:1px solid var(--border-2);
+  border-radius:10px;
+  transition:border-color 150ms ease-out,box-shadow 150ms ease-out;
+}
+input:focus,select:focus,textarea:focus{
+  outline:none;border-color:var(--accent);
+  box-shadow:0 0 0 3px rgba(76,130,247,0.15);
+}
+input::placeholder,textarea::placeholder{color:var(--faint)}
+
+/* =====================================================================
+   GRADIENT PANELS — the dark anchors on a light page
+   ===================================================================== */
+
+/* The signed-in identity bar at the top of the operator desk, and any
+   element asking to be read as a statement rather than a control. */
+.quote,.panel-dark{
+  position:relative;
+  overflow:hidden;
+  border:0;
+  border-radius:20px;
+  background:
+    radial-gradient(620px 340px at 88% 6%, rgba(109,93,246,0.40), transparent 62%),
+    radial-gradient(520px 340px at 4% 98%, rgba(76,130,247,0.26), transparent 60%),
+    var(--grad-dark);
+  box-shadow:0 1px 2px rgba(11,13,18,0.06), 0 24px 56px -28px rgba(11,13,18,0.50);
+  /* Restore dark token values INSIDE the panel so every child follows,
+     instead of each one needing its own override. */
+  --text:#F2F4F8; --muted:#A9B1C0; --faint:#79808F;
+  --surface:rgba(232,234,237,0.07); --surface-2:rgba(232,234,237,0.12);
+  --border:rgba(232,234,237,0.15); --border-2:rgba(232,234,237,0.26);
+  --gold:#E6B450;
+  color:#F2F4F8;
+}
+.quote::before,.panel-dark::before{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background-image:linear-gradient(rgba(232,234,237,0.05) 1px,transparent 1px),
+                   linear-gradient(90deg,rgba(232,234,237,0.05) 1px,transparent 1px);
+  background-size:48px 48px;
+  -webkit-mask-image:radial-gradient(620px 340px at 72% 24%,#000,transparent 76%);
+  mask-image:radial-gradient(620px 340px at 72% 24%,#000,transparent 76%);
+}
+.quote > *,.panel-dark > *{position:relative}
+.quote .quote-label,.panel-dark .label{color:#8B93A3}
+.quote .quote-price,.quote .nav{color:#F7F9FC}
+.quote .quote-price .nav.muted{color:#79808F}
+.quote .quote-note,.quote .quote-desc{color:#A9B1C0}
+.quote .pill{background:rgba(232,234,237,0.10);border:1px solid rgba(232,234,237,0.20);color:#D6DBE4}
+/* Gold inside a dark panel goes back to full brightness. */
+.quote .official,.panel-dark .official{color:#E6B450}
+
+/* ---- stat tiles: quiet, but the number is the loudest thing ---------- */
+.stat{
+  background:#fff;
+  border:1px solid var(--border);
+  box-shadow:0 1px 2px rgba(11,13,18,0.04);
+}
+.stat-label{color:var(--muted)}
+.stat-value{color:var(--text)}
+.stat.gold .stat-value,.stat-value.gold{color:var(--gold)}
+
+/* ---- tags ------------------------------------------------------------ */
+.tag{background:var(--surface-2);border:1px solid var(--border);color:var(--muted)}
+.tag.role{color:#2E52A8;background:rgba(76,130,247,0.10);border-color:rgba(76,130,247,0.28)}
+.tag.mock{color:#8A6100;background:rgba(230,180,80,0.12);border-color:rgba(176,126,22,0.35);border-style:dashed}
+.tag.attested{color:var(--gold);border-color:rgba(169,118,18,0.40);background:rgba(230,180,80,0.12)}
+.tag.fallback{color:#8F2E2E;border-color:rgba(176,58,58,0.35);background:rgba(176,58,58,0.08)}
+.tag.status.open,.tag.status.create,.tag.status.settled,
+.tag.status.confirmed,.tag.status.finalized{color:#0C6340;border-color:rgba(15,122,79,0.30);background:rgba(15,122,79,0.08)}
+.tag.status.refused,.tag.status.missed,.tag.status.failed,
+.tag.status.redeem{color:#8F2E2E;border-color:rgba(176,58,58,0.30);background:rgba(176,58,58,0.08)}
+.tag.status.restruck,.tag.status.pending{color:#8A6100;border-color:rgba(176,126,22,0.30);background:rgba(230,180,80,0.10)}
+.tag.ev.confirmed,.tag.ev.finalized{color:#0C6340}
+.tag.ev.refused,.tag.ev.missed,.tag.ev.fallback-tier3,.tag.ev.fallback-tier4{color:#8F2E2E}
+.tag.ev.restruck,.tag.ev.proposed{color:#8A6100}
+.tag.state.overdue,.tag.state.late,.tag.state.missed{color:#8F2E2E;border-color:rgba(176,58,58,0.30)}
+.tag.state.struck,.tag.state.on_time,.tag.state.published{color:#0C6340;border-color:rgba(15,122,79,0.30)}
+.tag.state.due,.tag.state.pending{color:#8A6100;border-color:rgba(176,126,22,0.30)}
+
+/* ---- banners --------------------------------------------------------- */
+.banner.warn{background:#FFFBEB;border:1px solid #F0E0B0;color:#6B4E00}
+.banner.error{background:#FEF2F2;border:1px solid #F3C9C9;color:#8F2E2E}
+.view-as-banner{
+  background:linear-gradient(90deg,rgba(230,180,80,0.14),rgba(230,180,80,0.05));
+  border:1px solid rgba(176,126,22,0.30);
+  border-left:3px solid var(--gold);
+  color:#6B4E00;
+}
+.view-as-banner strong{color:#503A00}
+.good{color:#0C6340}
+.bad-text{color:#8F2E2E}
+.warn-text{color:#8A6100}
+.page .basis.warn-text{color:#8F2E2E}
+
+/* ---- tables in the portal, restated for light ------------------------ */
+.page thead th{background:var(--surface);color:var(--muted);border-bottom-color:var(--border-2)}
+.page tbody td{border-bottom-color:var(--border)}
+.page tbody tr:hover{background:rgba(76,130,247,0.04)}
+.page td.official{color:var(--gold)}
+.page .basis{color:var(--faint)}
+.page .empty{background:#fff;border:1px dashed var(--border-2);color:var(--muted)}
+.page .pill.asset{background:var(--surface-2);border:1px solid var(--border);color:var(--text)}
+.blotter th{color:var(--muted)}
+.blotter td{border-bottom-color:var(--border)}
+.blotter tbody tr:hover{background:rgba(76,130,247,0.04)}
+
+/* ---- the reference card stays quiet ---------------------------------- */
+.page .card.reference{background:transparent;border-style:dashed;border-color:var(--border-2)}
+.page .card.reference > .page-head h2{color:var(--muted)}
+
+/* =====================================================================
+   SIGN IN — the first screen anybody outside the company sees
+   ===================================================================== */
+.login{
+  min-height:100vh;
+  display:grid;
+  place-items:center;
+  padding:32px 16px;
+}
+.login-card{
+  width:min(440px,100%);
+  padding:36px 32px 30px;
+  border-radius:22px;
+  border:0;
+  position:relative;
+  overflow:hidden;
+  background:
+    radial-gradient(540px 300px at 86% 4%, rgba(109,93,246,0.42), transparent 62%),
+    radial-gradient(460px 300px at 2% 98%, rgba(76,130,247,0.28), transparent 60%),
+    var(--grad-dark);
+  box-shadow:0 1px 2px rgba(11,13,18,0.06), 0 30px 70px -30px rgba(11,13,18,0.55);
+  --text:#F2F4F8; --muted:#A9B1C0; --faint:#79808F;
+  --border:rgba(232,234,237,0.16); --border-2:rgba(232,234,237,0.28);
+  color:#F2F4F8;
+}
+.login-card::before{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background-image:linear-gradient(rgba(232,234,237,0.05) 1px,transparent 1px),
+                   linear-gradient(90deg,rgba(232,234,237,0.05) 1px,transparent 1px);
+  background-size:44px 44px;
+  -webkit-mask-image:radial-gradient(420px 260px at 76% 16%,#000,transparent 76%);
+  mask-image:radial-gradient(420px 260px at 76% 16%,#000,transparent 76%);
+}
+.login-card > *{position:relative}
+.login-card .brand{text-decoration:none;display:flex;align-items:center;gap:12px;margin-bottom:26px}
+.login-card .logo{
+  background:var(--grad);color:#fff;border-radius:12px;
+  width:40px;height:40px;display:grid;place-items:center;font-size:19px;
+  box-shadow:0 6px 18px -6px rgba(76,130,247,0.7);
+}
+.login-card .brand-name{color:#F7F9FC;font-weight:600;letter-spacing:0.06em}
+.login-card .brand-sub{color:#8B93A3;font-size:12.5px}
+.login-card .primary.wide{
+  width:100%;padding:13px 16px;font-size:15px;border-radius:12px;
+  background:#fff;color:#12141A;box-shadow:0 2px 10px rgba(0,0,0,0.25);
+}
+.login-card .primary.wide:hover:not(:disabled){background:#F2F4F8;transform:translateY(-1px);filter:none}
+.login-card .hint{color:#A9B1C0;font-size:13px;line-height:1.6}
+.login-card .hint.subtle{color:#79808F}
+.login-card .empty{background:rgba(232,234,237,0.06);border:1px dashed rgba(232,234,237,0.20);color:#A9B1C0}
+.login-card .banner.error{background:rgba(198,91,91,0.14);border:1px solid rgba(198,91,91,0.40);color:#F3BDBD}
+.login-foot{color:var(--faint);margin-top:22px;font-size:12.5px;text-align:center}
+.login-foot a{color:var(--muted)}
+.login-foot a:hover{color:var(--text)}
+
+/* ---- focus, everywhere ------------------------------------------------ */
+.nav-link:focus-visible,.nav-sub-link:focus-visible,a:focus-visible,
+input:focus-visible,button:focus-visible,select:focus-visible,.link:focus-visible{
+  outline:2px solid var(--accent);outline-offset:2px;
+}
+
+/* ---- SELECTED STATES, RESTATED FOR LIGHT ------------------------------
+   Every "chosen" state in the desk was a pale tint designed to glow on
+   near-black: .chip.on rendered rgb(205,216,238) — pale blue — which on a
+   white card is close to invisible. A selected control has to be the most
+   legible thing in its group, not the least. Deep ink on a light wash, and
+   600 weight so selection reads even in a screenshot. */
+.chip.on,button.on,.seg .on,.toggle .on{
+  color:#1B3FA0;
+  background:rgba(76,130,247,0.12);
+  border-color:rgba(76,130,247,0.45);
+  font-weight:600;
+}
+.chip,button.chip{
+  color:var(--muted);
+  background:#fff;
+  border:1px solid var(--border);
+  transition:background 150ms ease-out,border-color 150ms ease-out,color 150ms ease-out;
+}
+.chip:hover:not(.on){background:var(--surface-2);color:var(--text);border-color:var(--border-2)}
+
+/* The greens and reds were lightened for a dark card; darken them for white.
+   These are status colours, so they carry meaning and must clear contrast. */
+.good,.tag.ev.confirmed,.tag.ev.finalized{color:#0C6340}
+.bad-text,.tag.ev.refused,.tag.ev.missed{color:#8F2E2E}
+.card.buy .stat-value,.buy-text{color:#0C6340}
+.card.warn{border-color:rgba(176,126,22,0.35);background:#FFFBEB}
+.callout.warn{background:#FFFBEB;border-color:#F0E0B0;color:#6B4E00}
+
+/* Anything still explicitly painted for the dark theme inside a LIGHT card. */
+.card .muted,.page .muted,td.muted{color:var(--muted)}
+.card .faint,.page .faint{color:var(--faint)}
+
+/* ...but inside a gradient panel the original pale palette is correct. */
+.quote .good,.panel-dark .good,.login-card .good{color:#A7E3C6}
+.quote .bad-text,.panel-dark .bad-text,.login-card .bad-text{color:#F0B6B6}
+.quote .chip.on,.panel-dark .chip.on{color:#DFE8FB;background:rgba(76,130,247,0.22);border-color:rgba(76,130,247,0.5)}
+
+/* The segmented control's container is `.segmented`, so `.segmented button.on`
+   in styles.css outranked the generic `button.on` above and the SELECTED half
+   of every toggle stayed pale blue on white — the least legible thing in its
+   own group. Matched at the same specificity here. */
+.segmented button.on,.segmented .on{
+  color:#1B3FA0;
+  background:rgba(76,130,247,0.14);
+  border-color:rgba(76,130,247,0.45);
+  font-weight:600;
+}
+.segmented button{color:var(--muted);background:#fff;transition:background 150ms ease-out,color 150ms ease-out}
+.segmented button:hover:not(.on){background:var(--surface-2);color:var(--text)}
+.quote .segmented button.on,.panel-dark .segmented button.on{color:#DFE8FB;background:rgba(76,130,247,0.24)}
