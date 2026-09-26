@@ -273,6 +273,21 @@ export interface TrustLevel {
   requires: string;
 }
 
+/**
+ * WHAT IS ACTUALLY BUILT, and this matters more than any other claim on the desk.
+ *
+ * ONLY L1 EXISTS. LedgerService.submit() takes one `actAs` party and signs with the
+ * desk's own HMAC ledger token; there is no interactive-submission path, no external
+ * party, and no per-signer trust level stored anywhere. The ladder used to present L2
+ * as reachable by "an API key and a checker on your infrastructure", which is false in
+ * the way that matters: the API key authenticates a REQUEST TO US, and we then exercise
+ * the Daml choice as your party ourselves. Running a checker automates your side of the
+ * work. It does not move the signing key, and it does not stop us being able to forge
+ * your signature.
+ *
+ * A counterparty's risk team will test that sentence, and they should. Saying "not built
+ * yet" costs a conversation; being caught overstating it costs the seat.
+ */
 export const TRUST_LADDER: TrustLevel[] = [
   {
     level: 'L1',
@@ -284,19 +299,19 @@ export const TRUST_LADDER: TrustLevel[] = [
   },
   {
     level: 'L2',
-    name: 'External signing',
-    key: 'Held by you, off-ledger; the administrator submits a transaction you have already signed.',
-    forgeable: 'No',
+    name: 'External signing — NOT BUILT YET',
+    key: 'Would be held by you, off-ledger: you sign the transaction hash and the administrator only submits it. Requires Canton interactive submission with an external party, which this desk does not implement today.',
+    forgeable: 'No — once it exists',
     cost: 'Moderate',
-    requires: 'An API key and a checker on your infrastructure (the reference signer-service or your own), signing off-ledger.',
+    requires: 'Nothing you can do yet. AN API KEY AND A CHECKER DO NOT REACH THIS LEVEL: the key authenticates a request to our desk, and our desk still exercises the choice as your party with its own ledger token. A checker automates your side; it does not move the signing key.',
   },
   {
     level: 'L3',
-    name: 'Own participant',
-    key: 'On your own Canton participant.',
-    forgeable: 'No',
+    name: 'Own participant — NOT BUILT YET',
+    key: 'Would live on your own Canton participant, with the choice exercised from your node.',
+    forgeable: 'No — once it exists',
     cost: 'High — you run Canton',
-    requires: 'Your own participant party id on the roster; the choice is exercised from your node.',
+    requires: 'Your own participant party id on the roster. The desk submits as a single local party today, so a remote party cannot yet be made to sign. Listed because it is the destination, not because it is available.',
   },
 ];
 

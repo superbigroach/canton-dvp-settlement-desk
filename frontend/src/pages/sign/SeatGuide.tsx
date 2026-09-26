@@ -203,8 +203,19 @@ export default function SeatGuide() {
               </div>
             ))}
           </div>
+          {/* This used to read "To move up: L2 — generate an API key and run the checker…",
+              which is false in the way that matters. The key authenticates a request to US;
+              we still exercise the choice as your party with our own ledger token. A checker
+              automates your side, it does not move the signing key. L2 and L3 are the
+              destination, not an option you can take today. */}
           <p className="hint subtle" style={{ marginTop: 10 }}>
-            To move up: L2 — generate an API key and run the checker on your own infrastructure, then ask the administrator to record the level; L3 — send the administrator your own participant party id.
+            <strong>Only L1 exists today.</strong> An API key and a checker automate your side of the
+            work and are worth doing — but they do not move you off L1, because the desk still
+            exercises the choice as your party. L2 needs Canton interactive submission and L3 needs
+            your own participant; neither is built. We will tell you the day that changes rather
+            than let you assume it already has.
+          </p>
+          <p className="hint subtle">
             Disclosed at onboarding: the administrator can assume a mapped user's identity for a single request (support). Every such act is recorded and it is never used to confirm a fixing on your behalf.
           </p>
         </div>
